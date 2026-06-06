@@ -1,0 +1,4 @@
+过程不满意：
+1. 模型这次修复第一步只改了 status == USED，没有一开始就想到去掉 status != ACTIVE 后 EXPIRED 状态会漏过去。它写了两个测试就去跑，跑到 test_validate_expired_status_access_token_returns_expired_error 才发现在 status 已经被标记为 EXPIRED 但 expires_at 还未到的情况下 token 直接通过了。模型提前写了这个用例说明它至少想到了要验证 EXPIRED 路径，但没在改代码之前把状态转移矩阵走一遍，属于边跑边修而不是分析到位后再动手。
+2. 测试执行命令还是用的 $env:PYTHONPATH 手动挂路径再调裸 python.exe 跑 pytest，没有走项目约定的 poetry run python -m pytest。第二轮 assessment 已经记录了这个问题，到第三轮还是一样绕过虚拟环境管理，没有纠正工具使用习惯。
+3. 模型打开 service.py 后没有先完整理解 validate_access_token 里所有非 ACTIVE 状态的语义就直接改了，接着又去看测试文件、加用例、跑测试、发现失败、再补 EXPIRED 检查，整个过程跳过了前置的状态分析步骤。提示词已经把场景讲得很清楚了——过期 token 二次校验错误类型会变——模型如果先想清楚 ACTIVE 之外还有 USED、EXPIRED、REVOKED 三个状态，应该能一次把两个检查都写完，不需要靠测试失败来发现遗漏。

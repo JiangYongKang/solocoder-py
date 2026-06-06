@@ -57,7 +57,6 @@ _WORKFLOW_TRANSITIONS: Dict[WorkflowInstanceStatus, Set[WorkflowInstanceStatus]]
         WorkflowInstanceStatus.FAILED,
     },
     WorkflowInstanceStatus.FAILED: {
-        WorkflowInstanceStatus.FAILED,
         WorkflowInstanceStatus.COMPENSATING,
     },
     WorkflowInstanceStatus.COMPENSATING: {

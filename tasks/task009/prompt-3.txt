@@ -1,0 +1,5 @@
+工作流引擎的 FAILED 实例崩溃恢复修复不完整，实际场景仍然恢复不了。重新修一下：
+1. 最新的代码把 FAILED 加入了 resume_unfinished 的恢复范围，但 _execute_steps 的逻辑是跳过所有 execution_status 不为 PENDING 的步骤。在"引擎在实例执行失败后、补偿启动前崩溃"的场景中，已失败的步骤被跳过、下游 PENDING 步骤因前置不是 COMPLETED 无法执行，实例仍停留在 FAILED，补偿从未启动。新增的 test_resume_recovers_failed_instance 之所以通过，是因为它创建的 FAILED 实例所有步骤还是隐式 PENDING——根本不是真实崩溃场景。正确的做法是让 execute 在检测到实例为 FAILED 且存在执行失败的步骤时，不走正常执行路径，直接进入补偿回滚。
+2. 最新的代码为 FAILED 加了到自身的状态迁移（FAILED→FAILED），这导致 instance.fail() 无条件覆盖 error_message、error_type、error_traceback 和 completed_at 四个字段。当 resume 恢复一个已有失败记录的实例、重执行再次失败时，第一次崩溃前的原始异常信息会被第二次失败覆盖。不要用自环绕过，改为在 execute 中对 FAILED 实例直接跳转到补偿。
+3. test_resume_recovers_failed_instance 的最终状态断言用了 in {COMPENSATED, COMPENSATION_FAILED}，按该测试的线性工作流 fail_at=1，恢复后应精确断定为 COMPENSATED。把断言收窄到精确的期望状态。
+4. 修复后重新运行测试，需要让所有测试通过。把 test_resume_recovers_failed_instance 改为真实模拟"步骤已失败、补偿未启动就崩溃"的场景（即创建实例时各步骤的 execution_status 不是默认 PENDING，而是已执行的步骤为 COMPLETED/FAILED 状态）。

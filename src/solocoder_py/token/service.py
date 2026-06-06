@@ -146,10 +146,10 @@ class TokenService:
         if access_token.status == TokenStatus.REVOKED:
             raise TokenRevokedError("Access token has been revoked")
 
-        if access_token.status != TokenStatus.ACTIVE:
-            raise TokenRevokedError("Access token is not active")
+        if access_token.status == TokenStatus.USED:
+            raise TokenRevokedError("Access token has been used")
 
-        if access_token.is_expired:
+        if access_token.status == TokenStatus.EXPIRED or access_token.is_expired:
             access_token.status = TokenStatus.EXPIRED
             raise TokenExpiredError("Access token has expired")
 

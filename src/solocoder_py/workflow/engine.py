@@ -100,6 +100,10 @@ class WorkflowEngine:
         definition = self._repository.find_definition(instance.workflow_id)
         assert definition is not None
 
+        if instance.status == WorkflowInstanceStatus.FAILED:
+            self._handle_compensation(instance, definition)
+            return instance
+
         if instance.status == WorkflowInstanceStatus.PENDING:
             instance.start()
             self._repository.save_instance(instance)

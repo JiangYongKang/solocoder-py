@@ -36,7 +36,7 @@ class LRUCache:
         self._default_ttl = default_ttl
         self._store: OrderedDict[Any, _CacheEntry] = OrderedDict()
         self._current_weight: int = 0
-        self._has_expirable: bool = False
+        self._expirable_count: int = 0
         self._lock = threading.RLock()
 
     @property
@@ -67,6 +67,7 @@ class LRUCache:
             if entry.expire_at is not None and entry.expire_at <= time.monotonic():
                 self._store.pop(key)
                 self._current_weight -= entry.weight
+                self._expirable_count -= 1
                 return None
             self._store.move_to_end(key)
             return entry.value
@@ -95,6 +96,8 @@ class LRUCache:
             if key in self._store:
                 old_entry = self._store[key]
                 self._current_weight -= old_entry.weight
+                if old_entry.expire_at is not None:
+                    self._expirable_count -= 1
                 del self._store[key]
 
             self._store[key] = _CacheEntry(
@@ -105,7 +108,7 @@ class LRUCache:
             self._store.move_to_end(key)
             self._current_weight += weight
             if expire_at is not None:
-                self._has_expirable = True
+                self._expirable_count += 1
 
             self._evict_if_needed()
 
@@ -115,6 +118,8 @@ class LRUCache:
             if key in self._store:
                 entry = self._store.pop(key)
                 self._current_weight -= entry.weight
+                if entry.expire_at is not None:
+                    self._expirable_count -= 1
                 return True
             return False
 
@@ -127,6 +132,7 @@ class LRUCache:
             if entry.expire_at is not None and entry.expire_at <= time.monotonic():
                 self._store.pop(key)
                 self._current_weight -= entry.weight
+                self._expirable_count -= 1
                 return False
             return True
 
@@ -134,33 +140,27 @@ class LRUCache:
         with self._lock:
             self._store.clear()
             self._current_weight = 0
-            self._has_expirable = False
+            self._expirable_count = 0
 
     def _purge_expired(self) -> None:
-        if not self._has_expirable:
+        if self._expirable_count == 0:
             return
 
         now = time.monotonic()
         expired_keys: list[Any] = []
         scanned = 0
-        saw_expirable = False
-        total = len(self._store)
 
         for key, entry in self._store.items():
             if scanned >= _MAX_PURGE_PER_CALL:
                 break
             scanned += 1
-            if entry.expire_at is not None:
-                saw_expirable = True
-                if entry.expire_at <= now:
-                    expired_keys.append(key)
+            if entry.expire_at is not None and entry.expire_at <= now:
+                expired_keys.append(key)
 
         for key in expired_keys:
             entry = self._store.pop(key)
             self._current_weight -= entry.weight
-
-        if scanned >= total and not saw_expirable:
-            self._has_expirable = False
+            self._expirable_count -= 1
 
     def _evict_if_needed(self) -> None:
         while self._capacity > 0 and len(self._store) > self._capacity:
@@ -175,3 +175,5 @@ class LRUCache:
         oldest_key, oldest_entry = next(iter(self._store.items()))
         del self._store[oldest_key]
         self._current_weight -= oldest_entry.weight
+        if oldest_entry.expire_at is not None:
+            self._expirable_count -= 1

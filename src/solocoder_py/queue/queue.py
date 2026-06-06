@@ -300,14 +300,14 @@ class MessageQueue:
         return result
 
     def get_queue_size(self, queue_name: str) -> int:
-        self._process_expired_in_flight(queue_name)
-
         if queue_name not in self._messages:
             return 0
         msg_map = self._messages[queue_name]
         count = 0
         for message in msg_map.values():
-            if message.status != MessageStatus.PENDING:
+            if message.status == MessageStatus.DEAD_LETTER:
+                continue
+            if message.is_dead:
                 continue
             if message.is_delayed:
                 continue

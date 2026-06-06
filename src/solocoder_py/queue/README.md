@@ -84,6 +84,7 @@
 ## 使用示例
 
 ```python
+import time
 from datetime import datetime, timedelta
 from solocoder_py.queue import MessageQueue, DuplicateMessageError
 
@@ -120,7 +121,7 @@ mq.enqueue("unreliable", "bad", max_retry_count=2, visibility_timeout=timedelta(
 for _ in range(5):
     m = mq.dequeue("unreliable")
     # 不 acknowledge，等待超时
-    import time; time.sleep(0.1)
+    time.sleep(0.1)
 
 # 查看死信
 dlq = mq.peek_dead_letters("unreliable")

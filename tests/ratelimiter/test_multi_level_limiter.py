@@ -307,12 +307,13 @@ class TestMultiLevelCounts:
 
 class TestMultiLevelConcurrency:
     def test_concurrent_try_acquire_does_not_exceed_global_quota(self):
+        clock = ManualClock()
         config = make_config(
             global_max=10,
             window=60.0,
             tenants=[("t1", 10, [])],
         )
-        limiter = MultiLevelRateLimiter(config)
+        limiter = MultiLevelRateLimiter(config, clock=clock)
 
         success_count = 0
         lock = threading.Lock()
@@ -335,14 +336,16 @@ class TestMultiLevelConcurrency:
 
         assert success_count == 10
         assert limiter.get_global_count() == 10
+        assert limiter.get_tenant_count("t1") == 10
 
     def test_concurrent_try_acquire_does_not_exceed_tenant_quota(self):
+        clock = ManualClock()
         config = make_config(
             global_max=100,
             window=60.0,
             tenants=[("t1", 7, []), ("t2", 93, [])],
         )
-        limiter = MultiLevelRateLimiter(config)
+        limiter = MultiLevelRateLimiter(config, clock=clock)
 
         success_count = 0
         lock = threading.Lock()
@@ -365,14 +368,16 @@ class TestMultiLevelConcurrency:
 
         assert success_count == 7
         assert limiter.get_tenant_count("t1") == 7
+        assert limiter.get_tenant_count("t2") == 0
 
     def test_concurrent_try_acquire_does_not_exceed_subject_quota(self):
+        clock = ManualClock()
         config = make_config(
             global_max=100,
             window=60.0,
             tenants=[("t1", 100, [("s1", 5), ("s2", 95)])],
         )
-        limiter = MultiLevelRateLimiter(config)
+        limiter = MultiLevelRateLimiter(config, clock=clock)
 
         success_count = 0
         lock = threading.Lock()
@@ -395,45 +400,58 @@ class TestMultiLevelConcurrency:
 
         assert success_count == 5
         assert limiter.get_subject_count("t1", "s1") == 5
+        assert limiter.get_subject_count("t1", "s2") == 0
+        assert limiter.get_tenant_count("t1") == 5
+        assert limiter.get_global_count() == 5
 
     def test_concurrent_rollback_does_not_corrupt_counts(self):
+        clock = ManualClock()
         config = make_config(
-            global_max=100,
+            global_max=3,
             window=60.0,
-            tenants=[("t1", 3, [("s1", 2)])],
+            tenants=[("t1", 3, [("s1", 2), ("s2", 1)])],
         )
-        limiter = MultiLevelRateLimiter(config)
+        limiter = MultiLevelRateLimiter(config, clock=clock)
 
         barrier = threading.Barrier(4)
         errors: list[Exception] = []
+        s1_success = 0
+        s2_success = 0
+        count_lock = threading.Lock()
 
-        def worker_subject():
+        def worker_s1():
+            nonlocal s1_success
             try:
                 barrier.wait(timeout=5)
                 for _ in range(10):
                     try:
                         limiter.try_acquire("t1", "s1")
+                        with count_lock:
+                            s1_success += 1
                     except QuotaExceededError:
                         pass
             except Exception as e:
                 errors.append(e)
 
-        def worker_other():
+        def worker_s2():
+            nonlocal s2_success
             try:
                 barrier.wait(timeout=5)
                 for _ in range(10):
                     try:
-                        limiter.try_acquire("t1", "other_subject")
+                        limiter.try_acquire("t1", "s2")
+                        with count_lock:
+                            s2_success += 1
                     except QuotaExceededError:
                         pass
             except Exception as e:
                 errors.append(e)
 
         threads = [
-            threading.Thread(target=worker_subject),
-            threading.Thread(target=worker_subject),
-            threading.Thread(target=worker_other),
-            threading.Thread(target=worker_other),
+            threading.Thread(target=worker_s1),
+            threading.Thread(target=worker_s1),
+            threading.Thread(target=worker_s2),
+            threading.Thread(target=worker_s2),
         ]
         for t in threads:
             t.start()
@@ -441,17 +459,21 @@ class TestMultiLevelConcurrency:
             t.join()
 
         assert len(errors) == 0
-        assert limiter.get_tenant_count("t1") <= 3
-        assert limiter.get_subject_count("t1", "s1") <= 2
-        assert limiter.get_global_count() <= 3
+        assert s1_success == 2
+        assert s2_success == 1
+        assert limiter.get_subject_count("t1", "s1") == 2
+        assert limiter.get_subject_count("t1", "s2") == 1
+        assert limiter.get_tenant_count("t1") == 3
+        assert limiter.get_global_count() == 3
 
     def test_concurrent_is_allowed_does_not_modify_counts(self):
+        clock = ManualClock()
         config = make_config(
             global_max=5,
             window=60.0,
             tenants=[("t1", 5, [("s1", 3)])],
         )
-        limiter = MultiLevelRateLimiter(config)
+        limiter = MultiLevelRateLimiter(config, clock=clock)
 
         barrier = threading.Barrier(4)
 

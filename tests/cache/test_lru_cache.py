@@ -586,3 +586,166 @@ class TestConstructorValidation:
         cache = LRUCache()
         with pytest.raises(ValueError, match="ttl must be non-negative"):
             cache.set("key", "value", ttl=-1)
+
+
+def _expirable_count(cache: LRUCache) -> int:
+    return cache._expirable_count
+
+
+class TestExpirableCountConsistency:
+    def test_initial_count_zero(self):
+        cache = LRUCache()
+        assert _expirable_count(cache) == 0
+
+    def test_set_with_ttl_increments_count(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=10)
+        assert _expirable_count(cache) == 1
+        cache.set("b", 2, ttl=10)
+        assert _expirable_count(cache) == 2
+
+    def test_set_without_ttl_does_not_increment(self):
+        cache = LRUCache()
+        cache.set("a", 1)
+        assert _expirable_count(cache) == 0
+        cache.set("b", 2)
+        assert _expirable_count(cache) == 0
+
+    def test_overwrite_ttl_with_non_ttl_decrements(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=10)
+        assert _expirable_count(cache) == 1
+        cache.set("a", 2)
+        assert _expirable_count(cache) == 0
+
+    def test_overwrite_non_ttl_with_ttl_increments(self):
+        cache = LRUCache()
+        cache.set("a", 1)
+        assert _expirable_count(cache) == 0
+        cache.set("a", 2, ttl=10)
+        assert _expirable_count(cache) == 1
+
+    def test_overwrite_ttl_with_ttl_count_stays_same(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=10)
+        assert _expirable_count(cache) == 1
+        cache.set("a", 2, ttl=20)
+        assert _expirable_count(cache) == 1
+
+    def test_delete_ttl_entry_decrements(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=10)
+        cache.set("b", 2, ttl=10)
+        assert _expirable_count(cache) == 2
+        cache.delete("a")
+        assert _expirable_count(cache) == 1
+        cache.delete("b")
+        assert _expirable_count(cache) == 0
+
+    def test_delete_non_ttl_entry_no_change(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=10)
+        cache.set("b", 2)
+        assert _expirable_count(cache) == 1
+        cache.delete("b")
+        assert _expirable_count(cache) == 1
+
+    def test_get_on_expired_ttl_decrements(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=0.01)
+        assert _expirable_count(cache) == 1
+        time.sleep(0.05)
+        assert cache.get("a") is None
+        assert _expirable_count(cache) == 0
+
+    def test_has_on_expired_ttl_decrements(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=0.01)
+        assert _expirable_count(cache) == 1
+        time.sleep(0.05)
+        assert cache.has("a") is False
+        assert _expirable_count(cache) == 0
+
+    def test_clear_resets_count(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=10)
+        cache.set("b", 2, ttl=10)
+        cache.set("c", 3)
+        assert _expirable_count(cache) == 2
+        cache.clear()
+        assert _expirable_count(cache) == 0
+
+    def test_lru_eviction_of_ttl_entry_decrements(self):
+        cache = LRUCache(capacity=2)
+        cache.set("a", 1, ttl=10)
+        cache.set("b", 2)
+        assert _expirable_count(cache) == 1
+        cache.set("c", 3)
+        assert _expirable_count(cache) == 0
+
+    def test_weight_eviction_of_ttl_entry_decrements(self):
+        cache = LRUCache(capacity=100, max_weight=5)
+        cache.set("a", 1, ttl=10, weight=3)
+        cache.set("b", 2, weight=2)
+        assert _expirable_count(cache) == 1
+        cache.set("c", 3, weight=3)
+        assert _expirable_count(cache) == 0
+
+    def test_purge_expired_decrements_per_entry(self):
+        cache = LRUCache()
+        cache.set("a", 1, ttl=0.01)
+        cache.set("b", 2, ttl=0.01)
+        cache.set("c", 3, ttl=100)
+        cache.set("d", 4)
+        assert _expirable_count(cache) == 3
+        time.sleep(0.05)
+        _ = cache.size
+        assert _expirable_count(cache) == 1
+
+    def test_large_cache_count_accuracy(self):
+        cache = LRUCache(capacity=0, max_weight=0)
+        ttl_count = 0
+        for i in range(300):
+            if i % 2 == 0:
+                cache.set(f"key{i}", i, ttl=100)
+                ttl_count += 1
+            else:
+                cache.set(f"key{i}", i)
+        assert _expirable_count(cache) == ttl_count
+
+    def test_large_cache_count_recovers_to_zero(self):
+        cache = LRUCache(capacity=0, max_weight=0)
+        for i in range(300):
+            cache.set(f"key{i}", i, ttl=0.01)
+        assert _expirable_count(cache) == 300
+        time.sleep(0.05)
+        for _ in range(10):
+            _ = cache.size
+        assert _expirable_count(cache) == 0
+
+    def test_count_consistency_after_concurrent_ops(self):
+        cache = LRUCache(capacity=0, max_weight=0)
+        errors = []
+
+        def writer(start, count):
+            try:
+                for i in range(start, start + count):
+                    if i % 2 == 0:
+                        cache.set(f"key{i}", i, ttl=100)
+                    else:
+                        cache.set(f"key{i}", i)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer, args=(i * 100, 100)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+        actual_count = sum(
+            1 for entry in cache._store.values() if entry.expire_at is not None
+        )
+        assert _expirable_count(cache) == actual_count
+

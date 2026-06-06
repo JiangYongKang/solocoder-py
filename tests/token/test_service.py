@@ -313,6 +313,28 @@ class TestValidateAccessTokenUsedState:
         assert access is not None
         assert access.status == TokenStatus.EXPIRED
 
+    def test_second_validate_of_expired_token_still_returns_expired_error(
+        self, short_ttl_service: TokenService
+    ):
+        pair = short_ttl_service.issue_token_pair("user-1")
+        at_token = pair.access_token.token
+        time.sleep(0.1)
+
+        with pytest.raises(TokenExpiredError):
+            short_ttl_service.validate_access_token(at_token)
+
+        with pytest.raises(TokenExpiredError):
+            short_ttl_service.validate_access_token(at_token)
+
+    def test_validate_expired_status_access_token_returns_expired_error(self, service: TokenService):
+        pair = service.issue_token_pair("user-1")
+        access = service._repo.get_access_token(pair.access_token.token)
+        assert access is not None
+        access.status = TokenStatus.EXPIRED
+
+        with pytest.raises(TokenExpiredError):
+            service.validate_access_token(pair.access_token.token)
+
 
 class TestReuseDetectionWithExpiredUsedToken:
     def test_used_refresh_token_after_expiry_triggers_revoke(self, service: TokenService):

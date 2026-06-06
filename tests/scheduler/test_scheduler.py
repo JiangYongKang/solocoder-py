@@ -655,6 +655,7 @@ class TestSubmitResetsState:
         scheduler.submit(blocker2)
         scheduler.submit(task)
 
+        new_wait_start = task.wait_started_at
         assert task.effective_priority == Priority.LOWEST
         assert task.last_promoted_at is None
 
@@ -662,6 +663,12 @@ class TestSubmitResetsState:
         scheduler.tick()
         assert task.effective_priority == Priority.LOWEST
         assert task.last_promoted_at is None
+
+        fake_clock.advance(timedelta(seconds=2))
+        scheduler.tick()
+        assert task.effective_priority > Priority.LOWEST
+        assert task.last_promoted_at is not None
+        assert task.last_promoted_at >= new_wait_start
 
 
 class TestAgingStarvationInteraction:

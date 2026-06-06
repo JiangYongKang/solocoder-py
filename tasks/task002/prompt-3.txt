@@ -1,0 +1,4 @@
+消息队列的 get_queue_size 查询方法还有一个小问题需要修掉：
+1. get_queue_size 当前在内部调用了 _process_expired_in_flight，会把超时的 IN_FLIGHT 消息重新入队、把重试超限消息移入死信队列。一个查询方法不应该有修改队列状态的副作用——调用方只想看可消费消息数，却无意中触发了消息状态流转。在计数时直接判断消息的 is_visible 和 is_delayed，不改动消息状态，同样能算出正确的可消费数量。
+2. README 中死信队列的示例代码在 for 循环体内写了 import time; time.sleep(0.1)，import 语句不应该出现在循环中间。清理这个示例代码的写法。
+3. 修复后重新运行测试，需要让所有测试通过。

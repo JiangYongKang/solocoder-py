@@ -150,7 +150,6 @@ class FairResourcePoolScheduler:
             self._waiting_queue.remove(next_task)
             self._allocate(next_task)
             newly_started.append(next_task)
-            skipped.clear()
 
         return newly_started
 

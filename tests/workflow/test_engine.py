@@ -414,16 +414,39 @@ class TestWorkflowEngineRecovery:
             id="f-recover", workflow_id=wf_def.id, workflow_version=wf_def.version
         )
         failed.start()
-        failed.fail(RuntimeError("crashed before compensation"))
+
+        failed.record_step_completed("step-0")
+        s0 = failed.get_step_state("step-0")
+        s0.mark_running()
+        s0.mark_completed(outputs={"value": 0})
+
+        s1 = failed.get_step_state("step-1")
+        s1.mark_running()
+        original_error = RuntimeError("crashed before compensation started")
+        s1.mark_failed(original_error)
+        failed.fail(original_error)
+
         engine.repository.save_instance(failed)
+
+        original_error_type = failed.error_type
+        original_error_msg = failed.error_message
+        original_error_tb = failed.error_traceback
 
         resumed = engine.resume_unfinished()
         assert len(resumed) == 1
         assert resumed[0].id == "f-recover"
-        assert resumed[0].status in {
-            WorkflowInstanceStatus.COMPENSATED,
-            WorkflowInstanceStatus.COMPENSATION_FAILED,
-        }
+        assert resumed[0].status == WorkflowInstanceStatus.COMPENSATED
+
+        assert tracker.compensated == ["step-0"]
+        assert failed.error_type == original_error_type
+        assert failed.error_message == original_error_msg
+        assert failed.error_traceback == original_error_tb
+
+        assert failed.get_step_state("step-0").execution_status == StepExecutionStatus.COMPLETED
+        assert failed.get_step_state("step-0").compensation_status == StepCompensationStatus.COMPLETED
+        assert failed.get_step_state("step-1").execution_status == StepExecutionStatus.FAILED
+        assert failed.get_step_state("step-1").compensation_status == StepCompensationStatus.NONE
+        assert failed.get_step_state("step-2").execution_status == StepExecutionStatus.PENDING
 
     def test_failed_records_exception_type_and_traceback(
         self, engine: WorkflowEngine, tracker: StepTracker

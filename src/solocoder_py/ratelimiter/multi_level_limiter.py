@@ -53,39 +53,37 @@ class MultiLevelRateLimiter:
     def _ensure_tenant_limiter(
         self, tenant_id: str
     ) -> SlidingWindowRateLimiter:
-        with self._lock:
-            limiter = self._tenant_limiters.get(tenant_id)
-            if limiter is None:
-                tenant_quota = self._config.get_tenant_quota(tenant_id)
-                if tenant_quota is None:
-                    raise InvalidQuotaError(
-                        f"No quota configured for tenant: {tenant_id}"
-                    )
-                limiter = SlidingWindowRateLimiter(
-                    max_requests=tenant_quota,
-                    window_seconds=self._config.window_seconds,
-                    clock=self._clock,
+        limiter = self._tenant_limiters.get(tenant_id)
+        if limiter is None:
+            tenant_quota = self._config.get_tenant_quota(tenant_id)
+            if tenant_quota is None:
+                raise InvalidQuotaError(
+                    f"No quota configured for tenant: {tenant_id}"
                 )
-                self._tenant_limiters[tenant_id] = limiter
-            return limiter
+            limiter = SlidingWindowRateLimiter(
+                max_requests=tenant_quota,
+                window_seconds=self._config.window_seconds,
+                clock=self._clock,
+            )
+            self._tenant_limiters[tenant_id] = limiter
+        return limiter
 
     def _ensure_subject_limiter(
         self, tenant_id: str, subject_id: str
     ) -> Optional[SlidingWindowRateLimiter]:
-        with self._lock:
-            key = (tenant_id, subject_id)
-            limiter = self._subject_limiters.get(key)
-            if limiter is None:
-                subject_quota = self._config.get_subject_quota(tenant_id, subject_id)
-                if subject_quota is None:
-                    return None
-                limiter = SlidingWindowRateLimiter(
-                    max_requests=subject_quota,
-                    window_seconds=self._config.window_seconds,
-                    clock=self._clock,
-                )
-                self._subject_limiters[key] = limiter
-            return limiter
+        key = (tenant_id, subject_id)
+        limiter = self._subject_limiters.get(key)
+        if limiter is None:
+            subject_quota = self._config.get_subject_quota(tenant_id, subject_id)
+            if subject_quota is None:
+                return None
+            limiter = SlidingWindowRateLimiter(
+                max_requests=subject_quota,
+                window_seconds=self._config.window_seconds,
+                clock=self._clock,
+            )
+            self._subject_limiters[key] = limiter
+        return limiter
 
     def try_acquire(self, tenant_id: str, subject_id: str) -> None:
         with self._lock:
