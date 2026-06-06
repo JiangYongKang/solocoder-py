@@ -53,6 +53,7 @@ class MultiLevelRateLimiter:
     def _ensure_tenant_limiter(
         self, tenant_id: str
     ) -> SlidingWindowRateLimiter:
+        # NOTE: Caller MUST hold self._lock before invoking this method.
         limiter = self._tenant_limiters.get(tenant_id)
         if limiter is None:
             tenant_quota = self._config.get_tenant_quota(tenant_id)
@@ -71,6 +72,7 @@ class MultiLevelRateLimiter:
     def _ensure_subject_limiter(
         self, tenant_id: str, subject_id: str
     ) -> Optional[SlidingWindowRateLimiter]:
+        # NOTE: Caller MUST hold self._lock before invoking this method.
         key = (tenant_id, subject_id)
         limiter = self._subject_limiters.get(key)
         if limiter is None:

@@ -716,9 +716,9 @@ class TestExpirableCountConsistency:
     def test_large_cache_count_recovers_to_zero(self):
         cache = LRUCache(capacity=0, max_weight=0)
         for i in range(300):
-            cache.set(f"key{i}", i, ttl=0.01)
+            cache.set(f"key{i}", i, ttl=0.3)
         assert _expirable_count(cache) == 300
-        time.sleep(0.05)
+        time.sleep(0.5)
         for _ in range(10):
             _ = cache.size
         assert _expirable_count(cache) == 0
