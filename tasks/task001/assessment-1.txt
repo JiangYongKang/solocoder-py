@@ -1,0 +1,11 @@
+产物不满意：
+1. Order.apply_promotions 方法名暗示的"应用促销"效果不完整。该方法虽然将促销列表存入了 self.promotions，但计算出的优惠后金额仅通过返回值传递，Order.total_amount 属性仍是 line_items 原始总价。后续业务操作无法从订单对象上获取实际应付金额，调用方必须自行维护 apply_promotions 的返回值与订单的对应关系。
+2. ship() 方法的异常类型不统一。当 line_item_id 不存在时，_find_line_item 抛出 ValueError；而发货数量校验抛出 ShipmentQuantityError。调用者在一个发货接口中需要分别 catch 两种不同类型的异常，不合理。统一将发货相关异常收敛到 ShipmentQuantityError 或 OrderFulfillmentError 下更合适。
+3. 最大促销数量叠加的测试覆盖不完整。test_promotions.py 的 test_maximum_compatible_promotions_stack 和 test_models.py 的 test_maximum_promotions_compatible 都只覆盖了"特价+满减"这一种互斥分组兼容的组合，而"折扣+直减"这另一种最大兼容组合没有任何测试覆盖。促销互斥规则定义了两组互斥对，两种兼容组合都应验证。
+4. PromoitonEngine 的 calculate_final_price 中存在延迟导入 from .promotions import PromotionEngine，但 Order（在 models.py 中）和 PromoitonEngine（在 promotions.py 中）之间不存在循环依赖，顶层的 modules.py 已经 import 了 Promotion。这个不必要的延迟导入降低了代码可读性。
+
+过程不满意：
+1. 执行过程中先尝试了 python -m pytest 而非 poetry run pytest，失败后才改用 poetry run。已知项目使用 Poetry 管理依赖，第一反应应使用 poetry run pytest，说明对环境启动方式的敏感度不足。
+2. advance_to_state 辅助函数与 pay_and_ship_full 存在重复操作，导致测试首次运行为 93/94 通过，一个测试因重复调用 pay() 引发非法状态转移而失败。虽然最终修复，但暴露了模型在构造测试辅助函数时未充分考虑不同辅助函数之间的调用关系，测试基础设施的复用设计存在疏忽。
+3. 执行轨迹中出现 poetry run pytest tests/order/ -v undefined，命令中携带了多余的 undefined 参数，说明工具调用参数的构造不够精确。虽然 pytest 忽略该参数后测试正常执行，但不干净的命令是工具使用层面的显式错误。
+4. 所有 Todo 项的描述和最终的项目总结使用了英文（"Model and data structures"、"Implement Repository"、"States and Transitions" 等），在需要输出中文的工作流程中，过程语言不统一。
