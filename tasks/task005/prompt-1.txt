@@ -1,0 +1,7 @@
+在当前 Python 项目中实现访问令牌刷新域，所有相关代码放在 src/solocoder_py/token/ 包下，使用内存数据结构模拟令牌存储。
+1. 实现 access token 和 refresh token 的签发：用户登录后签发一对 token，access token 用于 API 访问（有较短有效期），refresh token 用于获取新的 access token（有较长有效期）。两个 token 都应是不可预测的随机字符串。
+2. 实现轮换签发（rotation）：当使用 refresh token 刷新 access token 时，服务端同时生成一个新的 refresh token 返回给客户端，旧的 refresh token 立即失效。每次刷新后客户端持有新 token 对。
+3. 实现令牌族（token family）管理：初始签发的 access/refresh token 对以及随后轮换产生的所有 token 对属于同一个令牌族。令牌族内的 refresh token 按代际（generation）顺序排列。
+4. 实现 refresh token 重用检测：如果服务端收到一个已经被使用过的 refresh token（非最新的那一个），说明该令牌族可能已泄露，应立即将整个令牌族所有 token 标记为吊销状态，拒绝该族内任何 token 的后续请求。
+5. 为该模块编写完整的单元测试，覆盖正常流程（签发、轮换刷新、正常吊销）、边界条件（过期 token 刷新被拒、连续多次轮换）和异常分支（重用已使用过的 refresh token 触发全族吊销、访问已吊销族的 token、用已过期的 refresh token 刷新）。测试代码放在 tests/token/ 下。
+6. 在该模块包内编写 README.md，说明模块功能、核心类的职责、令牌生命周期与轮换流程图（可用文本描述）以及使用示例。

@@ -1,0 +1,6 @@
+你编写的订单结算模块存在以下问题：
+1. Order.apply_promotions 方法通过返回值传递优惠后金额，但 Order.total_amount 属性仍是 line_items 原始总价。后续业务操作无法从订单对象上获取实际应付金额，调用方需要自行维护 apply_promotions 的返回值与订单的对应关系。修复后 total_amount 应反映促销后的实际应付金额。
+2. ship() 方法在 line_item_id 不存在时抛出 ValueError，而发货数量校验抛出的却是 ShipmentQuantityError。同一个发货接口抛出两种不同类型的异常，调用方处理不一致。将 line_item_id 不存在也统一为发货相关的异常类型。
+3. 最大促销数量叠加的测试只覆盖了"特价+满减"这一种兼容组合，"折扣+直减"作为互斥规则定义的另一种合法最大组合没有任何测试验证。补充该组合的测试用例。
+4. PromotionEngine.calculate_final_price 中存在不必要的延迟导入 from .promotions import PromotionEngine，但 Order 和 PromotionEngine 之间没有循环依赖。移除不必要的延迟导入。
+5. 修复后重新运行测试，需要让所有测试通过。

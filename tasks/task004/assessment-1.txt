@@ -1,0 +1,15 @@
+产物不满意：
+1. README 文档中描述 capacity 参数"设为 0 表示不限制条目数"，但实际实现中 capacity=0 时所有条目写入后立即被驱逐，相当于禁止存储任何条目，文档与实现矛盾。
+2. _purge_expired 方法在每次 get/set/has/size 调用时都遍历所有缓存条目检查过期，O(n) 复杂度挂在每次操作上。虽然提示词要求惰性回收，但扫全表不是"惰性"的本意，缓存条目较多时性能会显著退化。
+3. delete 方法没有调用 _purge_expired，删除操作不会顺带清理已过期条目。虽然不影响功能正确性，但与其他读写操作行为不一致，过期条目只有等下次 get/set/has/size 才会被扫到。
+4. set 方法在 capacity=0 时仍然会创建 _CacheEntry 对象、插入 OrderedDict、move_to_end，然后立即被 _evict_if_needed 驱逐出去，白白做了无用的对象构建和字典操作，应该直接在入口处短路拒绝。
+5. 并发测试只验证了操作不抛异常和 size/weight 的数值约束，没有验证并发场景下的数据完整性。例如 test_concurrent_writes_no_corruption 写入了 1000 个不同 key，但没有遍历读取这些 key 验证值是否正确写入，无法证明并发下没有出现写丢失或数据错乱。
+6. 并发测试的 capacity 和 max_weight 都设得非常大（1000、10000），实际测试中从未触发过 LRU 驱逐，回避了并发 + 驱逐同时发生时最容易出问题的场景。
+7. 测试中多处使用 time.sleep 等待 TTL 过期，最短仅 0.01 秒的 TTL 配合 0.05 秒的等待，在 CI 或负载较高的机器上可能因为调度延迟导致测试不稳定，没有使用 time.monotonic 模拟或 mock 时间源。
+过程不满意：
+1. 模型在查找项目结构时去读了 order 模块的 models.py、test_models.py、conftest.py，但 order 包跟当前要开发的 cache 任务完全无关，属于无效探索，耽误了时间。
+2. 模型尝试运行测试的过程是典型的试错式调试，前后尝试了 python -m pytest、pip install -e .、PYTHONPATH 环境变量、poetry run pytest、pytest --override-ini、创建 conftest.py、指定完整解释器路径、py_compile、查看 Python 版本等十多种方式，直到第 7 次运行才成功。中间没有停下来分析环境变量或 import 路径的根因，只是不断换命令尝试。
+3. 模型在项目根目录创建了 tests/conftest.py 试图解决模块导入问题，但这个文件在实际最终运行的 PYTHONPATH 方案中并没有起作用，属于不必要的文件，遗留在项目里属于垃圾文件。
+4. 模型首次实现时把 capacity=0 处理为"不限制容量"，写完测试后又发现测试期望的是"零容量拒绝所有"，然后回过头修改了生产代码。这说明模型在动笔前没有想清楚零容量的语义，写代码和写测试时用的是两种理解，导致返工。
+5. 模型在思考过程中声称所有 52 个测试通过，但未提及尝试 poetry run pytest 时因 Python 版本不兼容（项目要求 >=3.13 但环境是 3.11.9）失败的问题，最终挂载 PYTHONPATH 直接跳过 poetry 运行测试，没有尝试修复 poetry 环境或说明此限制。
+6. 模型回复中使用了完整的 markdown 表格总结创建的文件和功能要点，虽然内容正确，但输出格式属于英文式结构化陈述，读起来像是生成式报告而非开发过程的自然总结。

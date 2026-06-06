@@ -1,0 +1,7 @@
+产物不满意：
+1. validate_access_token 新增的防御检查用了 status != ACTIVE 通吃所有非活跃状态，范围过于宽泛。提示词第 2 条只要求对 USED 状态做防御，但当前实现把 EXPIRED 状态也拦截了。一个 token 首次校验过期时抛出 TokenExpiredError 同时状态被标记为 EXPIRED，如果再有代码对该 token 做第二次校验，错误类型会从 TokenExpiredError 变成 TokenRevokedError，改变了原有错误路径的语义。精确做法是只检查 status == USED，不干扰其他状态对应的错误类型。
+
+过程不满意：
+1. 模型在收到提示词后立即创建 TodoList（session-cot-2 第 1-9 行），没有先通读代码分析问题再规划。标注规范要求先分析再规划，不能一上来就建列表。
+2. 新增测试类时先在文件底部写了 import 语句（紧贴在测试类前），随后才意识到位置不对，又单独执行两步操作：一步把 import 搬移到文件顶部，一步删除底部的重复 import。这种先写错位再修正的模式说明在开始写代码前没有想好文件整体结构。
+3. 测试执行命令没有使用项目约定的 poetry run python -m pytest，而是手动设 PYTHONPATH 再调裸 Python.exe。第一轮 assessment 已经记录了模型在 poetry/pytest 执行上的反复试错问题，本轮仍然绕过了项目的虚拟环境管理体系。

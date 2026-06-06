@@ -314,3 +314,20 @@ class TestPromotionEngineCalculation:
         )
         result = engine.calculate_final_price(Decimal("2000.00"), [p_special, p_reduction])
         assert result == Decimal("990.00")
+
+    def test_discount_and_direct_reduction_max_stack(self):
+        engine = PromotionEngine()
+        p_discount = Promotion(
+            id="p1",
+            name="8折",
+            type=PromotionType.DISCOUNT,
+            value=Decimal("0.8"),
+        )
+        p_direct = Promotion(
+            id="p2",
+            name="直减50元",
+            type=PromotionType.DIRECT_REDUCTION,
+            value=Decimal("50.00"),
+        )
+        result = engine.calculate_final_price(Decimal("300.00"), [p_discount, p_direct])
+        assert result == Decimal("190.00")

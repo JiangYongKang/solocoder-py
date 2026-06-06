@@ -1,0 +1,6 @@
+令牌刷新模块在安全相关的逻辑上有几处需要修正，尤其是重用检测的时机问题：
+1. refresh_token_pair 方法中过期检查排在重用检测前面。已使用过的 refresh token（状态为 USED）过期后再次提交时只报 TokenExpiredError，不会走到后面 status != ACTIVE 的重用检测分支，导致无法触发全族吊销。攻击者可以等 token 被正常刷新标记为 USED 后再等它过期，用这个旧 token 探测也不会触发吊销。需要调整检查顺序：先检测 token 是否为 ACTIVE 状态（非 ACTIVE 直接触发吊销），再判断是否过期。
+2. validate_access_token 只检查了 REVOKED 和过期状态，没有对 USED 状态做防御。如果将来有代码变更导致 access token 被标记为 USED，它仍能通过验证。补全状态检查的防御面。
+3. TokenService 构造函数对 TTL 参数没有任何下限校验，可以传入零或负数 timedelta。补充参数校验，拒绝非法的 TTL 值。
+4. 测试 test_refresh_expired_refresh_token_raises 只断言了抛出 TokenExpiredError，没有验证 refresh token 的状态是否确实被更新成了 EXPIRED。补充对状态副作用的断言。
+5. 修复后重新运行测试，需要让所有测试通过。

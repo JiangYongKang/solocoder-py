@@ -1,0 +1,12 @@
+产物不满意：
+1. 新增的 5 个并发测试全部使用 SystemClock 而非 ManualClock，隐式依赖实时执行速度。每个测试的窗口时长都是 60 秒，线程迭代 10 到 50 次，均依赖测试在 60 秒内跑完。正常情况下没问题，但一旦系统负载高导致测试执行变慢、窗口到期，succcess_count 的精确相等断言就会不通过。用例完全可以注入 ManualClock 消除这种不确定性。
+2. test_concurrent_rollback_does_not_corrupt_counts 的断言是 tenant_count <= 3、subject_count <= 2、global_count <= 3，这些"不超限"断言在租户级回滚完全失效时也能通过。比如 _rollback_last 对租户 limiter 静默失败，租户计数卡在 3 后所有后续 tenant.try_acquire 都会返回 False，断言依然成立。真正验证回滚正确性应该在校验"不超限"的同时再验证全局计数和租户计数等于预期成功次数，或者设计一个能直接暴露回滚失效的场景。
+3. _ensure_tenant_limiter 和 _ensure_subject_limiter 内部仍保留了 with self._lock，但这两个方法当前只会从 try_acquire 和 is_allowed 中调用，而这两个调用点外层已经持有了同一把 RLock。内层的 with self._lock 在 RLock 可重入机制下变成了无声的 no-op，锁的归属关系不清晰。如果以后有人在不持锁的上下文中调用 _ensure_*，代码仍然能"正常工作"只是因为碰巧走通了内部锁，而不是因为设计上明确了调用契约。
+4. get_global_count、get_tenant_count、get_subject_count 三个查询方法没有参与 MultiLevelRateLimiter 的 RLock 保护。虽然每个子 limiter 有独立锁不会内部损坏，但外部调用者连续读 global_count 再读 tenant_count 时，两次读取之间可能被另一个 try_acquire 穿插，读到的两级计数来自不同时刻。不过提示词没有要求查询也必须原子，所以这个只是潜在的数据一致性风险而非缺陷。
+
+过程不满意：
+1. 模型在收到提示词后第一步就直接创建 TodoList（8 个 items），和第一轮一样没有先分析七项需求之间的关联关系。比如 is_allowed 副作用、原子性缺失、回滚归属这三个问题本质上都可以通过统一加一把外层锁来解决，先分析清楚再规划可以少走弯路。这个模式在第一轮 assessment 里已经被指出过，本轮没有改进。
+2. 模型继续绕过 Poetry 运行测试，用了 pyenv shell 3.11.9 加手动设置 PYTHONPATH 和直接调 Python 可执行文件路径的方式，而不是 poetry run python -m pytest。项目有 pyproject.toml 和 poetry.lock，Poetry 是声明的构建工具，这个环境绕行问题在第一轮就暴露过，本轮模型依然没有先检查 Poetry 环境是否可用就直接走了旁路。
+3. 模型在 311、322、331、341 行连续 4 次查看同一个文件 test_multi_level_limiter.py，中间没有做任何实质性修改，也没有切换到别的上下文。这种反复读同一个文件同一个区域的行为属于无效的重复读取。
+4. 模型写完并发测试后首次运行就失败了，报"配置配额总和超限"，两次测试用例都出现了这个问题。这说明模型在构造测试配置时没有用上自己刚在 models.py 里实现的 validate 校验规则，等于代码规范写了一套、实际用的时候忘了套。
+5. 模型在思考过程里有这么一段"需要更新 __init__.py 导出 can_acquire（不需要，它是实例方法）"，想改又不改了，说明在写测试之前对 can_acquire 应该放在哪、是否需要导出没有预先想清楚，边做边摇摆。

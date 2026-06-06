@@ -1,0 +1,7 @@
+工作流执行引擎在故障恢复和状态管理上有些问题需要处理：
+1. resume_unfinished 只恢复 PENDING 和 RUNNING 状态的实例，但 find_unfinished_instances 查询条件还包含了 FAILED 和 COMPENSATING。如果引擎在实例执行失败后、开始补偿前崩溃，该实例以 FAILED 状态留在仓库，后续 resume_unfinished 会跳过它导致无法恢复。而且 execute 方法本身接受 FAILED 作为合法执行入口，resume_unfinished 跳过 FAILED 与 execute 的设计不一致。
+2. _handle_compensation 中补偿状态初始化条件写反了：代码在补偿状态非 NONE 时重置为 PENDING，但从语义上看应该在状态为 NONE 时才初始化为 PENDING。虽然当前流程下这个条件永远不成立、不影响运行结果，但代码逻辑和设计意图是反的。
+3. 工作流实例的异常信息只保存了 error_message 字符串，丢失了原始异常类型和堆栈。如果调度方需要根据异常类型做不同处理（如区分可重试错误和永久错误），当前记录粒度不够。
+4. 清理 states.py 中定义了但从未被流转到的 StepExecutionStatus.SKIPPED 和 StepCompensationStatus.PENDING 枚举值，以及与之关联的 mark_skipped 方法。
+5. 测试需要补充：action 为 None 的步骤在正常执行流程中的行为、以及 resume_unfinished 对 FAILED 实例的恢复场景。
+6. 修复后重新运行测试，需要让所有测试通过。

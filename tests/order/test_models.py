@@ -142,6 +142,19 @@ class TestBoundaryConditions:
         result = engine.calculate_final_price(Decimal("1000.00"), [p_special, p_reduction])
         assert result == Decimal("450.00")
 
+    def test_maximum_promotions_discount_and_direct_reduction(self):
+        engine = PromotionEngine()
+        p_discount = Promotion(
+            id="p1", name="7折", type=PromotionType.DISCOUNT,
+            value=Decimal("0.7"),
+        )
+        p_direct = Promotion(
+            id="p2", name="直减100元", type=PromotionType.DIRECT_REDUCTION,
+            value=Decimal("100.00"),
+        )
+        result = engine.calculate_final_price(Decimal("500.00"), [p_discount, p_direct])
+        assert result == Decimal("250.00")
+
     def test_promotion_applies_exactly_at_threshold(self):
         promo = Promotion(
             id="p1", name="满100减10", type=PromotionType.FULL_REDUCTION,
@@ -161,6 +174,9 @@ class TestOrderWithPromotions:
     def test_apply_promotions_to_order(self):
         items = make_line_items(1, quantity=1, unit_price=Decimal("200.00"))
         order = make_order(line_items=items)
+        assert order.total_amount == Decimal("200.00")
+        assert order.original_total_amount == Decimal("200.00")
+
         promo = Promotion(
             id="p1", name="满100减30", type=PromotionType.FULL_REDUCTION,
             value=Decimal("30.00"), threshold=Decimal("100.00"),
@@ -168,6 +184,26 @@ class TestOrderWithPromotions:
         final_price = order.apply_promotions([promo])
         assert final_price == Decimal("170.00")
         assert len(order.promotions) == 1
+        assert order.total_amount == Decimal("170.00")
+        assert order.original_total_amount == Decimal("200.00")
+
+    def test_total_amount_reflects_promotions(self):
+        items = make_line_items(2, quantity=1, unit_price=Decimal("100.00"))
+        order = make_order(line_items=items)
+        assert order.total_amount == Decimal("200.00")
+
+        p_discount = Promotion(
+            id="p1", name="9折", type=PromotionType.DISCOUNT,
+            value=Decimal("0.9"),
+        )
+        p_direct = Promotion(
+            id="p2", name="直减20元", type=PromotionType.DIRECT_REDUCTION,
+            value=Decimal("20.00"),
+        )
+        final = order.apply_promotions([p_discount, p_direct])
+        assert final == Decimal("160.00")
+        assert order.total_amount == Decimal("160.00")
+        assert order.original_total_amount == Decimal("200.00")
 
     def test_apply_mutex_promotions_to_order_raises(self):
         items = make_line_items(1, quantity=1, unit_price=Decimal("200.00"))

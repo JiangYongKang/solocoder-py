@@ -1,0 +1,15 @@
+产物不满意：
+1. _schedule_from_queue() 中存在队头阻塞缺陷：当 _pick_next() 选出的最高优先级任务因槽位不足无法分配时，直接 break 退出而不继续尝试队列中后序的更小槽位任务。例如总槽位 4，队列中依次有 Task A（需 3 槽位，HIGH）、Task B（需 3 槽位，MEDIUM）、Task C（需 1 槽位，LOW），释放 4 个槽位后 A 先被分配消耗 3 个，剩余 1 个空闲，B 因需 3 个不满足条件触发 break，导致原本能用剩余 1 个槽位的 C 也被跳过。提示词第 4 条要求"将可用槽位分配给符合条件的等待任务"，未说不符合条件的任务应阻塞后续任务，这个行为会造成槽位闲置浪费。
+2. submit() 重置了 effective_priority 为原始 priority、is_starvation_protected 为 False，但未同步重置 last_promoted_at 为 None。虽然常规使用中 submit 只对新创建的 task 调用，但如果同一个 task 对象被 release 后重新 submit，残留的 last_promoted_at 会让下次 _apply_aging 的参考时间点偏离实际等待起始时间，导致老化判断不准。
+3. _apply_aging() 中对已到达 HIGHEST 的任务，每次 tick 仍会执行一次无效赋值（effective_priority = HIGHEST，last_promoted_at = now），虽然不影响功能正确性但属于无意义运算。
+4. _schedule_from_queue() 的 break 逻辑还有一个问题：当队列开头是饥饿防护任务但槽位不足时，同样会 break 而不尝试其他饥饿防护任务。但饥饿防护任务之间的槽位需求可能不同，较小的防护任务理应被调度。例如两个饥饿防护任务分别需 3 槽位和 1 槽位，剩余 2 个空闲槽位，需 3 槽位的任务不满足后 break，需 1 槽位的也被忽略。
+5. release() 只调用 _schedule_from_queue() 而不先执行老化或饥饿防护检查。提示词第 3 条说饥饿防护触发后应"立即获得下一个可用槽位"，如果调用方只在 release 时做调度而忘了主动调 tick()，可能出现在临近饥饿触发时间点恰好有槽位释放、却因未先 tick 导致等待任务错过一次调度机会的情况。虽然 tick() 与 release() 分离是合理设计，但文档和测试中未强调 release 前需要先 tick 的要求。
+6. 测试 test_starvation_triggers_after_max_wait 通过将 aging_interval 设置为 10 分钟来避免老化干扰饥饿防护测试。这个测试只验证了"没有老化时饥饿防护能触发"，但没有覆盖"老化与饥饿防护共存时，老化不应覆盖饥饿防护结果"的场景，对提示词第 2、3 条之间的交互关系测试不充分。
+
+过程不满意：
+1. 模型收到任务后直接创建 TodoList 并开始写代码，没有先对提示词各条要求的交互关系做前置分析。例如老化机制与饥饿防护之间的优先级竞争如何裁决、_schedule_from_queue 中遇到队头阻塞时应跳过还是 break、release 后的调度流程中是否需要先执行 tick 等，这些都需要在动笔前想清楚，但思考过程中只见工具调用未见任何实质分析。
+2. 测试运行阶段出现了严重的盲目试错。从第 197 行到第 657 行，模型陆续尝试了 python -m pytest、pip install -e .、PYTHONPATH 环境变量、手工 import 验证、多次 view_folder 和 file_search、GetDiagnostics 语法检查、_manual_test.py 临时文件、各种 pyenv Python 路径、pytest.exe 版本检查、Get-ChildItem 查找 Scripts、pyenv shell 切换等十多种方式。没有先查看 pyproject.toml 中是否有 pytest 配置，也没有参考其他已有任务（如 order、queue）的测试是如何运行的——那些测试能跑说明正确运行方式已有先例。
+3. 首轮测试 3 个失败后，模型不是先分析失败根因并校验调度器逻辑是否正确，而是同时修改 scheduler.py 和 test_scheduler.py 两边的代码。对于 test_aged_priority_wins_over_waiting_higher_original 这个测试，模型的做法是让 HIGH 任务晚提交 14 秒，使得 LOWEST 任务先触发老化并在时间差帮助下与 HIGH 优先级持平后靠 FCFS 取胜。如果两个任务同时提交，LOWEST (0) 一次老化推进 3 步到 clamp(3)=HIGH，阈值判断 3<=LOW 为 False，最终 effective_priority = HIGH，与 HIGH 任务相同，只能靠 FCFS 分先后——但这不是"老化让低优先级反超高优先级"，而是"同优先级下的 FCFS"。
+4. 第二轮仍有 2 个测试失败后，模型继续修改测试而非实现：把 test_starvation_triggers_after_max_wait 的 aging_interval 调到 10 分钟来绕过老化干扰。这是用测试参数绕过问题的思路，而不是验证当老化与饥饿防护共存时调度器行为是否合规。
+5. 模型在编写代码阶段创建了 _manual_test.py（第 698 行），用绕过 pytest 框架的方式做手动验证，这类临时文件既不规范也不该出现在产物中。虽然后续删除了该文件（第 1511 行），但过程暴露了模型在没有把握的情况下倾向于旁路验证而非排查测试环境问题。
+6. 整个过程的调试模式是"写代码 → 跑测试 → 失败 → 同步改代码和测试 → 再跑 → 又失败 → 再改测试 → 通过"，属于典型的试错式流程。对于老化与饥饿防护这类有时序依赖的功能，正确做法应该是先审查调度器的 _apply_aging 和 _schedule_from_queue 的逻辑一致性，确定代码缺陷后再做一次精准修改，而不是两轮反复改动测试用例参数来让测试"变绿"。

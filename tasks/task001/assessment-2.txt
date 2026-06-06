@@ -1,0 +1,9 @@
+产物不满意：
+1. _find_line_item 找不到行项目时抛出 ShipmentQuantityError，但该异常在代码中专门用于数量校验（正数检查、超额检查），"行项目不存在"和"数量不合法"是两类性质不同的错误。提示词虽然要求统一为发货相关异常类型，但可选的有 ShipmentQuantityError 和 OrderFulfillmentError 两个，模型选了语义范围更窄的 ShipmentQuantityError，导致这个异常现在承载了两层含义。调用方确实只需要 catch 一种异常了，但 catch 进来之后还得靠错误消息区分到底是"数量不对"还是"查无此物"，统一得太粗暴，没有从根本上改善调用方的处理体验。
+
+过程不满意：
+1. 模型一收到提示词就直接创建 TodoList，没有先读文件、分析问题再规划。COT 开头就是"让我逐一修复这些问题。先创建任务列表来跟踪进度"，然后才去读取代码。应该先搞清楚当前代码状态再列计划，而不是反过来。
+2. pytest 执行命令末尾再次携带了 `undefined` 参数（`poetry run pytest tests/order/ -v undefined`），这个问题在 assessment-1 中已经被明确指出了，但模型在第二轮没有任何改进。同一类工具使用错误重复出现，说明模型对历史反馈的敏感度不足。
+3. 对 models.py 做了 3 次分离的 edit_file_search_replace，对 test_models.py 做了 2 次分离的编辑。models.py 中的三个修改点（加 _final_amount 字段、改 total_amount 属性、改 apply_promotions/_find_line_item）彼此独立但都在同一文件中，完全可以合并成一次编辑。分多次编辑不仅低效，还增加了中间状态不一致的风险。
+4. 文件读取没有并行化，先后单独读取了 models.py、test_promotions.py、test_models.py，后面又单独读取 test_fulfillment.py。如果一开始就并行读取所有需要改的文件，整体效率会更高。
+5. COT 中大量工具调用的返回内容显示为 `changes: undefined`，修改内容完全不可见，无法回溯模型具体改了哪些代码。虽然这未必是模型本身的问题，但从标注角度来说过程可追溯性较差。

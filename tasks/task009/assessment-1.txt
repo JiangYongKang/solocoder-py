@@ -1,0 +1,10 @@
+产物不满意：
+1. resume_unfinished 只恢复 PENDING 和 RUNNING 状态的实例，但 find_unfinished_instances 的查询条件还包含了 FAILED 和 COMPENSATING。如果引擎在实例 fail 之后、start_compensation 之前崩溃，该实例会以 FAILED 状态留在仓库里，后续 resume_unfinished 会悄悄跳过它，无法恢复到未完成的工作流。而且 execute 方法本身是接受 FAILED 作为合法执行入口的，resume_unfinished 刻意跳过 FAILED 与 execute 的允许状态不一致。
+2. _handle_compensation 第 193 行的补偿状态判断条件写反了：`step_state.compensation_status != StepCompensationStatus.NONE` 是在状态非 NONE 时把它重置为 PENDING，但从语义上看应该是状态为 NONE 时才对它做初始化为 PENDING。当前流程下所有已完成步骤的补偿状态初始都是 NONE，这个条件永远走不进去，后面的 mark_compensation_running 直接覆盖掉了 NONE 状态，所以不影响最终运行结果，但代码逻辑和设计意图是反的。
+3. StepExecutionStatus.SKIPPED 和 StepCompensationStatus.PENDING 两个枚举值在 states.py 里定义了，但引擎业务代码中从未真正流转到这俩状态。StepExecutionState.mark_skipped 方法也是写了但没有任何调用点，属于死代码。
+4. 工作流实例的异常信息只保存了 error_message 字符串，没有保留原始异常的类型和堆栈。如果调度方需要根据异常类型做不同处理（比如可重试错误 vs 永久错误），当前记录方式粒度不够。
+5. 测试 test_no_compensation_action_still_marks_completed 验证了补偿操作缺失时标记为完成，但没有覆盖 action 为 None 的步骤在正常执行流程中的行为——_execute_step_action 在 action 为 None 时直接返回 None 并标记步骤完成，这个路径缺少专项测试。
+过程不满意：
+1. 模型两次尝试运行测试时，命令末尾都带上了多余的 undefined 参数（python -m pytest tests/workflow/ -v undefined），属于工具调用时参数构造不严谨。
+2. 模型在测试运行失败后没有先分析错误原因，而是连续换了四种方式重试——先 python -m pytest，再 poetry run pytest，再直接指定解释器路径，最后才用 $env:PYTHONPATH 设置环境变量。试了三次才找到正确方式，属于明显的试错式调试。
+3. 模型写完 engine.py 后自己发现 resume_unfinished 方法有缩进错误并做了修正，说明首次输出代码时没有保持格式干净。

@@ -1,0 +1,12 @@
+产物不满意：
+1. get_lock_info() 被定位为查询方法，但内部对过期锁执行了 mark_expired() 状态变更，将一个 HELD 状态的锁在查询时悄悄改成 EXPIRED。模型在同一轮修复中已经把 is_held() 和 is_held_by() 的副作用移除了，却漏了 get_lock_info()，修改不彻底。
+2. LockEntry.release_one() 的实现是先减一再判断 <=0，如果 reentrant_count 已经是 0 时被调用，会先变成 -1 再被 _reset() 兜底清理。虽然管理器层做了 FREE 状态的前置检查，但模型层的这个实现本身不具备防御性，归零后再减一属于数据完整性上的不严谨。
+3. release() 和 renew() 在处理过期锁时，先调用 force_release() 清空锁状态，再抛 LockExpiredError 等异常。异常路径下存在状态突变，调用方捕获异常时锁已被静默清理。虽然自动清理过期锁的意图没问题，但这种"错误即副作用"的设计在调用链变复杂时容易导致难以追踪的状态不一致。
+4. LockEntry 的 reenter() 和 renew() 方法中仍然使用 lease_duration or self.lease_duration 的短路写法，模型在 manager.py 的 acquire() 和 renew() 里已经把 timedelta(seconds=0) 为 falsy 的 bug 修了（改用 is not None 判断），但模型层的这两个方法漏了同样的修复。虽然当前调用路径上 manager 做了参数校验不会触发，但 LockEntry 作为公开模型，其自身健壮性不足。
+
+过程不满意：
+1. 模型在刚收到任务时第一件事就是创建 TodoList（8 项），没有先分析需求文档、梳理锁的完整生命周期和状态转移，属于没理解清楚就开始规划。
+2. 模型在看完 queue、order 几个模块后就声称"完全了解了项目的代码风格和约定"，但实际上后面写出的初始代码有两处明显 bug：查询方法有副作用（is_held 里调 force_release）、timedelta(seconds=0) 被 or 短路成默认值。说明前期的代码探索不足以支撑正确的实现。
+3. 模型在运行测试时经历了至少 6 轮环境试错：先跑 pytest 失败，再 poetry run pytest 失败，再 Python 语法检查失败，再到 where.exe 查路径、python3.13 尝试、pyenv shell 切换 Python 版本等，直到最后才通过 pyenv shell 3.11.9 成功运行。过程中存在明显的试错式调试，没有先分析环境错误信息再做针对性处理。
+4. 模型修复了两次 bug：第一次修 is_held 副作用，第二次修 timedelta falsy 问题。同一个 timedelta or 短路模式在 LockEntry.reenter() 和 LockEntry.renew() 中仍然残留，说明修复时没有做全局搜索替换，只盯住了 manager.py 一个文件改。
+5. 模型在冒烟测试通过后就清理了 _smoke_test.py 临时文件，但没有用 pytest 重新跑一遍完整的 65 个测试来确认修复没有引入回归。实际上历史记录显示后续的 pytest 运行是在修复两轮 bug 之后才全量通过的，流程上缺少每轮修复后的全量回归验证。

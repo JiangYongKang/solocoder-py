@@ -231,5 +231,5 @@ class TestOrderFulfillment:
 
     def test_find_nonexistent_line_item(self):
         order = make_order()
-        with pytest.raises(ValueError, match="Line item not found"):
+        with pytest.raises(ShipmentQuantityError, match="Line item not found"):
             order._find_line_item("nonexistent")

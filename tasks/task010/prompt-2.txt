@@ -1,0 +1,8 @@
+多仓库存预占引擎在边界场景处理和测试覆盖上还需要修一修：
+1. release() 在"部分释放后再 TTL 过期"的交叉场景下返回值错误：如果预占 30 件、先释放 10 件、再 TTL 过期，后续调用 release() 会走"已过期"分支并返回 reservation.total_quantity() 即 30，但实际引擎只在惰性回收时释放了剩余的 20 件。现有测试只写了全额预占+过期场景（30=30）碰巧蒙对。修复这个返回值 bug，并补充部分释放+过期交叉场景的测试。
+2. _release_reservation_internal 中 released_quantity 的赋值位置不对，写在 for 循环内但在释放逻辑分支外面。即使 sku 释放路径被跳过，released_quantity 仍被强制设为预占总量，造成 ReservationItem 数据与实际 SKU 库存不一致。
+3. confirm 方法在扣减库存时直接操作 sku.total 和 sku.reserved，绕过了 SkuStock.remove_stock 的合法性校验。改为通过 remove_stock 完成扣减。
+4. 清理 models.py 中定义了但从未被使用的 ReservationExpiredError 异常类。
+5. README.md 文档第65行内容被截断，跨仓拆分策略说明和状态机图中 CONFIRMED 的分支走向都没写完。补全 README 文档。
+6. 测试缺少以下异常分支和边界场景：confirm 不存在的预占记录、confirm 已释放或已确认状态的预占记录、release 已确认状态的预占记录、confirm 部分释放后仅扣减剩余量的场景、优选仓库指定后库存不足时引擎的行为、TTL 过期交叉部分释放的边界。
+7. 修复后重新运行测试，需要让所有测试通过。

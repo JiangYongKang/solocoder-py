@@ -1,0 +1,13 @@
+产物不满意：
+1. QueueEmptyError 在 models.py 中定义并在 __init__.py 中导出，但整个 queue 包没有任何地方抛出这个异常，属于死代码。提示词未要求实现这个异常类，但定义了又不用说明设计不干净。
+2. Message 上的 generate_receipt_handle 方法定义了但从未被 MessageQueue 或任何测试调用，也是死代码。receive_count 和 timestamp 拼接的逻辑没有任何消费方，凭空增加了理解负担。
+3. get_queue_size 方法没有跳过 IN_FLIGHT 状态的消息，返回的计数包含了当前不可见、实际无法被 dequeue 消费的消息。比如一条消息被 dequeue 取走后进入 IN_FLIGHT，此时 get_queue_size 仍然把它计入，与实际"可消费消息数"语义不一致。
+4. 死信队列的消息 ID 存储在 _dead_letter_queues 中用 list 存放，但 dedup 检查和 _is_duplicate 仅基于 dedup_records 判断，未考虑死信队列中的消息。如果某消息已进入死信队列且 dedup 窗口过期，同 ID 消息可重新入队，但死信队列中仍有旧消息残留，会导致后续 peek_dead_letters 混入不同版本的同 ID 消息。
+5. dequeue 方法中候选消息列表 candidates 的收集策略不够高效。堆顶如果有大量 IN_FLIGHT 或 delayed 消息，每次 dequeue 都需要把它们全部 pop 再 push 回去，时间复杂度从 O(log n) 退化到 O(k log n)，其中 k 是跳过的候选数。应该考虑维护单独的 pending 堆或者在入队时直接过滤，但 prompt 不要求关注性能，这里仅记录。
+过程不满意：
+1. 模型在刚探索完项目结构和看了两个 order 示例文件后，就直接创建了 TodoList（思考过程第83行），没有先完整拆解 6 项功能需求之间的关联（如延迟投递与优先级排序的交互、可见性超时与死信重试的状态协同），导致初始实现质量很差——首轮测试 30 个挂掉 7 个，问题覆盖了负优先级校验、跨队列去重、可见性超时恢复、死信转移等多个核心功能点，说明前期设计分析严重不足。
+2. 模型在运行测试阶段表现出大量试错行为：至少尝试了 8 种不同命令来运行 pytest（从直接 python -m pytest 到 $env:PYTHONPATH 再到指定完整路径到 poetry run），每次失败后不是系统性诊断 Python 3.13.7 环境损坏的根本原因，而是换一个命令重试，执行效率极低。类似情况在第二次和第三次运行测试时同样反复出现。
+3. 模型对 queue.py 进行了两次全量重写而非渐进式修复。第一次重写声称修复了 4 个问题（负优先级、存储结构、去重窗口、恢复可见重新入堆），但仍有 3 个测试失败（可见性超时恢复、死信转移、完整生命周期）。第二次重写才引入 _in_flight 集合彻底解决。相比先定位单一缺陷再小步修复，两次大改增加了出错风险和审查成本。
+4. 模型修改了 tests/conftest.py 中的源码路径（Path(__file__).parent / "src" 改为 parent.parent / "src"），这个文件是项目级别的共享配置，不在 queue 包范围内，属于越界操作。虽然改动本身是正确的，但标注只关注 queue 包，这种越界行为值得指出。
+5. 模型删除了 Message.__post_init__ 中的负优先级校验，不是因为设计上应该允许负优先级，而是为了通过 test_mixed_priority_and_default 中 priority=-1 的测试用例。同时模型还在测试文件中新增了 test_message_negative_priority_allowed 来验证负优先级。整个决策链是先写了带 priority=-1 的测试，再改生产代码去适配测试——属于生产代码向测试妥协。
+6. 模型在首次编写测试文件时引入了 from .conftest import make_message 这个未使用的导入，随后又自查发现并删除。conftest.py 中也定义了未被使用的 make_message fixture 后又自行清理。说明在写代码时缺乏即时检查，产物不够干净，需要事后扫尾。

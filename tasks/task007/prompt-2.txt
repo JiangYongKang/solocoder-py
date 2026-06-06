@@ -1,0 +1,6 @@
+分布式锁模块有几处实现不够严谨，主要是在副作用处理和防御性编程上：
+1. get_lock_info() 被定位为查询方法，但内部对过期锁执行了状态变更，将过期锁在查询时悄悄改成 EXPIRED。查询不应有副作用，此前 is_held() 和 is_held_by() 的同类问题已经修复，但 get_lock_info() 被漏掉了。
+2. release() 和 renew() 在处理过期锁时，先调用 force_release() 清空锁状态，再抛出异常。异常路径下存在状态突变，调用方捕获异常时锁已被静默清理。"错误即副作用"的设计在调用链变复杂时容易导致难以追踪的状态不一致。
+3. LockEntry 的 reenter() 和 renew() 方法中仍然使用 lease_duration or self.lease_duration 的短路写法。manager.py 中已经修复了 timedelta(seconds=0) 为 falsy 的 bug（改用 is not None 判断），但 LockEntry 层的这两个方法漏了同样的修复。
+4. LockEntry.release_one() 先减一再判断，防御性不足——如果 reentrant_count 为 0 时被调用会短暂进入 -1。
+5. 修复后重新运行测试，需要让所有测试通过。如有必要，补充新的测试用例覆盖上述修复场景。

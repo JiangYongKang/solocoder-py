@@ -1,0 +1,6 @@
+公平资源池调度器的调度逻辑在队头阻塞和测试覆盖上有几个问题，需要改一下：
+1. _schedule_from_queue() 中存在队头阻塞问题：当队列头部任务因槽位不足无法分配时直接 break 退出，不会继续尝试队列中后续槽位需求更小的任务。例如总槽位 4，A（需 3 槽位）被分配后剩余 1 个，B（需 3 槽位）被跳过后 break，导致 C（需 1 槽位）明明有可用槽位却被一起忽略。修复后应跳过不满足条件的任务继续尝试后续任务，直到队列为空或槽位完全耗尽。
+2. submit() 重置了 effective_priority 和 is_starvation_protected，但没有重置 last_promoted_at。如果一个任务对象被 release 后重新 submit，残留的 last_promoted_at 会让 _apply_aging 的参考时间点偏离实际等待起始时间，导致老化判断不准。补充对 last_promoted_at 的重置。
+3. _apply_aging() 对已经到达最高优先级的任务每次 tick 仍执行无效赋值，属于无意义的重复运算。
+4. 测试 test_starvation_triggers_after_max_wait 通过将 aging_interval 设置为 10 分钟来绕过老化干扰，只验证了"没有老化时饥饿防护能触发"，但没有覆盖"老化与饥饿防护共存时，老化不应覆盖饥饿防护结果"的交互场景。补充覆盖老化与饥饿防护共存时的测试用例。
+5. 修复后重新运行测试，需要让所有测试通过。

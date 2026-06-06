@@ -1,0 +1,8 @@
+产物不满意：
+1. release() 方法部分释放路径（第210-224行）中 item.released_quantity += take 仍然写在 SKU 释放分支外面。如果仓库或 SKU 不存在，SKU 侧的保留库存不会被递减，但 ReservationItem 的 released_quantity 却被增加了，造成 ReservationItem 数据与实际 SKU 库存不一致。提示词第2条明确指出 _release_reservation_internal 存在同样的问题，模型在 _release_reservation_internal 和 confirm() 中修复了，但漏掉了 release() 部分释放路径的相同写法。
+
+过程不满意：
+1. 模型一上来就直接创建 TodoList（第9行），没有先阅读相关代码、分析问题全貌再做规划。合理的顺序应该是先读完 engine.py、models.py、tests、README，完整理解现有代码和缺陷，再制定修复计划。
+2. release() 的返回值修复经历了两轮试错：第一轮编辑 engine.py 时没有意识到 _cleanup_expired 调用顺序会影响 remaining_quantity 的读取，直接写成了 cleanup 在前、读值在后，运行测试发现有 3 个失败后才回头重读 engine.py 分析问题，再做第二轮编辑修正。同一类错误出现两轮以上才修正，是典型的试错式调试。
+3. 对 engine.py 的编辑过于碎片化，至少执行了 5 次 edit_file_search_replace，分别在处理问题1、问题2、问题3、confirm 的 released_quantity 遗漏、release() 的第二轮修正。模型应该在一次性完整阅读后，理清所有需要改动的代码点，合并为更少的编辑操作。
+4. confirm() 中 item.released_quantity 的赋值位置修正（第352行）不是按计划执行的，而是在写完测试后才注意到的遗漏。这说明模型在修改 confirm 时没有一并检查 released_quantity 的赋值位置是否符合修复目标，事后补丁暴露了编辑过程缺乏全局一致性检查。

@@ -1,0 +1,15 @@
+产物不满意：
+1. README.md 文档内容被截断不完整，第65行"正式扣减（总库存与预占库存同时"之后没有下文，连跨仓拆分策略的文字说明和状态机图中 CONFIRMED 的分支走向都没写完，对应提示词第8项要求"说明模块功能、核心类的职责、预占生命周期与跨仓拆分策略"只完成了一半。
+2. 库存释放的过期处理有 bug：如果预占记录先被部分释放（比如预占30件、释放10件）再 TTL 过期，后续调用 release() 会走"已过期"分支并返回 reservation.total_quantity() 也就是 30，但实际引擎只在惰性回收时释放了剩余的 20 件。测试只写了全额预占+过期场景（test_release_already_expired_reservation），30=30 碰巧蒙对了所以没暴露，对应提示词第3项"部分释放"和第5项 TTL 过期回收的交叉边界没覆盖。
+3. ReservationExpiredError 异常类在 models.py 里定义并且写进了 __init__.py 的导出列表，但整个 engine.py 中 confirm 遇到过期预占抛的是通用的 InventoryError，release 遇到过期状态直接走内部释放逻辑不抛异常，这个异常类从头到尾没有 raise 过，属于定义了却没用的死代码。
+4. reserve() 的原子性回滚在 except 块里做逆操作时调用 sku.release(qty)，但 sku.release() 自己会校验 quantity > reserved。如果预占过程中因为某些内部不一致导致 reserved 数值异常，回滚操作可能先抛 InvalidQuantityError 盖掉原本的业务异常，影响问题定位，对应提示词第2项原子性回滚的健壮性不足。
+5. _release_reservation_internal 方法里 item.released_quantity = item.quantity 这行写在 for 循环内但在 if remaining > 0 分支外面，也就是说即使 sku 释放路径被跳过（比如仓库不存在、sku 不存在、reserved 不够），released_quantity 仍会被强制设为预占总量，造成 ReservationItem 数据与实际 SKU 库存状态不一致，对应提示词第3项释放逻辑和第6项数据一致性要求。
+6. SkuStock 的 remove_stock 方法定义了合法性质检逻辑，但 engine 的 confirm 方法在扣减总库存时直接写 sku.total -= remaining 和 sku.reserved -= remaining，完全绕过了 remove_stock 的可用库存校验，如果 confirm 时库存数据出现异常不会被拦截。
+7. 测试用例缺少多个提示词第7项要求的异常分支：没有测 confirm 不存在的预占记录、没有测 confirm 已释放或已确认状态的预占记录、没有测 release 已确认状态的预占记录、没有测 confirm 部分释放后仅扣减剩余量的场景、没有测优选仓库指定后库存不足时引擎的行为（只测了优选仓库库存充足的情况）、没有测 TTL 过期交叉部分释放的边界。
+8. 跨仓拆分的优选仓库参数（preferred_warehouse_ids）一旦指定，引擎只在指定的仓库里分配库存，万一优选仓库总量不够就直接抛 InsufficientStockError，不会回退到其他仓库。这个问题提示词第4项说"引擎可以自动将预占请求拆分到多个仓库"但没有明确说优选仓库失败后要不要兜底，不管算不算设计缺陷，这个行为没有人测试到，对应提示词第7项边界条件覆盖不完整。
+过程不满意：
+1. 模型从始至终没成功运行过一次测试。COT 显示它依次尝试了 python -m pytest、poetry run pytest、where python、Get-Command、pyenv python3.13.bat 五种执行方式全部失败，最后靠 IDE GetDiagnostics 看到无语法错误就下结论"IDE 诊断已确认无语法错误"并宣布所有功能实现完成。提示词第7项明确要求编写单元测试，模型没跑测试就说完成了，是典型的虚假完成。
+2. 模型在处理 Python 运行环境问题时的行为是连续试错：第一种方式失败直接换第二种，第二种失败换第三种，五轮下来没有一次停下来看具体的报错信息是什么。比如 poetry 报错"Python version 3.11.9 is not supported by the project (>=3.13)"，这个信息已经说明问题所在了，但模型没有根据这个线索去找合适的 Python 版本，而是继续换方式试，属于典型的试错式调试。
+3. 模型写完 engine.py 后才发现漏了 dataclass 导入（COT 第129行"我注意到 engine.py 中缺少了 dataclass 的导入"），说明写完代码没有立刻做导入和语法自检，需要后续回头补才意识到。
+4. 模型的 TodoList 中缺少"验证测试通过"和"检查所有提示词场景覆盖"的收尾步骤，所有 Todo 项打勾后就直接收工了，任务规划里没有纳入质量验证闭环。
+5. 模型在 COT 第82-88行先浏览了 order 模块和 queue 模块的代码风格，这是合理的调研，但创建目录用的是 New-Item 原生命令而不是项目已有的目录创建方式，存在工具选择随意的问题。虽然不影响结果，但缺乏对项目一致性的关注。

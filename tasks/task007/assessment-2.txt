@@ -1,0 +1,8 @@
+产物不满意：
+1. release() 和 renew() 在过期锁异常路径上将 force_release() 替换为 mark_expired()，意图保留元数据避免静默清理。但由于 get_lock_info() 本身已基于 is_expired 属性计算 effective_state，即使不调用 mark_expired()，get_lock_info 返回的副本 state 也已经是 EXPIRED。这个 mark_expired() 调用在当前 API 层面没有可观测的效果，却在异常路径中额外留下了一次状态变更。
+2. README.md 状态转移表第 74 行仍描述 "EXPIRED | release() / renew() | FREE | 触发 LockExpiredError 并清理"，修复后实际行为是 mark_expired() 将状态保留为 EXPIRED 并不清理元数据，force_release 清理只发生在 acquire() 路径中。文档未同步更新，与代码行为不一致。
+
+过程不满意：
+1. 模型收到提示词后第一件事是创建 TodoList（6 项），没有先分析四个问题的根因和改动范围，与第一轮被标注的问题一致——没搞清楚就开始规划。
+2. 模型在第 144 行和第 160 行连续两次读取同一个文件 test_lock_manager.py，属于冗余操作。
+3. 模型运行测试时连续执行了两次 pytest 命令，第二次仅在末尾加了 2>&1 重定向后缀，存在试错的嫌疑——第一次可能输出不完整，模型尝试加重定向再跑一次，而不是检查命令输出本身是否就已经包含全部测试结果。

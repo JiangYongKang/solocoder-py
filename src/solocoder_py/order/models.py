@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import List, Optional
 
 from .states import OrderState, OrderStateMachine, InvalidStateTransitionError
-from .promotions import Promotion
+from .promotions import Promotion, PromotionEngine
 
 
 class ShipmentQuantityError(Exception):
@@ -75,6 +75,7 @@ class Order:
     _state_machine: OrderStateMachine = field(
         default_factory=lambda: OrderStateMachine(OrderState.PENDING_PAYMENT)
     )
+    _final_amount: Optional[Decimal] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if not self.line_items:
@@ -85,8 +86,14 @@ class Order:
         return self._state_machine.state
 
     @property
-    def total_amount(self) -> Decimal:
+    def original_total_amount(self) -> Decimal:
         return sum(item.subtotal for item in self.line_items)
+
+    @property
+    def total_amount(self) -> Decimal:
+        if self._final_amount is not None:
+            return self._final_amount
+        return self.original_total_amount
 
     @property
     def is_fully_fulfilled(self) -> bool:
@@ -152,14 +159,14 @@ class Order:
         self._state_machine.transition_to(OrderState.AFTER_SALE)
 
     def apply_promotions(self, promotions: List[Promotion]) -> Decimal:
-        from .promotions import PromotionEngine
-
         engine = PromotionEngine()
         self.promotions = promotions
-        return engine.calculate_final_price(self.total_amount, promotions)
+        final_price = engine.calculate_final_price(self.original_total_amount, promotions)
+        self._final_amount = final_price
+        return final_price
 
     def _find_line_item(self, line_item_id: str) -> OrderLineItem:
         for item in self.line_items:
             if item.id == line_item_id:
                 return item
-        raise ValueError(f"Line item not found: {line_item_id}")
+        raise ShipmentQuantityError(f"Line item not found: {line_item_id}")

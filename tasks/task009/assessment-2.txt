@@ -1,0 +1,13 @@
+产物不满意：
+1. 提示词第1条描述了"引擎在实例执行失败后、开始补偿前崩溃"的恢复场景，即某个步骤已经执行失败并调用了 instance.fail()，但引擎在 _handle_compensation 之前崩溃，实例以 FAILED 状态留在仓库中。模型虽然把 FAILED 加入了 resume_unfinished 的恢复范围，但 _execute_steps 的逻辑是跳过所有 execution_status 不为 PENDING 的步骤——意味着已标记 FAILED 的步骤会被直接跳过，而下游 PENDING 步骤又因为前置步骤不是 COMPLETED 而无法执行。循环退出后 all_completed 为 False，execute 直接返回，实例仍停留在 FAILED 状态，补偿从未启动。新增的 test_resume_recovers_failed_instance 测试之所以通过，是因为它创建了一个"所有步骤尚未运行过"的 FAILED 实例（各步骤的 step_state 都是隐式 PENDING），步骤-0 正常执行成功、步骤-1 执行失败后触发 except 分支里的 _handle_compensation——这根本就不是提示词描述的"步骤已经失败、补偿未及启动"的崩溃场景。模型没有在 execute 或 _execute_steps 中增加"实例为 FAILED 且存在执行失败的步骤时应直接进入补偿"的判断逻辑。
+2. 模型在 states.py 第59-61行为 FAILED 增加了到自身的状态迁移，目的是避免 resume 中 _execute_steps 重新失败时 instance.fail() 因为 FAILED→FAILED 不合法而抛 WorkflowExecutionError。但 WorkflowInstance.fail() 方法（models.py 第252-259行）会无条件覆盖 error_message、error_type、error_traceback 和 completed_at 四个字段，当 resume 恢复一个已有失败记录的实例、重执行再次失败时，第一次崩溃前的原始异常信息会被第二次失败的信息覆盖掉，调度方无法知道初始故障原因。
+3. test_resume_recovers_failed_instance 的最终状态断言使用了 in {COMPENSATED, COMPENSATION_FAILED}，但该测试用例的线性工作流 fail_at=1，只有步骤-1 会失败，步骤-0 补偿正常完成，恢复后最终状态应精确断言为 COMPENSATED。用集合一并接受 COMPENSATION_FAILED 这种不该出现的结果，等于把失败的可能性也划进了"正确"范围。
+4. 提示词第2条要求修复 _handle_compensation 中补偿状态初始化条件写反的问题（非 NONE 时重置为 PENDING 应该是在 NONE 时初始化）。模型没有修正这个条件判断的正反，而是因为 StepCompensationStatus.PENDING 在第4条中被删除了，就直接把整段条件逻辑删除。最终行为虽然是正确的（补偿流程从 mark_compensation_running 直接开始），但删除条件和修正条件在语义上是两码事，无法证明模型理解了原来的逻辑错误。
+5. 异常信息扩展（第3条）和未使用枚举清理（第4条）完成得中规中矩，但 step 层面新增的 error_type / error_traceback 和 instance 层面的 error_type / error_traceback 命名和存储逻辑完全重复，没有抽象出一个可复用的错误记录数据结构，代码存在明显的重复。
+
+过程不满意：
+1. 模型收到任务后立即创建 TodoList，没有先读取代码文件、理解当前代码结构、逐条确认问题是否存在。prompt-2 列出的6个修复项都是有具体指向的，但在没看代码前就排计划属于对问题理解不充分就规划。
+2. 第一轮修改后运行测试失败，失败原因是 FAILED→FAILED 状态迁移不合法。模型直接在状态机加了自环，没有停下来分析 _execute_steps 是否真的应该在 FAILED 实例恢复时走正常执行路径——这里的根因是 execute 没有区分"首次执行"和"崩溃恢复"两条路径，正确的修复应该是让 execute 在检测到实例为 FAILED 且存在失败步骤时直接跳到 _handle_compensation。模型选择了最"省事"的方式——加一个自环迁就现有流程，属于典型的试错式修复思维。
+3. 模型的修复总结声称第1条和第2条已修复完成，但实际上第1条的修复只覆盖了"所有步骤尚未执行"的特殊子场景，提示词描述的"执行中途崩溃"核心场景仍然是坏的。这种对修复完成度的自我评估过高，属于幻觉式总结。
+4. 模型在整个思考过程中对每个修改点的描述都是"现在修改 xxx"和"修复完成"，没有展示对问题根因的分析过程，也没有在不同修复方案之间做权衡（比如 FAILED 恢复的两种实现路径）。思考过程更像是执行层面的流水账，而不是推理层面的分析。
+5. 模型第一次运行测试时没有使用 poetry run，而是手动拼了环境变量和 python 路径来执行（$env:PYTHONPATH = "..." ; & "..." -m pytest），不符合项目约定的 poetry run python -m pytest 方式，说明没有在开始测试前查看 pyproject.toml 或现有项目结构。

@@ -1,0 +1,9 @@
+产物不满意：
+1. refresh_token_pair 中过期检查排在重用检测前面（service.py 第97-105行），导致已使用过的 refresh token 过期后再次提交时只报 TokenExpiredError，不会触发全族吊销。代码流程是：先判断 is_expired（第97行），如果过期就直接抛异常并返回，永远不会走到下面第101行的 status != ACTIVE 重用检测。攻击者可以等 refresh token 被正常刷新标记为 USED 后再等它过期，然后用这个旧 token 探测定向是否安全，因为不会触发吊销。
+2. validate_access_token 只检查了 REVOKED 和 expired 两种状态（service.py 第142-147行），没有对 USED 状态做防御。虽然当前代码路径下 access token 不会进入 USED 状态，但如果将来有代码变更导致 access token 被标记为 USED，它仍能通过验证，防御面不够完整。
+3. TokenService 构造函数对 TTL 参数没有任何下限校验，用户可以传入 timedelta(seconds=0) 或 timedelta(seconds=-1)，导致签发即过期甚至已过期的 token，缺少基本参数防御。
+4. 测试 test_refresh_expired_refresh_token_raises 只断言了抛出 TokenExpiredError，没有验证 refresh token 的状态是否真的被更新成了 EXPIRED。代码中 service.py 第98行做了 old_refresh.status = TokenStatus.EXPIRED 这个状态更新，但测试没有覆盖这个副作用，对代码正确性的验证不完整。
+过程不满意：
+1. 测试执行阶段出现严重的试错式调试：模型在尝试运行测试时连续切换了至少九种不同命令（python -m pytest、poetry run pytest、where python、py -3.13 --version、GetDiagnostics、Get-Command python、直接调 poetry.exe 路径、Get-Command poetry 找路径、删除 .venv 重装、pyenv 找版本、Python 3.13.7、最后用 Python 3.11.9 加手动 PYTHONPATH），每次失败后都没有停下来分析上一轮的错误信息，而是直接换方案重试，直到碰对为止。同一目标九次试错是典型的试错式调试问题。
+2. 模型在测试阶段执行了 Remove-Item -Recurse -Force .venv 来删除整个虚拟环境目录，这种破坏性操作缺乏边界意识，没有先确认删除的影响范围。
+3. 首次交付时 __init__.py 遗漏了 TokenNotFoundError 的导出，导致测试直接报 import 错误，说明模型写完代码后没有做自检就声称完成。修复后才跑通所有测试。
