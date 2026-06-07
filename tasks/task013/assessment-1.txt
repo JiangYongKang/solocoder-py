@@ -1,0 +1,7 @@
+产物不满意：
+1. acquire() 上下文管理器在 except 分支用了 BaseException 而不是 Exception，这会把 SystemExit 和 KeyboardInterrupt 也当作调用失败来计算熔断统计，导致用户主动中断也会被计入失败率。
+2. _record_call 在 HALF_OPEN 状态下不向 _call_records 追加记录（第 136 行直接 return），虽然半开探测逻辑本身是正确的，但在半开期间调用 get_window_stats() 拿到的统计数据实际上反映的是进入 OPEN 前的旧数据，而非当前半开阶段的状况，统计查询的时效性不够。
+3. _get_open_reason 和 _should_open 各自独立调用了 _compute_stats，连续两次遍历 call_records，可以在 _should_open 中返回 stats 复用来避免重复计算。
+过程不满意：
+1. 首次运行测试时 CircuitBreakerConfig 参数顺序报错（dataclass 中带默认值的字段排在无默认值字段前面），这是 Python dataclass 的基本约束，写代码时没注意。
+2. 实现过程中直接借用了 ratelimiter 模块的 Clock/ManualClock，但没有在 __init__.py 中 re-export，测试里用到了 ManualClock 是从 ratelimiter 直接导入的，跨包依赖不够干净。

@@ -1,0 +1,6 @@
+产物不满意：
+1. resume_unfinished 方法在遍历未完成实例时用 except SagaExecutionError: continue 静默吞掉了异常，如果某个实例恢复过程中抛异常会被跳过且没有任何日志记录，调用方完全不知道恢复结果是否完整。
+2. SagaRepository 没有任何线程安全保护，_definitions 和 _instances 两个字典在并发场景下会产生数据竞争，但 SagaOrchestrator 本身也没有使用锁，整体模块缺少并发安全保证。
+过程不满意：
+1. 模型收到任务后直接就创建了 TodoList（9项），没有先查看现有代码风格和项目结构再做规划，是先规划再看代码的顺序反了。
+2. 首次运行测试有 3 个失败，回头改了三轮才通过，属于典型的先写后修模式。第一轮就出现状态机流转不允许 RUNNING→COMPENSATING 的问题，说明在写 orchestrator 时没有充分对照 states.py 里的状态转移表。

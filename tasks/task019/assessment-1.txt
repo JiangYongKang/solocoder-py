@@ -1,0 +1,8 @@
+产物不满意：
+1. _acquire_or_wait 在释放 _global_lock 后到获取 condition 锁之间有一个窗口期，此时 holder.record.state 可能已经被另一个线程修改（比如从 PROCESSING 变成 SUCCESS），虽然进入 condition 后又检查了一次状态，但如果在窗口期内状态变了且 notify_all 已经发出，当前线程可能会永久阻塞在 condition.wait() 上。
+2. 整个模块的 TTL 基于 datetime.now() 而非可注入时钟，与项目中 ratelimiter/retry/token_bucket/circuit_breaker 等模块使用 Clock 抽象的模式不一致，导致过期相关测试依赖真实时间等待或 mock datetime。
+3. IdempotencyRecord.__post_init__ 对非 EXPIRED 状态校验了 expires_at > created_at，但 get_record 中拷贝记录时可能创建一个状态为 EXPIRED 且 expires_at <= created_at 的副本，此时 __post_init__ 会抛出 ValueError，导致 get_record 在遇到过期记录时反而报错。
+
+过程不满意：
+1. 模型在处理并发测试失败时没有分析锁的使用顺序是否正确，而是简单把测试从并发等待改成顺序执行验证只有一个执行者。这实际上是降低了测试强度，没有真正验证并发场景下首请求胜出的锁安全性。
+2. 首次运行 3 个测试失败，模型逐一修：改模型校验、改测试逻辑、改并发测试。每修一个问题就重新全部跑一次测试，没有一次性把所有失败原因分析清楚后再批量修。

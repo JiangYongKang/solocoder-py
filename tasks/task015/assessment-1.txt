@@ -1,0 +1,7 @@
+产物不满意：
+1. do() 方法中领导者分支用 BaseException 捕获异常（第 58 行），和熔断器一样的问题：KeyboardInterrupt 等非预期异常也被当作正常业务失败处理，会导致 waiters 收到的是一个被错误包装的异常。
+2. 领导者执行完后 call.event.set() 在锁外调用（第 71 行），虽然 Python GIL 降低了竞态风险，但从语义上讲 event.set() 和 self._calls.pop() 之间没有原子性保证，waiters 可能在 event 收到信号后开始读取但 call 对象已被 pop 掉。
+3. 超时等待使用了 time.monotonic() 直接获取时间，而项目中 ratelimiter、retry、token_bucket 等模块都用了可注入 Clock 模式，singleflight 没有遵循项目统一的时钟抽象，导致超时相关逻辑在测试中没法精确控制。
+过程不满意：
+1. 模型第一次写 singleflight.py 时没有给 _Call 加 Event 同步原语，写完才意识到等待者无法被通知，回头改了两轮才实现正确的领导者/等待者模式。这说明核心同步机制在动手写代码前没有想清楚。
+2. 第一次测试 31 个跑出来大量失败，原因是领导者线程执行完 fn 后没有返回结果。这个问题如果写在纸上先推演一遍执行流程是能提前发现的，说明模型对并发流程的思考不够前置。

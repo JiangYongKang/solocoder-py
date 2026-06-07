@@ -1,0 +1,7 @@
+产物不满意：
+1. _leak 方法用 int(elapsed * leak_rate) 来计算可漏出数量，当 leak_rate 比较小（如 0.1）且 elapsed 也比较小（如 5 秒）时，int(0.5) = 0，这段时间内的漏出被完全忽略。这个向下取整导致低频漏出场景下实际漏出速率低于配置值，延迟会累积。
+2. _handle_overflow 的 DROP_OLDEST 分支中调用了 _estimate_position_and_time(1)，此时队列已经 pop 掉了一个元素再 append 新元素，但 _estimate_position_and_time 计算 queue_position = len(queue) + 1，返回的排队位置和等待时间是基于 pop 之后的队列长度计算的，如果 pop 前队列刚好满，返回的位置会比实际多一个身位。
+3. 整个 LeakyBucket 没有线程安全保护，_leak、enqueue、get_state 等多处修改 _queue 和 _last_leak_time 的操作都没有加锁，多线程并发入桶会导致队列状态不一致。
+过程不满意：
+1. 首次运行测试时有 1 个失败：test_get_state 中 advance(0.5) 秒后 leak_rate=1.0 导致 int(0.5)=0 没有漏出。模型快速修了测试让 advance(1.0)，但实际上这个行为暴露了 _leak 向下取整的根本问题，模型没有进一步思考是否应该改进漏出的精度。
+2. 修复测试后又出现相同的错误，连修了两次才通过，说明没有在第一次修改后重新检查代码逻辑。

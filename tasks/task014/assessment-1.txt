@@ -1,0 +1,7 @@
+产物不满意：
+1. RetryEngine.execute 每次调用都会 reset() 清空之前的尝试记录，如果调用方想多次调用 execute 来逐步推进重试（比如跨进程恢复），之前的轨迹就丢了，execute 应该是幂等追加而非全量重置。
+2. RetryStrategy.calculate_delay 在 attempt_number <= 1 时直接返回 0.0，注释写了 attempt_number 是下一次尝试的序号，但 should_attempt 用的是 <= max_attempts。综合来看，第一次调用（attempt=1）的延迟是 0，第二次开始才有退避延迟，这种约定没有在文档中说明，调用方容易混淆。
+3. ErrorCodePolicy._get_code 把异常上的 code 属性用 str() 转换后和 Set[str] 比较，如果异常上的 code 是整数类型会有正常匹配，但如果 code 是 None 则返回 None 且视为可重试，这个兜底策略对于没有 code 属性的异常可能过于宽松。
+过程不满意：
+1. 模型一上来就同时写了 exceptions.py、clock.py、models.py 等多个文件，没有先验证 models.py 的核心逻辑（退避计算公式）是否正确，导致首次测试就有 9 个失败，后续才修复延迟计算和测试继承问题。
+2. 在修复错误时，模型每次只读一个文件的局部代码然后改，但退避计算问题同时涉及 models.py 的公式和 test_models.py 的期望值，应该对照着读再一起改。

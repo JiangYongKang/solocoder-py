@@ -1,0 +1,7 @@
+产物不满意：
+1. query_events 方法在遍历 self._events 所有 key 时内层用 try/except AggregateNotFoundError 兜底，但从 self._events.keys() 拿到的 aggregate_id 一定存在于 self._events 中，这个异常永远不会发生，属于无意义的防御性代码。
+2. save_aggregate 内部先 append_events（含版本冲突校验），再 create_snapshot，中间如果 create_snapshot 失败，事件已经持久化了但快照没有创建，此时 pendings 还没 clear。虽然数据本身不丢，但调用方没有收到这种部分成功的反馈，只靠外部观察 should_create_snapshot 来判断。
+3. get_events 对 from_version 和 to_version 要求必须 > 0，但 Snapshot.version 允许为 0，当快照版本为 0 且事件也从 version=1 开始时用 from_version=1 没问题，但从语义上讲约束应该允许 from_version 等于 0 用于完整重放场景。
+过程不满意：
+1. 模型在实现 EventStore 时使用了 @dataclass 但字段名用了 _snapshot_threshold 带下划线的命名，导致 dataclass 自动生成的 __init__ 参数名不一致，第一轮就报错。这种问题是写之前没有确认 dataclass 对私有字段的行为。
+2. should_create_snapshot 相关的测试修了三次才通过：先改成在保存前断言，又改成在保存后断言，最后才理解是基于存储中事件数判断。说明对快照阈值的计算逻辑理解有个逐步试错的过程。

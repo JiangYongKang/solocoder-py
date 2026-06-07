@@ -1,0 +1,6 @@
+产物不满意：
+1. TokenBucket 的 current_tokens 使用 float 类型但配置中的 capacity 是 int，补充和消耗过程中浮点运算可能产生微小误差，长时间运行后 available_tokens 与实际应有余量会有累积偏差。特别是 try_acquire 和 can_acquire 都依赖浮点比较 >= tokens（其中 tokens 是 int），边界情况可能出现 2.9999999 >= 3 返回 False 的精度问题。
+2. MultiSubjectTokenBucketLimiter 的 _buckets_lock 和 TokenBucket 的 _lock 是两层独立的锁，复合操作（如 get_or_create + try_acquire）不是原子的。虽然在 CPython GIL 下不明显，但从并发安全角度看，_get_or_create_bucket 返回后到 try_acquire 之间 bucket 可能被外部并发修改。
+过程不满意：
+1. 模型写了 limiter.py 后又连续做了四次 edit_file_search_replace 清理未使用的变量，说明首次写代码时没有注意代码整洁性，写完后才逐个发现并删除冗余代码。
+2. 首次测试失败是因为并发测试用了 refill_rate=0.0 但配置校验拒绝了这个值，模型直接把校验从 > 0 改成 >= 0 来适配测试。虽然 refill_rate=0（永不补充）在语义上合理，但这个改法说明一开始的配置校验设计考虑不周全。

@@ -1,0 +1,9 @@
+产物不满意：
+1. claim_next_messages 内部用 try/except Exception: continue 吞掉了 mark_delivering 抛出的所有异常，如果有消息因为非法状态流转被拒绝，调用方看到的只是该消息没被领取，完全不知道原因，不利于排查投递问题。
+2. force_to_dead_letter 的 PENDING 路径做了 PENDING→DELIVERING→FAILED→DEAD_LETTER 的多步状态跳转，其中 DELIVERING→FAILED 这一步会执行 retry_count += 1（第 100 行），然后代码又手动设置 retry_count = max_retries（第 305 行），中间多了一次无效的自增操作，虽然最终结果正确但逻辑回路绕。
+3. OutboxMessageState 枚举值使用中文（"待投递"、"投递中"等），如果消息状态需要序列化到 JSON 或日志中，中文编码在某些工具链下可能导致显示或兼容性问题，不符合技术项目常规实践。
+4. write_with_message 中的原子回滚只在 try/except 里触发，但如果 create_business_record 成功后 create_message 也成功但外层调用者在拿到返回值后发生了未捕获异常，已写入的数据无法回滚。虽然 prompt 没有要求跨事务回滚，但"两者需要作为一个原子操作处理"的要求暗示了两者的生命周期应该绑定。
+
+过程不满意：
+1. 首次运行测试 4 个失败，模型没有先分析所有失败原因再动手，而是改一个跑一次测。其中 fail_message 的测试失败涉及状态机转换规则和 dead letter 自动触发逻辑，模型连续改了三轮才修好。
+2. 模型在写 repository.py 时一次写了约 200 行代码，到测试阶段才发现多处逻辑不匹配。如果先写核心方法（create、claim、confirm、fail）的小范围单元测试再扩展，可以减少这种大范围返工。
