@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
 from .clock import Clock, SystemClock
-from .models import KeyStats, WaitTimeoutError, _Call
+from .models import CallCancelledError, KeyStats, WaitTimeoutError, _Call
 
 
 @dataclass
@@ -70,9 +70,14 @@ class SingleFlight:
                         stats.failures += 1
                         self._calls.pop(key, None)
                         call.event.set()
-            except BaseException:
+            except BaseException as be:
                 with self._mu:
+                    call.done = True
+                    call.error = CallCancelledError(
+                        f"Call for key '{key}' cancelled: leader received {type(be).__name__}"
+                    )
                     self._calls.pop(key, None)
+                    call.event.set()
                 raise
             if leader_error is not None:
                 raise leader_error

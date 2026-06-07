@@ -13,6 +13,10 @@ class WaitTimeoutError(SingleFlightError):
     pass
 
 
+class CallCancelledError(SingleFlightError):
+    pass
+
+
 @dataclass
 class KeyStats:
     key: str

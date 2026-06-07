@@ -156,19 +156,21 @@ class EventStore:
                 return None
             return max(candidates, key=lambda s: s.version)
 
+    def _should_create_snapshot_at_count(
+        self, aggregate_id: str, event_count: int
+    ) -> bool:
+        if event_count == 0:
+            return False
+        latest_snapshot = self.get_latest_snapshot(aggregate_id)
+        if latest_snapshot is None:
+            return event_count >= self._snapshot_threshold
+        events_since_snapshot = event_count - latest_snapshot.version
+        return events_since_snapshot >= self._snapshot_threshold
+
     def should_create_snapshot(self, aggregate_id: str) -> bool:
         with self._lock:
             stream = self._events.get(aggregate_id, [])
-            event_count = len(stream)
-            if event_count == 0:
-                return False
-
-            latest_snapshot = self.get_latest_snapshot(aggregate_id)
-            if latest_snapshot is None:
-                return event_count >= self._snapshot_threshold
-
-            events_since_snapshot = event_count - latest_snapshot.version
-            return events_since_snapshot >= self._snapshot_threshold
+            return self._should_create_snapshot_at_count(aggregate_id, len(stream))
 
     def create_snapshot(
         self,
@@ -218,18 +220,21 @@ class EventStore:
         current_version = aggregate.version - len(pending)
 
         with self._lock:
-            self.append_events(
-                aggregate.id, pending, expected_version=current_version
-            )
+            stream = self._events.get(aggregate.id, [])
+            event_count_after = len(stream) + len(pending)
 
             snapshot_to_save: Optional[Snapshot] = None
-            if self.should_create_snapshot(aggregate.id):
+            if self._should_create_snapshot_at_count(aggregate.id, event_count_after):
                 snapshot_to_save = Snapshot(
                     aggregate_id=aggregate.id,
                     aggregate_type=aggregate.get_aggregate_type(),
                     state=aggregate.get_snapshot_state(),
                     version=aggregate.version,
                 )
+
+            self.append_events(
+                aggregate.id, pending, expected_version=current_version
+            )
 
             if snapshot_to_save is not None:
                 self.save_snapshot(snapshot_to_save)

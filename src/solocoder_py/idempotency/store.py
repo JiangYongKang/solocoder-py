@@ -156,7 +156,9 @@ class IdempotencyStore:
                     f"Timed out waiting for idempotency key '{key}' processing to complete"
                 )
             wait_for = min(remaining, self.wait_poll_interval_seconds)
-            ready_event.wait(timeout=wait_for)
+            if ready_event.is_set():
+                continue
+            self._clock.sleep(wait_for)
 
     def begin_request(
         self,

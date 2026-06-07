@@ -55,15 +55,18 @@ class LeakyBucket:
 
     @property
     def capacity(self) -> int:
-        return self._config.capacity
+        with self._lock:
+            return self._config.capacity
 
     @property
     def leak_rate(self) -> float:
-        return self._config.leak_rate
+        with self._lock:
+            return self._config.leak_rate
 
     @property
     def overflow_strategy(self) -> OverflowStrategy:
-        return self._overflow_strategy
+        with self._lock:
+            return self._overflow_strategy
 
     @property
     def dropped_records(self) -> List[DroppedRequestRecord]:
@@ -87,10 +90,14 @@ class LeakyBucket:
             return len(self._queue)
 
     def is_empty(self) -> bool:
-        return self.current_size() == 0
+        with self._lock:
+            self._leak()
+            return len(self._queue) == 0
 
     def is_full(self) -> bool:
-        return self.current_size() >= self._config.capacity
+        with self._lock:
+            self._leak()
+            return len(self._queue) >= self._config.capacity
 
     def get_state(self) -> LeakyBucketState:
         with self._lock:
@@ -161,9 +168,7 @@ class LeakyBucket:
                 )
             )
             self._queue.append(request)
-            queue_position = len(self._queue)
-            estimated_wait = queue_position / self._config.leak_rate
-            estimated_start = self._clock.now() + estimated_wait
+            queue_position, estimated_wait, estimated_start = self._estimate_position_and_time(0)
             request.scheduled_at = estimated_start
             return EnqueueResult(
                 accepted=True,

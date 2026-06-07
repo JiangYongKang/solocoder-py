@@ -1,0 +1,4 @@
+idempotency 模块的 README 和测试还有几个不干净的地方，在当前包内收尾。
+1. README 里多处写"零 time.sleep"、"测试全部改用 ManualClock.advance(seconds) 精确控制时间"——但实际上 test_store.py 里的 test_concurrent_first_request_wins 和 test_concurrent_second_reads_final_result 两个并发测试仍然用的真实 time.sleep() 控制线程时序，跟文档描述不一致。要么让测试真正去掉 time.sleep，要么 README 别写这么绝对。
+2. 上一轮执行测试时向项目根目录写了一个 test_result.txt 文件，delete 操作失败后也没重试或清理，文件残留在仓库里，删掉它。
+3. 跑 python -m pytest tests/idempotency/ -q，确保 71 个测试实际全部跑完并通过，不要拿"历史运行中明确 PASSED"当理由跳过验证。

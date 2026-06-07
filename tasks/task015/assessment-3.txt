@@ -1,0 +1,5 @@
+产物不满意：
+1. BaseException 分支现在在同一把锁内完成 call.done=True、call.error=CallCancelledError、_calls.pop 和 call.event.set()，等待者被唤醒后收到语义明确的 CallCancelledError，不再永久挂死。新增 CallCancelledError 异常类语义清晰，测试断言严格化且新增等待者唤醒验证，READMe 异常传播策略描述完整。本轮无明显产物缺陷。
+
+过程不满意：
+1. 模型在收到任务后立即创建了 TodoList（第 8-13 行），此时尚未读取任何代码文件（第 26 行才首次读取 singleflight.py）。不符合"先分析问题再规划"的要求。

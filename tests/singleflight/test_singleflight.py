@@ -6,6 +6,7 @@ import time
 import pytest
 
 from solocoder_py.singleflight import (
+    CallCancelledError,
     Clock,
     KeyStats,
     ManualClock,
@@ -371,10 +372,58 @@ class TestExceptionPropagation:
         with pytest.raises(FatalSignal):
             sf.do("fatal", lambda: (_ for _ in ()).throw(FatalSignal("system signal")))
 
-        stats = sf.get_stats("fatal")
-        assert stats is None or stats.executions == 0
-
+        assert sf.get_stats("fatal") is None
         assert sf.in_flight_count("fatal") == 0
+
+    def test_base_exception_waiters_are_woken_with_call_cancelled_error(self):
+        sf = make_sf()
+        leader_ready = threading.Event()
+        leader_errors: dict[str, BaseException] = {}
+        waiter_errors: dict[str, Exception] = {}
+        waiter_results: dict[str, object] = {}
+
+        class FatalSignal(BaseException):
+            pass
+
+        def leader_worker():
+            def fn():
+                leader_ready.set()
+                time.sleep(0.05)
+                raise FatalSignal("interrupt")
+            try:
+                sf.do("cancel-key", fn)
+            except BaseException as e:
+                leader_errors["leader"] = e
+
+        def waiter_worker(idx: int):
+            try:
+                waiter_results[idx] = sf.do("cancel-key", lambda: "should-not-run")
+            except Exception as e:
+                waiter_errors[idx] = e
+
+        leader = threading.Thread(target=leader_worker)
+        leader.start()
+        leader_ready.wait(timeout=2)
+
+        waiters = [threading.Thread(target=waiter_worker, args=(i,)) for i in range(3)]
+        for w in waiters:
+            w.start()
+        for w in waiters:
+            w.join(timeout=5)
+
+        leader.join(timeout=5)
+
+        assert isinstance(leader_errors.get("leader"), FatalSignal)
+        for i in range(3):
+            assert i not in waiter_results
+            assert i in waiter_errors
+            assert isinstance(waiter_errors[i], CallCancelledError)
+            assert issubclass(CallCancelledError, SingleFlightError)
+        assert sf.get_stats("cancel-key") is None
+        assert sf.in_flight_count("cancel-key") == 0
+
+    def test_call_cancelled_error_is_single_flight_error(self):
+        assert issubclass(CallCancelledError, SingleFlightError)
 
     def test_regular_exception_counts_as_failure(self):
         sf = make_sf()

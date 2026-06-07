@@ -107,9 +107,13 @@
 
 ## 并发安全保证
 
-- **`LeakyBucket`**：内部持有 `threading.RLock`，所有读写共享状态（`_queue`、`_last_leak_time`、`_leak_fraction`、`_dropped_records`、`_processed_count`）的公共方法和属性都在锁内执行，保证多线程并发 `enqueue`、`current_size`、`get_state`、`peek_next` 等操作不会破坏队列状态
-- **`SubjectLeakyBucketManager`**：内部持有 `threading.RLock`，主体注册/注销、按主体路由入桶等操作均在锁保护下，避免并发场景下字典结构被破坏
-- 两个类的锁均为可重入锁（`RLock`），避免同一线程内嵌套调用产生死锁
+- **`LeakyBucket`**：内部持有 `threading.RLock`，所有公共入口（属性和方法）均在锁保护下执行，共享状态（`_queue`、`_last_leak_time`、`_leak_fraction`、`_dropped_records`、`_processed_count`）不会被并发修改破坏。具体覆盖：
+  - **只读属性**：`capacity`、`leak_rate`、`overflow_strategy`、`dropped_count`、`dropped_records`、`processed_count`
+  - **查询方法**：`current_size()`、`is_empty()`、`is_full()`、`get_state()`、`peek_next()`、`get_all_pending()`
+  - **变更方法**：`enqueue()`、`clear()`、`reset()`
+  - `is_empty()` 与 `is_full()` 额外将"惰性漏出 + 读队列长度 + 比较判断"全部放在同一临界区内完成，避免 TOCTOU（Time-of-Check to Time-of-Use）竞态导致判断结果与实际状态不一致
+- **`SubjectLeakyBucketManager`**：内部持有 `threading.RLock`，主体注册/注销、字典查找、按主体路由入桶等操作均在锁保护下，避免并发场景下字典结构被破坏
+- 两个类的锁均为可重入锁（`RLock`），允许同一线程嵌套调用（如 `enqueue` 内部调用 `_leak` 或辅助方法）而不产生死锁
 
 ## 使用示例
 

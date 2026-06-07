@@ -1,0 +1,6 @@
+event_sourcing 包的 save_aggregate 原子性修复并没有真正解决问题，在现有代码上改掉。
+1. 上一轮加了一把锁把 append_events 和快照创建包在一起，但锁内仍然是先调 append_events 再构造 Snapshot。如果 Snapshot 构造过程的校验失败（比如 __post_init__ 里的 state 为 None 或 aggregate_type 为空），事件此时已经追加到存储里了，快照却没能写入——"追加成功但快照失败"的部分成功问题根本没被锁住。
+2. README 里对原子性的描述自己跟自己打架，一句说"快照构造失败时事件已写入"，另一句又说"构造失败前不会写入存储"，前后矛盾，而且后一句跟代码实际行为不符。
+3. 现有的测试只验证了 append_events 抛 VersionConflictError 时 pending_events 不清除，没有覆盖 append_events 成功但快照构造失败的路径。补上这个场景的测试。
+4. 跑 python -m pytest tests/event_sourcing/ -q，全部通过。
+5. README 改准确，把 save_aggregate 在原子性上的实际保证写清楚。

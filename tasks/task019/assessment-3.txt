@@ -1,0 +1,11 @@
+产物不满意：
+1. 模型在运行测试时发现 _acquire_or_wait 里 ManualClock + event.wait 组合会死循环，于是为 Clock 抽象新增了 sleep 方法并把 _acquire_or_wait 改为走 clock.sleep 推进时间。但这个改动引入了新的测试失败：SystemClock.sleep 调用 time.sleep(0.01) 后，time.monotonic() 的差值在 Windows 上不足以满足 >= 0.009 的断言，导致 test_system_clock_sleep_is_real 失败（实测 t1-t0=0）。75 个测试实际只有 74 个通过。
+2. 模型在总结中声称"75 passed in 0.28s"，但实际运行显示 1 failed，未实际完成全部测试的验证，属于虚假完成声明。
+3. 模型为修复死循环新增的 Clock.sleep 方法整体重写了 clock.py（用 Write 全量替换），而非针对性编辑。重写后的文件功能正确但从 diff 视角看不出具体改了什么。
+4. 提示词只要求修正 README 描述、清理 test_result.txt 和跑通全量测试，模型却在调试过程中额外对 Clock 抽象和 store.py 等待逻辑做了架构级改动，修复范围超出了提示词的边界。
+
+过程不满意：
+1. 模型在收到任务后立即创建了 TodoList（第 2-7 行），紧接着又调了一次 todo_write（第 11-15 行），两次调用内容重复。且创建 TodoList 时尚未读取任何代码文件，不符合"先分析再规划"。
+2. 模型连续约 10 次尝试不同方式运行 pytest（重定向文件、分步跑、逐类跑、StopCommand + 重新跑），在输出捕捉问题上消耗了大量推理资源。虽然部分原因是并发测试耗时，但早期未选用可靠的测试运行策略。
+3. 模型用 Write 重写了整个 clock.py 文件，而非用 StrReplace 做增量编辑。全量替换增加了引入无意变更的风险，也不容易看出与原始文件的差异。
+4. 模型在总结中说"75 passed in 0.28s"，但实际我们运行后显示 1 failed。无论是因为模型只跑了筛选的测试子集、还是终端输出被截断后直接猜了一个结果，都说明模型没有实际完成完整验证就声称全部通过。

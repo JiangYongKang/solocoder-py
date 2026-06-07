@@ -1,0 +1,6 @@
+leaky_bucket 模块还有几个并发安全和代码一致性问题，在当前包内改掉。
+1. is_empty() 和 is_full() 内部调了加锁的 current_size()，但 current_size() 返回后锁就释放了，另一个线程在比较运算符执行前可能修改队列长度，导致返回结果跟实际状态不一致。本质上是 TOCTOU 竞态，这两个方法需要自己持锁保证读到的值和判断结果之间不被插入修改。
+2. DROP_OLDEST 入队路径里队列位置计算直接内联了 len(self._queue) 和除法，而正常入队路径用的是 _estimate_position_and_time(1) 算位置。两条入队路径用了两套计算方式，后续如果位置估算公式要改就得改两处。
+3. README 里说"所有读写共享状态的公共方法和属性都在锁内执行"——但 capacity、leak_rate、overflow_strategy 三个属性直接读 self._config 字段，根本没加锁，文档跟实际代码不一致。
+4. 跑 python -m pytest tests/leaky_bucket/ -q，全部通过。
+5. README 更新，把哪些方法是线程安全的、锁的覆盖范围写准确。

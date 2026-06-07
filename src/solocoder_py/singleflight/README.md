@@ -28,6 +28,7 @@
 |------|------|
 | `SingleFlightError` | 单飞模块异常基类 |
 | `WaitTimeoutError` | 等待者超时异常，继承自 `SingleFlightError` |
+| `CallCancelledError` | 领导者因系统级异常（`BaseException`）中止时，向等待者抛出的取消异常，继承自 `SingleFlightError` |
 | `KeyStats` | 单个 key 的调用统计数据模型，包含真实执行次数、共享命中次数、失败次数 |
 | `_Call` | 内部进行中请求条目，记录 key、结果、异常、完成标志、等待者数量及同步 Event |
 
@@ -39,25 +40,37 @@
 
 ## 异常传播策略
 
-为避免将系统级信号误判为业务失败，本模块采用分层异常传播策略：
+为避免将系统级信号误判为业务失败，同时保证等待者不会永久挂死，本模块采用分层异常传播策略：
 
 ```
 fn() 抛出异常
     │
     ├─ 是 Exception 子类（业务异常）
-    │      ├─ 领导者：记录为 call.error，更新 failures 统计
+    │      ├─ 领导者：记录为 call.error，更新 failures 统计，原子 pop+set()
     │      └─ 等待者：收到同一个 Exception 对象
     │
     └─ 是 BaseException 但非 Exception（如 KeyboardInterrupt、SystemExit）
-           ├─ 领导者：不记录统计，仅清理 _calls 条目后原样 re-raise
-           └─ 等待者：不受影响（该异常不会通过 event 传播）
+           ├─ 领导者：
+           │      · 不创建/更新任何统计（不计入 executions/failures）
+           │      · 设置 call.done=True，call.error=CallCancelledError(...)
+           │      · 原子完成 pop + call.event.set()
+           │      └─ 最终原样 re-raise 原始 BaseException（供领导者调用方感知）
+           │
+           └─ 等待者：
+                  · 被 call.event.set() 唤醒（不会永久阻塞）
+                  · 读取 call.error，收到 CallCancelledError
+                  └─ 可通过 isinstance(e, SingleFlightError) 判断为框架级取消
 ```
 
 ### 设计理由
 
-- `KeyboardInterrupt`、`SystemExit`、`GeneratorExit` 等 `BaseException` 属于进程级控制信号，不属于业务计算的"失败"。
-- 若将此类信号包装后共享给等待者，会导致等待者错误地认为业务逻辑失败，进而触发不必要的重试或告警。
-- 领导者在接收到 `BaseException` 时会先从 `_calls` 中移除该 key，确保后续新请求不会被"死条目"阻塞。
+- `KeyboardInterrupt`、`SystemExit`、`GeneratorExit` 等 `BaseException` 属于进程级控制信号，不属于业务计算的"失败"，因此不计入任何业务统计。
+- 原始 `BaseException` 不会直接共享给等待者——否则等待者会误判为业务失败而触发不必要的重试。等待者收到的是明确语义的 `CallCancelledError`（继承自 `SingleFlightError`），表示"本次合并调用因领导者被系统信号中止而被取消"。
+- 领导者在 `BaseException` 分支与成功/业务失败分支一样，都会在同一把锁内完成 `_calls.pop()` + `call.event.set()`，保证：
+  1. 等待者一定能被唤醒，不会永久挂死
+  2. 后续新请求不会被"死条目"阻塞
+  3. 等待者被唤醒时所有状态均已写入，无竞态窗口
+- 领导者最终仍会原样 re-raise 原始 `BaseException`，保证进程级信号能被上层调用方正确感知（例如使得 `KeyboardInterrupt` 仍然可以终止程序）。
 
 ## 时钟注入
 
@@ -229,7 +242,12 @@ except WaitTimeoutError as e:
 ### 异常共享与 BaseException 穿透
 
 ```python
-from solocoder_py.singleflight import SingleFlight
+import threading
+from solocoder_py.singleflight import (
+    SingleFlight,
+    CallCancelledError,
+    SingleFlightError,
+)
 
 sf = SingleFlight()
 
@@ -259,17 +277,49 @@ except ServiceDown as e:
 result = sf.do("api", flaky_fn)
 print(result)  # success on attempt 3
 
-# --- 系统级信号（BaseException）会穿透 ---
+# --- 系统级信号（BaseException）：领导者穿透 + 等待者收到 CallCancelledError ---
 class FatalSignal(BaseException):
     pass
 
-try:
-    sf.do("fatal", lambda: (_ for _ in ()).throw(FatalSignal("system")))
-except FatalSignal:
-    print("Fatal signal propagated directly")  # ✓ 不会被包装或共享
+leader_ready = threading.Event()
+leader_exc: dict[str, BaseException] = {}
+waiter_exc: dict[str, Exception] = {}
 
-stats = sf.get_stats("fatal")
-assert stats is None or stats.executions == 0  # ✓ 不计入失败统计
+def leader_work():
+    def fn():
+        leader_ready.set()
+        import time
+        time.sleep(0.05)
+        raise FatalSignal("interrupt")
+    try:
+        sf.do("cancel-demo", fn)
+    except BaseException as e:
+        leader_exc["leader"] = e
+
+def waiter_work():
+    try:
+        sf.do("cancel-demo", lambda: "should-not-run")
+    except Exception as e:
+        waiter_exc["waiter"] = e
+
+leader = threading.Thread(target=leader_work)
+leader.start()
+leader_ready.wait()
+
+waiter = threading.Thread(target=waiter_work)
+waiter.start()
+leader.join()
+waiter.join()
+
+# 领导者原样收到 FatalSignal
+assert isinstance(leader_exc["leader"], FatalSignal)
+
+# 等待者不会挂死，收到 CallCancelledError（属于 SingleFlightError 体系）
+assert isinstance(waiter_exc["waiter"], CallCancelledError)
+assert isinstance(waiter_exc["waiter"], SingleFlightError)
+
+# BaseException 路径不产生任何统计记录
+assert sf.get_stats("cancel-demo") is None
 ```
 
 ### 注入 ManualClock 控制时间

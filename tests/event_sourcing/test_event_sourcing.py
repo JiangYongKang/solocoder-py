@@ -850,6 +850,37 @@ class TestSaveAggregate:
         assert len(counter_b.pending_events) == pending_before
         assert store.get_current_version("c-1") == 2
 
+    def test_save_aggregate_snapshot_construct_failure_no_partial_write(
+        self, store: EventStore, make_counter, monkeypatch
+    ):
+        counter = make_counter("c-1")
+        for _ in range(4):
+            counter.increment()
+        store.save_aggregate(counter)
+        assert store.get_current_version("c-1") == 5
+        assert store.get_latest_snapshot("c-1") is not None
+
+        counter = store.load_aggregate("c-1", CounterAggregate)
+        for _ in range(5):
+            counter.increment()
+
+        pending_before = list(counter.pending_events)
+        version_before = store.get_current_version("c-1")
+        snapshot_before = store.get_latest_snapshot("c-1")
+
+        def bad_state(self):
+            return None
+
+        monkeypatch.setattr(CounterAggregate, "get_snapshot_state", bad_state)
+
+        with pytest.raises(ValueError, match="state cannot be None"):
+            store.save_aggregate(counter)
+
+        assert store.get_current_version("c-1") == version_before
+        assert store.get_latest_snapshot("c-1").version == snapshot_before.version
+        assert len(counter.pending_events) == len(pending_before)
+        assert [e.version for e in counter.pending_events] == [e.version for e in pending_before]
+
 
 class TestEdgeCases:
     def test_empty_event_stream_load_raises(self, store: EventStore):

@@ -143,7 +143,7 @@
 
 ## 时钟注入与测试
 
-所有时间计算均通过可注入的 `Clock` 接口进行，测试中使用 `ManualClock` 精确控制时间流逝，无需 `sleep()` 等待真实时间：
+所有时间计算均通过可注入的 `Clock` 接口进行。TTL / 过期 / 等待超时等**与真实时间流逝相关的业务逻辑**的测试使用 `ManualClock.advance()` 精确控制时间，无需 `time.sleep()` 等待真实时间：
 
 ```python
 from solocoder_py.idempotency import IdempotencyStore, ManualClock
@@ -157,7 +157,7 @@ store = IdempotencyStore(
 store.begin_request("k", "fp")
 store.complete_success("k", "fp", {"data": 1})
 
-# 无需 sleep，直接推进时钟
+# 无需 time.sleep，直接推进时钟
 clock.advance(61.0)
 
 # 立即观测到过期效果

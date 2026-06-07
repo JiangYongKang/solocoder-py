@@ -1,0 +1,5 @@
+singleflight 的 do() 在 BaseException 路径上引入了一个严重的回归问题，在当前包内修复。
+1. 上一轮为 do() 加了 except BaseException 分支来拦截 KeyboardInterrupt 等系统异常，阻止它们被当成业务失败传播。但这个分支里只做了 _calls.pop 清理然后 re-raise，没有调 call.event.set() 唤醒等待者。等待者阻塞在 call.event.wait() 上，没有超时的等待者会永久挂死——原来虽然拿到了错误类型的异常，但至少还能被唤醒继续执行，现在直接被彻底卡住了。
+2. 对应的测试 test_base_exception_not_captured_as_failure 里断言用 or 连接了两个条件，语义太松——如果统计意外被创建了但 executions 为 0 也会通过，没有严格验证 BaseException 路径不产生任何统计记录。
+3. 跑 python -m pytest tests/singleflight/ -q，全部通过。
+4. README 更新，把 BaseException 路径下等待者的唤醒行为写清楚。

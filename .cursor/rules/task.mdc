@@ -42,7 +42,7 @@ alwaysApply: true
 3. TTL 设置的精度不一致：用户传入秒，但内部某些路径用毫秒比较，导致部分条目提前或延迟过期。需要统一为一个时间单位。
 4. 修复后需要为该模块补充并发读写场景的单元测试，验证多线程下的数据一致性和过期回收的正确性。测试代码放在 tests/cache/ 下。
 5. 更新 src/solocoder_py/cache/README.md，说明修复后的并发保证策略和 TTL 时间单位约定。
-6. 重新运行 python -m pytest tests/ -q，需要让所有测试通过。
+6. 重新运行 poetry run pytest tests/ -q，需要让所有测试通过。
 ```
 
 标注规范

@@ -1,5 +1,6 @@
 from .clock import Clock, SystemClock, ManualClock
 from .models import (
+    CallCancelledError,
     SingleFlightError,
     WaitTimeoutError,
     KeyStats,
@@ -10,6 +11,7 @@ __all__ = [
     "Clock",
     "SystemClock",
     "ManualClock",
+    "CallCancelledError",
     "SingleFlightError",
     "WaitTimeoutError",
     "KeyStats",

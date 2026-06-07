@@ -1,0 +1,3 @@
+idempotency 的测试还没跑通，在现有代码上修掉。
+1. test_models.py 里新增的 test_system_clock_sleep_is_real 测试，Windows 上 time.monotonic() 的精度大约 15ms，sleep(0.01) 后差值经常为 0，满足不了 >= 0.009 的断言。这个测试本身也在测试操作系统行为而非模块逻辑，要么放宽断言使得不同平台都能过，要么删掉它。
+2. 跑 poetry run pytest tests/idempotency/ -q，确保全部 75 个测试实际通过。

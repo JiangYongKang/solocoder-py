@@ -5,6 +5,7 @@ from solocoder_py.idempotency import (
     IdempotencyRecord,
     IdempotencyState,
     ManualClock,
+    SystemClock,
 )
 
 
@@ -42,6 +43,22 @@ class TestClock:
         clock = ManualClock()
         with pytest.raises(ValueError, match="Cannot advance by negative seconds"):
             clock.advance(-1.0)
+
+    def test_manual_clock_sleep_advances_time(self):
+        clock = ManualClock(start_time=10.0)
+        clock.sleep(3.5)
+        assert clock.now() == 13.5
+
+    def test_manual_clock_sleep_records_history(self):
+        clock = ManualClock(start_time=0.0)
+        clock.sleep(1.0)
+        clock.sleep(2.5)
+        assert clock.sleep_history == [1.0, 2.5]
+
+    def test_manual_clock_sleep_negative_rejected(self):
+        clock = ManualClock()
+        with pytest.raises(ValueError, match="Cannot sleep for negative seconds"):
+            clock.sleep(-1.0)
 
 
 class TestIdempotencyRecordCreation:

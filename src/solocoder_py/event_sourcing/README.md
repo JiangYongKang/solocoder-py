@@ -49,25 +49,32 @@
     ▼
 EventStore.save_aggregate(aggregate)
     │
-    │ 在单一线程锁保护下原子执行：
-    │   ① 计算 expected_version = aggregate.version - len(pending)
-    │   ② append_events(id, pending, expected_version)
+    │ 在单一线程锁保护下按顺序执行：
+    │   ① 计算 expected_version 与追加后的预期事件总数
+    │   ② 若达到快照阈值，先在内存中构造 Snapshot 对象
+    │      └── 构造时 `Snapshot.__post_init__` 校验 aggregate_type / state 等
+    │          若校验失败直接抛异常，此时尚未产生任何存储写入
+    │   ③ append_events(id, pending, expected_version)
     │      ├── 校验：存储当前版本 == expected_version → 否则 VersionConflictError
     │      ├── 校验：每个事件版本号连续且匹配 → 否则 EventVersionGapError
     │      ├── 校验：不覆盖已有事件 → 否则 EventOverwriteError
     │      └── 追加到事件流
-    │   ③ 若 should_create_snapshot()，在内存中构造快照对象并保存
+    │   ④ 若第 ② 步已就绪快照对象，将其写入快照存储
     │
-    │ ④ 仅在上述步骤全部成功后，清除聚合根的 pending_events
-    │    —— 任何异常均不会提前清除 pending_events，便于调用方重试
+    │ ⑤ 仅在 ②~④ 全部成功后，清除聚合根的 pending_events
+    │    —— 任何阶段抛异常都不会提前清除 pending_events，便于调用方重试
     ▼
 完成
 ```
 
 **save_aggregate 行为约定**：
-- 原子性：事件追加与快照创建在同一把锁内完成，要么都成功，要么都不产生可见副作用（快照构造本身失败时事件同样已写入，由 `Snapshot` 的 `__post_init__` 校验保证构造失败前不会写入存储）。
-- 幂等安全：无 `pending_events` 时直接返回，不做任何写入。
-- 异常语义：抛异常时 `aggregate.pending_events` 保持不变，调用方可选择重新加载聚合后再次提交。
+- **原子性保证**：在进入存储写入阶段（步骤 ③）之前，所有可能抛异常的构造操作（步骤 ②）均已完成。因此：
+  - 若 `Snapshot` 构造或校验失败，事件流不做任何修改，也不会写入不完整的快照；
+  - 若 `append_events` 校验失败（版本冲突、版本断裂等），快照同样不会被写入；
+  - 只有当事件追加与快照保存都成功后，才会从聚合根上清除 `pending_events`。
+  - 注意：`save_snapshot` 在内存结构中仅做列表追加，本身不会抛异常；因此真正可能失败并阻断写入的阶段只出现在 ② 和 ③。
+- **幂等安全**：无 `pending_events` 时直接返回，不做任何写入。
+- **异常语义**：抛异常时 `aggregate.pending_events` 保持不变，调用方可选择重新加载聚合后再次提交。
 
 ### 读取流程（从快照 + 增量事件恢复）
 
