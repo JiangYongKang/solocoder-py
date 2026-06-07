@@ -6,7 +6,7 @@ from .exceptions import (
     InvalidVirtualNodesError,
     InvalidWeightError,
 )
-from .models import NodeInfo, MigrationStats, RingSnapshot
+from .models import NodeInfo, VirtualNodeInfo, MigrationStats, RingSnapshot
 from .ring import ConsistentHashRing
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "InvalidVirtualNodesError",
     "InvalidWeightError",
     "NodeInfo",
+    "VirtualNodeInfo",
     "MigrationStats",
     "RingSnapshot",
     "ConsistentHashRing",

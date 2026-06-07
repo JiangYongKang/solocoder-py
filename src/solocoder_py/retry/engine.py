@@ -56,10 +56,19 @@ class RetryEngine:
     def reset(self) -> None:
         self._attempts.clear()
 
-    def execute(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        self.reset()
+    def _current_run_attempt_count(self) -> int:
+        count = 0
+        for record in reversed(self._attempts):
+            if record.result in (
+                AttemptResult.SUCCESS,
+                AttemptResult.NON_RETRYABLE_FAILURE,
+            ):
+                break
+            count += 1
+        return count
 
-        attempt_number = 1
+    def execute(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        attempt_number = self._current_run_attempt_count() + 1
 
         while True:
             if not self._strategy.should_attempt(attempt_number):

@@ -681,14 +681,30 @@ class TestEventQueryAndAudit:
     def test_get_events_invalid_from_version(self, store: EventStore, make_counter):
         counter = make_counter("agg-1")
         store.save_aggregate(counter)
-        with pytest.raises(ValueError, match="from_version must be positive"):
-            store.get_events("agg-1", from_version=0)
+        with pytest.raises(ValueError, match="from_version cannot be negative"):
+            store.get_events("agg-1", from_version=-1)
+
+    def test_get_events_from_version_zero_allowed(self, store: EventStore, make_counter):
+        counter = make_counter("agg-1")
+        counter.increment()
+        counter.increment()
+        store.save_aggregate(counter)
+        result = store.get_events("agg-1", from_version=0)
+        assert len(result) == 3
+        assert [e.version for e in result] == [1, 2, 3]
 
     def test_get_events_invalid_to_version(self, store: EventStore, make_counter):
         counter = make_counter("agg-1")
         store.save_aggregate(counter)
-        with pytest.raises(ValueError, match="to_version must be positive"):
-            store.get_events("agg-1", to_version=0)
+        with pytest.raises(ValueError, match="to_version cannot be negative"):
+            store.get_events("agg-1", to_version=-1)
+
+    def test_get_events_to_version_zero_returns_empty(self, store: EventStore, make_counter):
+        counter = make_counter("agg-1")
+        counter.increment()
+        store.save_aggregate(counter)
+        result = store.get_events("agg-1", to_version=0)
+        assert len(result) == 0
 
     def test_query_events_by_aggregate_id(self, store: EventStore, make_counter):
         counter = make_counter("counter-1")
@@ -819,6 +835,21 @@ class TestSaveAggregate:
         assert len(counter.pending_events) == 0
         assert store.get_current_version("c-1") == 2
 
+    def test_save_aggregate_version_conflict_preserves_pending(self, store: EventStore, make_counter):
+        counter_a = make_counter("c-1")
+        store.save_aggregate(counter_a)
+
+        counter_b = store.load_aggregate("c-1", CounterAggregate)
+        counter_a.increment(10)
+        store.save_aggregate(counter_a)
+
+        counter_b.increment(20)
+        pending_before = len(counter_b.pending_events)
+        with pytest.raises(VersionConflictError):
+            store.save_aggregate(counter_b)
+        assert len(counter_b.pending_events) == pending_before
+        assert store.get_current_version("c-1") == 2
+
 
 class TestEdgeCases:
     def test_empty_event_stream_load_raises(self, store: EventStore):
@@ -851,3 +882,28 @@ class TestEdgeCases:
         )
         store.save_snapshot(snap)
         assert store.get_latest_snapshot("c-1").version == 0
+
+    def test_snapshot_version_zero_plus_from_version_zero_query(self, store: EventStore, make_counter):
+        snap = Snapshot(
+            aggregate_id="c-1",
+            aggregate_type="Counter",
+            state={"count": 0, "name": "pre-init"},
+            version=0,
+        )
+        store.save_snapshot(snap)
+        store.append_events(
+            "c-1",
+            [
+                DomainEvent(aggregate_id="c-1", event_type="CounterCreated", payload={"name": "real"}, version=1),
+                DomainEvent(aggregate_id="c-1", event_type="CounterIncremented", payload={"amount": 7}, version=2),
+            ],
+            expected_version=0,
+        )
+        all_via_zero = store.get_events("c-1", from_version=0)
+        assert len(all_via_zero) == 2
+        assert [e.version for e in all_via_zero] == [1, 2]
+
+        loaded = store.load_aggregate("c-1", CounterAggregate)
+        assert loaded.version == 2
+        assert loaded.count == 7
+        assert loaded.name == "real"

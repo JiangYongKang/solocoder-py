@@ -1,0 +1,6 @@
+event_sourcing 包有几处细节不太对，在已有代码上改掉就好。
+1. query_events 里用 for aggregate_id in self._events.keys() 遍历，内层却写了个 try/except AggregateNotFoundError 兜底——key 一定在字典里，这异常永远不会抛，属于多余的防御代码。
+2. save_aggregate 先调 append_events 再调 create_snapshot，如果追加事件成功了但创建快照失败，事件已经持久化而快照没有产生，调用方收不到这种部分成功的反馈。
+3. get_events 的 from_version 和 to_version 要求必须 > 0，但 Snapshot.version 允许为 0。用 version=0 的快照时没办法直接查询 version=1 开始的事件，查询约束和快照版本没对齐。
+4. 最后跑一下 python -m pytest tests/event_sourcing/ -q，不能有失败的。
+5. README 也要跟着更新，把 save_aggregate 的行为约定和版本约束写进去。

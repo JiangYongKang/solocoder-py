@@ -52,6 +52,9 @@ class ExceptionTypePolicy(RetryPolicy):
         return self._non_retryable
 
 
+_MISSING = object()
+
+
 class ErrorCodePolicy(RetryPolicy):
     def __init__(
         self,
@@ -68,15 +71,17 @@ class ErrorCodePolicy(RetryPolicy):
         self._code_attribute = code_attribute
 
     def _get_code(self, exception: Exception) -> Optional[str]:
-        code = getattr(exception, self._code_attribute, None)
-        if code is not None:
-            return str(code)
-        return None
+        code = getattr(exception, self._code_attribute, _MISSING)
+        if code is _MISSING or code is None:
+            return None
+        return str(code)
 
     def is_retryable(self, exception: Exception) -> bool:
         code = self._get_code(exception)
 
         if code is None:
+            if self._retryable_codes:
+                return False
             return True
 
         if code in self._non_retryable_codes:

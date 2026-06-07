@@ -1,0 +1,8 @@
+产物不满意：
+1. save_aggregate 的原子性修复思路有偏差，代码在锁内仍然是先 append_events 再构造 Snapshot，如果 Snapshot.__post_init__ 校验失败抛出异常，事件已经追加到存储而快照没有写入，部分成功的问题并没有根除，只是加了一层线程锁。
+2. README 对原子性的描述自相矛盾，写"快照构造本身失败时事件同样已写入"，又写"构造失败前不会写入存储"——两句话互相打架，而且后一句和代码实际行为不符，代码里 append_events 先执行，事件肯定已经写入了。
+3. 新增的 test_save_aggregate_version_conflict_preserves_pending 只验证了 append_events 抛出 VersionConflictError 时 pending_events 不被清除，没有覆盖 append_events 成功但快照构造失败的场景，原子性问题的测试覆盖不完整。
+过程不满意：
+1. 模型在拿到任务后没有先分析各条要求，直接创建了 TodoList 就开始改代码，任务规划的顺序不符合"先分析再规划"的原则。
+2. 模型把原子性问题理解为"加一把锁就够了"，没有意识到 append_events 和 snapshot 构造的执行顺序才是部分成功的根因，说明对问题的根因分析不够深入。
+3. 模型在总结中声称 83 个测试全部通过、修复完成，但没有反思原子性修复是否真的解决了提示词描述的"追加事件成功但快照失败"场景，属于测试通过就以为问题解决了。

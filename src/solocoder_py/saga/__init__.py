@@ -17,6 +17,7 @@ from .models import (
     SagaStepExecutionState,
 )
 from .orchestrator import (
+    ResumeResult,
     SagaOrchestrator,
     SagaRepository,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "SagaInstance",
     "SagaStep",
     "SagaStepExecutionState",
+    "ResumeResult",
     "SagaOrchestrator",
     "SagaRepository",
 ]

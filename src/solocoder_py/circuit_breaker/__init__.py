@@ -1,5 +1,5 @@
-from ..ratelimiter.clock import Clock, ManualClock, SystemClock
 from .circuit_breaker import CircuitBreaker
+from .clock import Clock, ManualClock, SystemClock
 from .models import (
     CircuitBreakerConfig,
     CircuitBreakerError,

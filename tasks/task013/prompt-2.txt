@@ -1,0 +1,7 @@
+circuit_breaker 的实现还有几处不够健壮，在包内修修看。
+1. acquire() 在 except 分支用了 BaseException 而不是 Exception，SystemExit 和 KeyboardInterrupt 这种系统级异常也会被当作调用失败算进熔断统计。Ctrl+C 中断也被计入失败率，这不太对。
+2. 半开状态下 _record_call 不往 _call_records 追加记录，导致 get_window_stats 拿到的统计数据其实是进入 OPEN 前的旧数据，半开期间的统计查询时效性不够。
+3. _get_open_reason 和 _should_open 各自调了一次 _compute_stats，对 call_records 做了两遍遍历，有重复计算，改一处复用结果就好。
+4. 测试代码里 ManualClock 从 ratelimiter 直接导入，跨包依赖不够干净，想办法解决一下。
+5. 跑 python -m pytest tests/circuit_breaker/ -q 验证，全部通过才行。
+6. README 同步更新，说明异常捕获策略和统计时效性的变化。

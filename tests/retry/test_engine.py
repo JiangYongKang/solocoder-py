@@ -299,7 +299,7 @@ class TestAttemptTracing:
         engine.execute(lambda: 2)
         attempts2 = engine.attempts
         assert len(attempts1) == 1
-        assert len(attempts2) == 1
+        assert len(attempts2) == 2
 
 
 class TestEngineStateManagement:
@@ -312,12 +312,82 @@ class TestEngineStateManagement:
         assert engine.attempts == []
         assert engine.last_attempt is None
 
-    def test_execute_calls_reset_before_new_run(self):
+    def test_execute_preserves_history_across_runs(self):
         engine = RetryEngine()
         engine.execute(lambda: 1)
         assert engine.attempt_count == 1
         engine.execute(lambda: 2)
+        assert engine.attempt_count == 2
+
+    def test_per_run_attempt_numbers_reset_after_success(self):
+        engine = RetryEngine()
+        engine.execute(lambda: "ok1")
+        assert engine.attempts[0].attempt_number == 1
+        engine.execute(lambda: "ok2")
+        assert engine.attempts[1].attempt_number == 1
+
+    def test_per_run_attempt_numbers_reset_after_non_retryable(self):
+        policy = ExceptionTypePolicy(non_retryable_exceptions=[FatalError])
+        engine = RetryEngine(policy=policy)
+
+        with pytest.raises(NonRetryableError):
+            engine.execute(lambda: (_ for _ in ()).throw(FatalError("fatal")))
+        assert engine.attempts[0].attempt_number == 1
+
+        result = engine.execute(lambda: "ok")
+        assert result == "ok"
+        assert engine.attempts[1].attempt_number == 1
+
+    def test_resume_mid_run_after_interrupted_retry_sequence(self):
+        clock = ManualClock()
+        strategy = RetryStrategy(
+            initial_delay=1.0, backoff_multiplier=2.0, max_attempts=5
+        )
+        engine = RetryEngine(strategy=strategy, clock=clock)
+
+        call_count = [0]
+
+        class SimulatedCrash(BaseException):
+            pass
+
+        def crash_on_second_attempt():
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise SimulatedCrash("process crashed mid-retry")
+            raise TransientError(f"fail-{call_count[0]}")
+
+        with pytest.raises(SimulatedCrash):
+            engine.execute(crash_on_second_attempt)
+
         assert engine.attempt_count == 1
+        assert engine.attempts[0].attempt_number == 1
+        assert engine.attempts[0].result == AttemptResult.FAILURE
+        assert call_count[0] == 2
+
+        def fail_once_then_succeed():
+            call_count[0] += 1
+            if call_count[0] < 4:
+                raise TransientError(f"fail-{call_count[0]}")
+            return "recovered"
+
+        result = engine.execute(fail_once_then_succeed)
+        assert result == "recovered"
+        assert engine.attempt_count == 3
+        assert engine.attempts[1].attempt_number == 2
+        assert engine.attempts[1].result == AttemptResult.FAILURE
+        assert engine.attempts[2].attempt_number == 3
+        assert engine.attempts[2].result == AttemptResult.SUCCESS
+        assert clock.sleep_history == [1.0, 2.0]
+
+    def test_reset_between_runs_clears_history(self):
+        engine = RetryEngine()
+        engine.execute(lambda: 1)
+        assert engine.attempt_count == 1
+        engine.reset()
+        assert engine.attempt_count == 0
+        engine.execute(lambda: 2)
+        assert engine.attempt_count == 1
+        assert engine.attempts[0].attempt_number == 1
 
     def test_last_attempt(self):
         engine = RetryEngine()

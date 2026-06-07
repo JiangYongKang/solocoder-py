@@ -1,0 +1,6 @@
+产物不满意：
+1. do() 的外层 `except BaseException` 只做了 `_calls.pop` 清理和 re-raise，没有调用 `call.event.set()` 唤醒等待者。等待者持有 call 引用并阻塞在 `call.event.wait()` 上，无超时的等待者会永久挂死。提示词要求的修复是避免 BaseException 被当成业务失败传播，但模型只拦住了异常不传播，没解决等待者的唤醒问题——原来拿到错误类型的异常至少能唤醒继续执行，现在直接被永久卡住了。
+2. `test_base_exception_not_captured_as_failure` 断言写成 `stats is None or stats.executions == 0`，`or` 语义过松——如果统计意外被创建了但 executions 为 0 也会通过，没有严格验证 BaseException 路径不产生任何统计记录，测试名和实际断言粒度不匹配。
+
+过程不满意：
+1. 模型在收到提示词后立刻创建了 9 项 TodoList（会话开始几行内），没有先阅读代码理解现有问题和涉及范围。正确的流程应该是先分析问题再规划，上来就列任务说明对问题的理解还停留在表面。

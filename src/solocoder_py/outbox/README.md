@@ -3,12 +3,12 @@
 ## 模块概述
 
 本模块实现了事务发件箱（Transactional Outbox）模式，用于确保业务操作与消息投递的原子性。
-通过将业务记录与待投递消息在同一事务中写入内存数据结构，保证两者要么同时成功，要么同时回滚，
+通过将业务记录与待投递消息在同一操作中写入内存数据结构，保证两者要么同时成功，要么在方法内部异常时同时回滚，
 避免出现"业务成功但消息丢失"或"消息投递但业务未完成"的不一致问题。
 
 ## 核心功能
 
-1. **原子写入**：业务记录与消息在同一操作中创建，保证一致性
+1. **原子写入**：业务记录与消息在同一操作中创建，方法内部异常时自动回滚
 2. **消息状态机**：严格的状态流转校验，防止非法跳转
 3. **投递确认与重试**：失败消息支持自动重试，超过上限进入死信
 4. **补偿扫描**：后台定时扫描待投递和可重试消息，恢复未完成投递
@@ -50,40 +50,43 @@
 ### OutboxStateMachine
 消息状态机，管理消息状态的合法流转。
 
-状态枚举 `OutboxMessageState`：
+状态枚举 `OutboxMessageState`（值为英文小写，便于 JSON 序列化与日志兼容）：
 
-| 状态 | 说明 |
-|------|------|
-| PENDING（待投递） | 消息已写入，等待投递器领取 |
-| DELIVERING（投递中） | 已被投递器领取，正在投递 |
-| CONFIRMED（已确认） | 投递成功确认 |
-| FAILED（投递失败） | 本次投递失败，等待重试或进入死信 |
-| DEAD_LETTER（死信） | 超过最大重试次数，不再自动投递 |
+| 枚举名 | 值 | 说明 |
+|--------|-----|------|
+| PENDING | `"pending"` | 消息已写入，等待投递器领取 |
+| DELIVERING | `"delivering"` | 已被投递器领取，正在投递 |
+| CONFIRMED | `"confirmed"` | 投递成功确认（终态） |
+| FAILED | `"failed"` | 本次投递失败，等待重试或进入死信 |
+| DEAD_LETTER | `"dead_letter"` | 超过最大重试次数，不再自动投递（终态） |
+
+> **状态枚举约定**：枚举值统一使用 ASCII 英文小写字符串，不使用中文或特殊字符，
+> 确保在 JSON 序列化、日志输出、跨工具链传输时不会出现编码兼容问题。
 
 ### OutboxRepository
 发件箱仓库，提供所有核心操作接口。
 
 核心方法：
 
-**写入操作：
+**写入操作（原子写入边界见下文说明）：**
 - `write_with_message(...)`：原子写入一条业务记录和一条消息
 - `write_with_messages(...)`：原子写入一条业务记录和多条消息
 - `atomic_write_with_callback(...)`：原子写入并支持在写入消息前执行自定义回调
 
-**领取与投递：**
+**领取与投递（异常传播策略见下文说明）：**
 - `claim_message(message_id, worker_id)`：指定领取某条消息
 - `claim_next_messages(worker_id, batch_size)`：批量领取下一批可投递消息
 - `confirm_message(message_id)`：确认投递成功
 - `fail_message(message_id, error, retry_delay_seconds)`：标记投递失败
 - `force_to_dead_letter(message_id)`：强制将消息移入死信
 
-**扫描查询：
+**扫描查询：**
 - `scan_pending_messages(limit)`：扫描待投递消息（按创建时间排序）
 - `scan_retryable_messages(limit, now)`：扫描可重试的失败消息（按重试时间排序）
 - `scan_due_messages(limit, now)`：扫描所有到期可投递消息（合并 PENDING + 可重试 FAILED）
 - `get_dead_letters(limit)`：查询死信消息
 
-**其他：
+**其他：**
 - `get_message(message_id)`：获取单条消息
 - `get_business_record(record_id)`：获取业务记录
 - `get_messages_by_business(record_id)`：获取某业务记录关联的所有消息
@@ -95,24 +98,29 @@
 状态流转图：
 
 ```
-PENDING ──→ DELIVERING ──→ CONFIRMED（终态）
-              │
-              └──→ FAILED ──→ DELIVERING（重试）
-                    │
-                    └──→ DEAD_LETTER（终态）
+             ┌─────────── CONFIRMED（终态）
+             │
+PENDING ──→ DELIVERING
+             │
+             └──→ FAILED ──→ DELIVERING（重试）
+                   │
+                   └──→ DEAD_LETTER（终态）
+
+此外：PENDING ──→ DEAD_LETTER（强制死信）
+      DELIVERING ──→ DEAD_LETTER（强制死信）
 ```
 
 合法状态转移矩阵：
 
 | 当前状态 | 可转移至 |
 |--------|---------|
-| PENDING | DELIVERING |
-| DELIVERING | CONFIRMED, FAILED |
-| CONFIRMED | （终态） |
+| PENDING | DELIVERING, DEAD_LETTER |
+| DELIVERING | CONFIRMED, FAILED, DEAD_LETTER |
+| CONFIRMED | （终态，不可转移） |
 | FAILED | DELIVERING, DEAD_LETTER |
-| DEAD_LETTER | （终态） |
+| DEAD_LETTER | （终态，不可转移） |
 
-非法状态转移将抛出 `InvalidStateTransitionError`。
+非法状态转移将抛出 `InvalidStateTransitionError`，调用方应显式处理。
 
 ## 补偿扫描流程
 
@@ -123,7 +131,7 @@ PENDING ──→ DELIVERING ──→ CONFIRMED（终态）
    - 重试次数未达上限（`retry_count < max_retries`）
    - 已达到下次重试时间（`next_retry_at <= now` 或未设置）
 3. PENDING 按创建时间升序，FAILED 按重试时间升序
-4. 投递器领取（通过 `claim_next_messages` 原子领取消息（状态变为 DELIVERING，记录 worker_id
+4. 投递器通过 `claim_next_messages` 原子领取消息（状态变为 DELIVERING，记录 worker_id）
 5. 投递成功：调用 `confirm_message` 进入 CONFIRMED
 6. 投递失败：调用 `fail_message` 记录错误
    - 若未达重试上限：计算下次重试时间，回到 FAILED
@@ -134,11 +142,45 @@ PENDING ──→ DELIVERING ──→ CONFIRMED（终态）
 通过 `threading.RLock` 保证所有写操作的原子性：
 
 - `claim_next_messages` 在锁内遍历候选列表 + 状态校验 + 状态变更
-- 已被领取（DELIVERING 且非当前 worker 的消息跳过
+- 已被其他 worker 领取（DELIVERING 且 claimed_by != 当前 worker）的消息跳过
 - 保证同一条消息只会被一个投递器成功领取
+
+## 异常传播策略
+
+本模块遵循"不吞异常、明确责任"的原则：
+
+- **`claim_next_messages`**：只跳过已被其他 worker 领取的消息；
+  对于状态非法、数据损坏等其他异常，**直接抛出**，不会静默 `continue`。
+  调用方可根据异常信息快速定位问题。
+- **其他写操作**（`claim_message`、`confirm_message`、`fail_message` 等）：
+  所有状态机校验异常、数据异常均正常抛出，不做内部捕获。
+- **原子写入系列方法**：方法内部异常会先执行回滚，再包装为 `AtomicWriteError`
+  抛出（原始异常通过 `__cause__` 链保留），便于排查根因。
+
+## 原子写入边界与责任归属
+
+本模块为**内存实现**，原子写入的保证范围有明确边界：
+
+### 保证的范围
+`write_with_message`、`write_with_messages`、`atomic_write_with_callback`
+在方法调用期间，若 `create_business_record`、`create_message` 或回调函数
+抛出异常，已写入的业务记录与消息会被完整回滚，方法以 `AtomicWriteError` 退出。
+
+### 不保证的范围
+- 方法**成功返回后**，业务记录与消息已写入内存结构。此时若调用方进程崩溃、
+  断电或发生其他致命错误，数据不会自动回滚——这是所有内存数据结构的固有局限。
+- 若需要跨崩溃的持久化原子性，请改用带事务的持久化存储（如数据库事务、
+  WAL 日志等）作为 outbox 的存储后端。
+
+### 责任归属总结
+| 阶段 | 数据一致性保证 | 责任方 |
+|------|---------------|--------|
+| 原子写入方法执行中 | ✅ 内部异常自动回滚 | OutboxRepository |
+| 方法成功返回后 | ❌ 进程崩溃不回滚 | 调用方 / 持久化层 |
 
 ## 异常类型
 
+- `OutboxError`：所有 outbox 异常的基类
 - `AtomicWriteError`：原子写入失败，已自动回滚
 - `InvalidStateTransitionError`：非法状态流转
 - `MessageNotFoundError`：消息不存在

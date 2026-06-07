@@ -80,6 +80,13 @@ class TestRetryStrategyValidation:
 
 
 class TestDelayCalculation:
+    def test_attempt_number_zero_or_negative_raises(self):
+        strategy = RetryStrategy()
+        with pytest.raises(ValueError, match="attempt_number must be >= 1"):
+            strategy.calculate_delay(0)
+        with pytest.raises(ValueError, match="attempt_number must be >= 1"):
+            strategy.calculate_delay(-1)
+
     def test_first_attempt_has_zero_delay(self):
         strategy = RetryStrategy(initial_delay=5.0, backoff_multiplier=2.0)
         assert strategy.calculate_delay(1) == 0.0

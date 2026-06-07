@@ -9,6 +9,7 @@ from solocoder_py.consistent_hash import (
     InvalidWeightError,
     NodeAlreadyExistsError,
     NodeNotFoundError,
+    VirtualNodeInfo,
 )
 
 
@@ -258,7 +259,7 @@ class TestRingStateQuery:
         assert info.node_id == "alpha"
         assert info.weight == 2.5
         assert info.virtual_nodes > 0
-        assert info.estimated_key_count > 0
+        assert 0.0 < info.hash_space_share <= 1.0
 
     def test_get_snapshot(self):
         ring = ConsistentHashRing(default_virtual_nodes=30)
@@ -271,13 +272,20 @@ class TestRingStateQuery:
         for v in snap.virtual_nodes:
             assert v.physical_node_id in {"x", "y"}
 
-    def test_estimated_key_count_proportional(self):
+    def test_hash_space_share_proportional(self):
         ring = ConsistentHashRing(default_virtual_nodes=100)
         ring.add_node("small", weight=1)
         ring.add_node("big", weight=3)
         small_info = ring.get_node_info("small")
         big_info = ring.get_node_info("big")
-        assert big_info.estimated_key_count >= small_info.estimated_key_count * 2
+        assert big_info.hash_space_share >= small_info.hash_space_share * 2
+        assert small_info.hash_space_share + big_info.hash_space_share == pytest.approx(1.0)
+
+    def test_hash_space_share_single_node_is_one(self):
+        ring = ConsistentHashRing(default_virtual_nodes=50)
+        ring.add_node("only")
+        info = ring.get_node_info("only")
+        assert info.hash_space_share == pytest.approx(1.0)
 
 
 class TestNodeCountAndVirtualNodeCount:
@@ -318,3 +326,47 @@ class TestRouteWraparound:
         high_key = str(max_hash)
         result = ring.get_node(high_key)
         assert result == "wrap-node"
+
+
+class TestCollisionHandling:
+    def test_add_and_remove_with_many_nodes_no_infinite_loop(self):
+        ring = ConsistentHashRing(default_virtual_nodes=5)
+        node_ids = [f"node-{i}" for i in range(50)]
+        for nid in node_ids:
+            ring.add_node(nid)
+        assert ring.node_count == 50
+        for nid in node_ids:
+            ring.remove_node(nid)
+        assert ring.node_count == 0
+        assert ring.total_virtual_nodes == 0
+
+    def test_remove_after_add_preserves_routing(self):
+        ring = ConsistentHashRing(default_virtual_nodes=20)
+        ring.add_node("keep")
+        ring.add_node("remove-me")
+        keys_before = [f"k{i}" for i in range(200)]
+        assignments_before = {k: ring.get_node(k) for k in keys_before if ring.get_node(k) == "keep"}
+        ring.remove_node("remove-me")
+        for k in assignments_before:
+            assert ring.get_node(k) == "keep"
+
+
+class TestVirtualNodeInfoExported:
+    def test_virtual_node_info_importable(self):
+        assert VirtualNodeInfo is not None
+
+    def test_virtual_node_info_constructible(self):
+        v = VirtualNodeInfo(hash_value=123, physical_node_id="n1", virtual_index=0)
+        assert v.hash_value == 123
+        assert v.physical_node_id == "n1"
+        assert v.virtual_index == 0
+
+    def test_snapshot_contains_virtual_node_info_instances(self):
+        ring = ConsistentHashRing(default_virtual_nodes=3)
+        ring.add_node("a")
+        snap = ring.get_snapshot()
+        for v in snap.virtual_nodes:
+            assert isinstance(v, VirtualNodeInfo)
+            assert isinstance(v.hash_value, int)
+            assert isinstance(v.physical_node_id, str)
+            assert isinstance(v.virtual_index, int)

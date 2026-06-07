@@ -80,6 +80,17 @@ class OutboxRepository:
         message_id: Optional[str] = None,
         max_retries: Optional[int] = None,
     ) -> Tuple[BusinessRecord, OutboxMessage]:
+        """原子写入一条业务记录和一条关联消息。
+
+        原子性边界：仅保证在本方法调用期间，create_business_record 与
+        create_message 两步中任意一步抛异常时，已写入的数据会被回滚。
+        方法成功返回后，业务记录与消息均已落库（内存结构），此后调用方
+        发生崩溃不会触发回滚——这是内存实现的固有局限，生产环境应
+        使用带事务的持久化存储（如数据库事务）来获得更强的原子性保证。
+
+        Raises:
+            AtomicWriteError: 写入过程中发生异常，已自动回滚。
+        """
         with self._lock:
             created_record_id: Optional[str] = None
             created_message_id: Optional[str] = None
@@ -115,6 +126,14 @@ class OutboxRepository:
         message_ids: Optional[List[str]] = None,
         max_retries: Optional[int] = None,
     ) -> Tuple[BusinessRecord, List[OutboxMessage]]:
+        """原子写入一条业务记录和多条关联消息。
+
+        原子性边界同 write_with_message：仅在方法调用期间保证回滚。
+        成功返回后数据已持久化（内存），调用方后续崩溃不触发回滚。
+
+        Raises:
+            AtomicWriteError: 写入过程中发生异常，已自动回滚。
+        """
         with self._lock:
             created_record_id: Optional[str] = None
             created_message_ids: List[str] = []
@@ -155,6 +174,15 @@ class OutboxRepository:
         message_id: Optional[str] = None,
         max_retries: Optional[int] = None,
     ) -> Tuple[BusinessRecord, OutboxMessage]:
+        """原子写入并在创建业务记录后、创建消息前执行自定义回调。
+
+        若回调抛出异常，业务记录与后续消息均会回滚。
+        原子性边界同 write_with_message：仅方法内部异常触发回滚，
+        方法成功返回后调用方崩溃不回滚。
+
+        Raises:
+            AtomicWriteError: 写入或回调过程中发生异常，已自动回滚。
+        """
         with self._lock:
             created_record_id: Optional[str] = None
             created_message_id: Optional[str] = None
@@ -253,12 +281,13 @@ class OutboxRepository:
             for msg in candidates:
                 if len(claimed) >= batch_size:
                     break
-                if msg.is_pending or (msg.is_failed and msg.can_retry):
-                    try:
-                        msg.mark_delivering(worker_id)
-                        claimed.append(msg)
-                    except Exception:
-                        continue
+                if msg.is_delivering and msg.claimed_by != worker_id:
+                    continue
+                if msg.can_transition_to(OutboxMessageState.DELIVERING):
+                    msg.mark_delivering(worker_id)
+                    claimed.append(msg)
+                elif msg.is_delivering and msg.claimed_by == worker_id:
+                    claimed.append(msg)
             return claimed
 
     def confirm_message(self, message_id: str) -> OutboxMessage:
@@ -290,24 +319,14 @@ class OutboxRepository:
             message = self.get_message(message_id)
             if message.state == OutboxMessageState.DEAD_LETTER:
                 return message
-            if message.can_transition_to(OutboxMessageState.DEAD_LETTER):
-                message.mark_dead_letter()
-            else:
-                if message.state == OutboxMessageState.DELIVERING:
-                    message.transition_to(OutboxMessageState.FAILED)
-                    message.retry_count = message.max_retries
-                    message.claimed_by = None
-                    message.claimed_at = None
-                    message.mark_dead_letter()
-                elif message.state == OutboxMessageState.PENDING:
-                    message.transition_to(OutboxMessageState.DELIVERING)
-                    message.transition_to(OutboxMessageState.FAILED)
-                    message.retry_count = message.max_retries
-                    message.mark_dead_letter()
-                elif message.state == OutboxMessageState.CONFIRMED:
-                    raise ValueError(
-                        f"Cannot move confirmed message to dead letter: {message_id}"
-                    )
+            if message.state == OutboxMessageState.CONFIRMED:
+                raise ValueError(
+                    f"Cannot move confirmed message to dead letter: {message_id}"
+                )
+            message.claimed_by = None
+            message.claimed_at = None
+            message.next_retry_at = None
+            message.mark_dead_letter()
             return message
 
     def scan_pending_messages(

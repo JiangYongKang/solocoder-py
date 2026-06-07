@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Optional
+
+from .clock import Clock, SystemClock
 
 
 class IdempotencyState(str, Enum):
@@ -26,15 +27,17 @@ class IdempotencyRecord:
     state: IdempotencyState = IdempotencyState.PROCESSING
     response_data: Optional[Any] = None
     error_message: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.now)
-    expires_at: datetime = field(default_factory=lambda: datetime.now() + timedelta(hours=24))
+    created_at: float = field(default_factory=lambda: SystemClock().now())
+    expires_at: float = field(
+        default_factory=lambda: SystemClock().now() + 86400.0
+    )
 
     def __post_init__(self) -> None:
         if not self.key:
             raise ValueError("key cannot be empty")
         if not self.request_fingerprint:
             raise ValueError("request_fingerprint cannot be empty")
-        if self.state != IdempotencyState.EXPIRED and self.expires_at <= self.created_at:
+        if self.expires_at <= self.created_at and self.state != IdempotencyState.EXPIRED:
             raise ValueError("expires_at must be after created_at")
 
     @property
@@ -49,17 +52,17 @@ class IdempotencyRecord:
     def is_failed(self) -> bool:
         return self.state == IdempotencyState.FAILED
 
-    @property
-    def is_expired(self) -> bool:
+    def is_expired(self, clock: Optional[Clock] = None) -> bool:
         if self.state == IdempotencyState.EXPIRED:
             return True
-        return datetime.now() >= self.expires_at
+        effective_clock = clock if clock is not None else SystemClock()
+        return effective_clock.now() >= self.expires_at
 
-    @property
-    def remaining_ttl(self) -> Optional[timedelta]:
-        remaining = self.expires_at - datetime.now()
-        if remaining.total_seconds() < 0:
-            return timedelta(seconds=0)
+    def remaining_ttl(self, clock: Optional[Clock] = None) -> float:
+        effective_clock = clock if clock is not None else SystemClock()
+        remaining = self.expires_at - effective_clock.now()
+        if remaining < 0:
+            return 0.0
         return remaining
 
     def fingerprint_matches(self, fingerprint: str) -> bool:
@@ -82,7 +85,19 @@ class IdempotencyRecord:
     def mark_expired(self) -> None:
         self.state = IdempotencyState.EXPIRED
 
-    def refresh_ttl(self, ttl: timedelta) -> None:
-        if ttl.total_seconds() <= 0:
+    def refresh_ttl(self, ttl_seconds: float, clock: Optional[Clock] = None) -> None:
+        if ttl_seconds <= 0:
             raise ValueError("ttl must be positive")
-        self.expires_at = datetime.now() + ttl
+        effective_clock = clock if clock is not None else SystemClock()
+        self.expires_at = effective_clock.now() + ttl_seconds
+
+    def snapshot(self) -> "IdempotencyRecord":
+        return IdempotencyRecord(
+            key=self.key,
+            request_fingerprint=self.request_fingerprint,
+            state=self.state,
+            response_data=self.response_data,
+            error_message=self.error_message,
+            created_at=self.created_at,
+            expires_at=self.expires_at,
+        )

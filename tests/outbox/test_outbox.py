@@ -252,9 +252,13 @@ class TestOutboxStateMachine:
 
     def test_get_valid_transitions(self):
         transitions = OutboxStateMachine.get_valid_transitions(OutboxMessageState.PENDING)
-        assert transitions == {OutboxMessageState.DELIVERING}
+        assert transitions == {OutboxMessageState.DELIVERING, OutboxMessageState.DEAD_LETTER}
         transitions = OutboxStateMachine.get_valid_transitions(OutboxMessageState.DELIVERING)
-        assert transitions == {OutboxMessageState.CONFIRMED, OutboxMessageState.FAILED}
+        assert transitions == {
+            OutboxMessageState.CONFIRMED,
+            OutboxMessageState.FAILED,
+            OutboxMessageState.DEAD_LETTER,
+        }
         transitions = OutboxStateMachine.get_valid_transitions(OutboxMessageState.CONFIRMED)
         assert transitions == set()
 

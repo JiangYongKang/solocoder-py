@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
+import threading
 import uuid
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from .models import (
     SagaContext,
@@ -18,75 +21,120 @@ from .states import (
     StepExecutionStatus,
 )
 
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ResumeResult:
+    succeeded: List[SagaInstance] = field(default_factory=list)
+    failed: List[Tuple[SagaInstance, Exception]] = field(default_factory=list)
+
+    def __len__(self) -> int:
+        return len(self.succeeded)
+
+    def __getitem__(self, index: int) -> SagaInstance:
+        return self.succeeded[index]
+
+    def __iter__(self) -> Iterator[SagaInstance]:
+        return iter(self.succeeded)
+
+    def __bool__(self) -> bool:
+        return len(self.succeeded) > 0
+
+    @property
+    def total_attempted(self) -> int:
+        return len(self.succeeded) + len(self.failed)
+
+    @property
+    def has_failures(self) -> bool:
+        return len(self.failed) > 0
+
 
 class SagaRepository:
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._definitions: Dict[str, SagaDefinition] = {}
         self._instances: Dict[str, SagaInstance] = {}
 
     def save_definition(self, definition: SagaDefinition) -> None:
-        self._definitions[definition.id] = definition
+        with self._lock:
+            self._definitions[definition.id] = definition
 
     def find_definition(self, saga_id: str) -> Optional[SagaDefinition]:
-        return self._definitions.get(saga_id)
+        with self._lock:
+            return self._definitions.get(saga_id)
 
     def find_all_definitions(self) -> List[SagaDefinition]:
-        return list(self._definitions.values())
+        with self._lock:
+            return list(self._definitions.values())
 
     def delete_definition(self, saga_id: str) -> bool:
-        if saga_id in self._definitions:
-            del self._definitions[saga_id]
-            return True
-        return False
+        with self._lock:
+            if saga_id in self._definitions:
+                del self._definitions[saga_id]
+                return True
+            return False
 
     def save_instance(self, instance: SagaInstance) -> None:
-        self._instances[instance.id] = instance
+        with self._lock:
+            self._instances[instance.id] = instance
 
     def find_instance(self, instance_id: str) -> Optional[SagaInstance]:
-        return self._instances.get(instance_id)
+        with self._lock:
+            return self._instances.get(instance_id)
 
     def find_instances_by_saga(self, saga_id: str) -> List[SagaInstance]:
-        return [
-            inst for inst in self._instances.values()
-            if inst.saga_id == saga_id
-        ]
+        with self._lock:
+            return [
+                inst for inst in self._instances.values()
+                if inst.saga_id == saga_id
+            ]
 
     def find_all_instances(self) -> List[SagaInstance]:
-        return list(self._instances.values())
+        with self._lock:
+            return list(self._instances.values())
 
     def find_unfinished_instances(self) -> List[SagaInstance]:
         from .states import SagaStateMachine
 
-        return [
-            inst for inst in self._instances.values()
-            if not SagaStateMachine.is_terminal(inst.status)
-        ]
+        with self._lock:
+            return [
+                inst for inst in self._instances.values()
+                if not SagaStateMachine.is_terminal(inst.status)
+            ]
 
     def delete_instance(self, instance_id: str) -> bool:
-        if instance_id in self._instances:
-            del self._instances[instance_id]
-            return True
-        return False
+        with self._lock:
+            if instance_id in self._instances:
+                del self._instances[instance_id]
+                return True
+            return False
 
     def clear_definitions(self) -> None:
-        self._definitions.clear()
+        with self._lock:
+            self._definitions.clear()
 
     def clear_instances(self) -> None:
-        self._instances.clear()
+        with self._lock:
+            self._instances.clear()
 
     def clear_all(self) -> None:
-        self.clear_definitions()
-        self.clear_instances()
+        with self._lock:
+            self._definitions.clear()
+            self._instances.clear()
 
     def count_definitions(self) -> int:
-        return len(self._definitions)
+        with self._lock:
+            return len(self._definitions)
 
     def count_instances(self) -> int:
-        return len(self._instances)
+        with self._lock:
+            return len(self._instances)
 
 
 class SagaOrchestrator:
     def __init__(self, repository: Optional[SagaRepository] = None) -> None:
+        self._lock = threading.RLock()
         self._repository = repository or SagaRepository()
 
     @property
@@ -94,140 +142,145 @@ class SagaOrchestrator:
         return self._repository
 
     def register_saga(self, definition: SagaDefinition) -> None:
-        existing = self._repository.find_definition(definition.id)
-        if existing is not None:
-            raise SagaDefinitionError(
-                f"Saga definition already exists: {definition.id}"
-            )
-        self._repository.save_definition(definition)
+        with self._lock:
+            existing = self._repository.find_definition(definition.id)
+            if existing is not None:
+                raise SagaDefinitionError(
+                    f"Saga definition already exists: {definition.id}"
+                )
+            self._repository.save_definition(definition)
 
     def create_instance(
         self, saga_id: str, inputs: Optional[Dict[str, Any]] = None
     ) -> SagaInstance:
-        definition = self._repository.find_definition(saga_id)
-        if definition is None:
-            raise SagaDefinitionError(
-                f"Saga definition not found: {saga_id}"
+        with self._lock:
+            definition = self._repository.find_definition(saga_id)
+            if definition is None:
+                raise SagaDefinitionError(
+                    f"Saga definition not found: {saga_id}"
+                )
+            instance = SagaInstance(
+                id=str(uuid.uuid4()),
+                saga_id=saga_id,
+                inputs=inputs or {},
             )
-        instance = SagaInstance(
-            id=str(uuid.uuid4()),
-            saga_id=saga_id,
-            inputs=inputs or {},
-        )
-        self._repository.save_instance(instance)
-        return instance
+            self._repository.save_instance(instance)
+            return instance
 
     def execute(self, instance_id: str) -> SagaInstance:
-        instance = self._repository.find_instance(instance_id)
-        if instance is None:
-            raise SagaExecutionError(
-                f"Saga instance not found: {instance_id}"
-            )
+        with self._lock:
+            instance = self._repository.find_instance(instance_id)
+            if instance is None:
+                raise SagaExecutionError(
+                    f"Saga instance not found: {instance_id}"
+                )
 
-        if instance.status == SagaInstanceStatus.COMPLETED:
+            if instance.status == SagaInstanceStatus.COMPLETED:
+                return instance
+
+            if instance.status in {
+                SagaInstanceStatus.COMPENSATED,
+                SagaInstanceStatus.COMPENSATION_FAILED,
+                SagaInstanceStatus.ABORTED,
+            }:
+                raise SagaExecutionError(
+                    f"Cannot execute saga instance in state: {instance.status.value}"
+                )
+
+            if instance.status == SagaInstanceStatus.COMPENSATING:
+                self._run_compensation(instance)
+                return instance
+
+            if instance.status not in {
+                SagaInstanceStatus.PENDING,
+                SagaInstanceStatus.RUNNING,
+                SagaInstanceStatus.FAILED,
+            }:
+                raise SagaExecutionError(
+                    f"Cannot execute saga instance in state: {instance.status.value}"
+                )
+
+            definition = self._repository.find_definition(instance.saga_id)
+            if definition is None:
+                raise SagaDefinitionError(
+                    f"Saga definition not found: {instance.saga_id}"
+                )
+
+            if instance.status == SagaInstanceStatus.FAILED:
+                self._run_compensation(instance)
+                return instance
+
+            if instance.status == SagaInstanceStatus.PENDING:
+                instance.start()
+                self._repository.save_instance(instance)
+
+            self._execute_steps(instance, definition)
             return instance
-
-        if instance.status in {
-            SagaInstanceStatus.COMPENSATED,
-            SagaInstanceStatus.COMPENSATION_FAILED,
-            SagaInstanceStatus.ABORTED,
-        }:
-            raise SagaExecutionError(
-                f"Cannot execute saga instance in state: {instance.status.value}"
-            )
-
-        if instance.status == SagaInstanceStatus.COMPENSATING:
-            self._run_compensation(instance)
-            return instance
-
-        if instance.status not in {
-            SagaInstanceStatus.PENDING,
-            SagaInstanceStatus.RUNNING,
-            SagaInstanceStatus.FAILED,
-        }:
-            raise SagaExecutionError(
-                f"Cannot execute saga instance in state: {instance.status.value}"
-            )
-
-        definition = self._repository.find_definition(instance.saga_id)
-        if definition is None:
-            raise SagaDefinitionError(
-                f"Saga definition not found: {instance.saga_id}"
-            )
-
-        if instance.status == SagaInstanceStatus.FAILED:
-            self._run_compensation(instance)
-            return instance
-
-        if instance.status == SagaInstanceStatus.PENDING:
-            instance.start()
-            self._repository.save_instance(instance)
-
-        self._execute_steps(instance, definition)
-        return instance
 
     def compensate(self, instance_id: str) -> SagaInstance:
-        instance = self._repository.find_instance(instance_id)
-        if instance is None:
-            raise SagaExecutionError(
-                f"Saga instance not found: {instance_id}"
-            )
+        with self._lock:
+            instance = self._repository.find_instance(instance_id)
+            if instance is None:
+                raise SagaExecutionError(
+                    f"Saga instance not found: {instance_id}"
+                )
 
-        if instance.status in {
-            SagaInstanceStatus.COMPENSATED,
-            SagaInstanceStatus.COMPENSATION_FAILED,
-            SagaInstanceStatus.ABORTED,
-        }:
+            if instance.status in {
+                SagaInstanceStatus.COMPENSATED,
+                SagaInstanceStatus.COMPENSATION_FAILED,
+                SagaInstanceStatus.ABORTED,
+            }:
+                return instance
+
+            if instance.status == SagaInstanceStatus.COMPLETED:
+                raise SagaExecutionError(
+                    "Cannot compensate a successfully completed saga"
+                )
+
+            if instance.status == SagaInstanceStatus.PENDING:
+                instance.abort()
+                self._repository.save_instance(instance)
+                return instance
+
+            if instance.status not in {
+                SagaInstanceStatus.RUNNING,
+                SagaInstanceStatus.FAILED,
+                SagaInstanceStatus.COMPENSATING,
+            }:
+                raise SagaExecutionError(
+                    f"Cannot compensate saga instance in state: {instance.status.value}"
+                )
+
+            self._run_compensation(instance)
             return instance
-
-        if instance.status == SagaInstanceStatus.COMPLETED:
-            raise SagaExecutionError(
-                "Cannot compensate a successfully completed saga"
-            )
-
-        if instance.status == SagaInstanceStatus.PENDING:
-            instance.abort()
-            self._repository.save_instance(instance)
-            return instance
-
-        if instance.status not in {
-            SagaInstanceStatus.RUNNING,
-            SagaInstanceStatus.FAILED,
-            SagaInstanceStatus.COMPENSATING,
-        }:
-            raise SagaExecutionError(
-                f"Cannot compensate saga instance in state: {instance.status.value}"
-            )
-
-        self._run_compensation(instance)
-        return instance
 
     def abort(self, instance_id: str) -> SagaInstance:
-        instance = self._repository.find_instance(instance_id)
-        if instance is None:
-            raise SagaExecutionError(
-                f"Saga instance not found: {instance_id}"
-            )
+        with self._lock:
+            instance = self._repository.find_instance(instance_id)
+            if instance is None:
+                raise SagaExecutionError(
+                    f"Saga instance not found: {instance_id}"
+                )
 
-        if instance.is_terminal:
-            return instance
+            if instance.is_terminal:
+                return instance
 
-        if instance.status == SagaInstanceStatus.PENDING:
-            instance.abort()
-        elif instance.status in {
-            SagaInstanceStatus.RUNNING,
-            SagaInstanceStatus.FAILED,
-        }:
-            self._run_compensation(instance)
-            if not instance.is_terminal:
+            if instance.status == SagaInstanceStatus.PENDING:
                 instance.abort()
-        else:
-            raise SagaExecutionError(
-                f"Cannot abort saga instance in state: {instance.status.value}"
-            )
+            elif instance.status in {
+                SagaInstanceStatus.RUNNING,
+                SagaInstanceStatus.FAILED,
+            }:
+                self._run_compensation(instance)
+                if not instance.is_terminal:
+                    instance.abort()
+            else:
+                raise SagaExecutionError(
+                    f"Cannot abort saga instance in state: {instance.status.value}"
+                )
 
-        self._repository.save_instance(instance)
-        return instance
+            self._repository.save_instance(instance)
+            return instance
 
     def _execute_steps(
         self, instance: SagaInstance, definition: SagaDefinition
@@ -387,22 +440,31 @@ class SagaOrchestrator:
 
         return False
 
-    def resume_unfinished(self) -> List[SagaInstance]:
-        unfinished = self._repository.find_unfinished_instances()
-        resumed: List[SagaInstance] = []
-        for instance in unfinished:
-            try:
-                if instance.status in {
-                    SagaInstanceStatus.PENDING,
-                    SagaInstanceStatus.RUNNING,
-                    SagaInstanceStatus.FAILED,
-                    SagaInstanceStatus.COMPENSATING,
-                }:
-                    self.execute(instance.id)
-                    resumed.append(instance)
-            except SagaExecutionError:
-                continue
-        return resumed
+    def resume_unfinished(self) -> ResumeResult:
+        with self._lock:
+            unfinished = self._repository.find_unfinished_instances()
+            result = ResumeResult()
+            for instance in unfinished:
+                try:
+                    if instance.status in {
+                        SagaInstanceStatus.PENDING,
+                        SagaInstanceStatus.RUNNING,
+                        SagaInstanceStatus.FAILED,
+                        SagaInstanceStatus.COMPENSATING,
+                    }:
+                        self.execute(instance.id)
+                        result.succeeded.append(instance)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to resume saga instance %s (status=%s): %s",
+                        instance.id,
+                        instance.status.value,
+                        exc,
+                        exc_info=True,
+                    )
+                    result.failed.append((instance, exc))
+            return result
 
     def get_instance(self, instance_id: str) -> Optional[SagaInstance]:
-        return self._repository.find_instance(instance_id)
+        with self._lock:
+            return self._repository.find_instance(instance_id)

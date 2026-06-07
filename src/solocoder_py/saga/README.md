@@ -42,8 +42,9 @@
 
 | 类名 | 职责 |
 |------|------|
-| `SagaRepository` | 内存仓储，存储 Saga 定义和实例 |
-| `SagaOrchestrator` | Saga 编排器，负责注册 Saga、创建实例、执行、补偿、终止和恢复 |
+| `SagaRepository` | 内存仓储，存储 Saga 定义和实例，线程安全 |
+| `SagaOrchestrator` | Saga 编排器，负责注册 Saga、创建实例、执行、补偿、终止和恢复，线程安全 |
+| `ResumeResult` | `resume_unfinished()` 的返回结果，包含成功恢复列表 `succeeded` 和失败列表 `failed` |
 
 ## Saga 生命周期状态图
 
@@ -102,6 +103,25 @@
 | COMPENSATED | （终态） |
 | COMPENSATION_FAILED | （终态） |
 | ABORTED | （终态） |
+
+## 并发安全
+
+本模块的仓储和编排器在设计上支持多线程并发调用。
+
+### 保证范围
+
+- **`SagaRepository`**：内部所有公共方法都使用 `threading.RLock`（可重入锁）保护 `_definitions` 和 `_instances` 两个字典的读写操作，并发地保存、查询、删除定义或实例都是安全的。
+- **`SagaOrchestrator`**：所有公共方法（`register_saga`、`create_instance`、`execute`、`compensate`、`abort`、`resume_unfinished`、`get_instance`）都使用 `threading.RLock` 保证串行化执行。即使多线程同时创建/执行不同 Saga 实例，也不会出现内部状态竞争或仓储数据不一致。
+- 使用 `RLock` 而非普通 `Lock`，是因为编排器的公共方法内部会调用仓储方法，而仓储自身也持有锁，可重入语义能避免自死锁。
+
+### 未覆盖的边界
+
+- `SagaInstance` 和 `SagaStepExecutionState` 是纯数据对象，**不包含内部锁**。如果在持有编排器锁之外由多线程直接修改这些对象的字段，需要调用方自行加锁。通常不建议在外部修改实例状态，所有状态变更应通过 `SagaOrchestrator` 的公共方法完成。
+- 步骤的 `action` 和 `compensation` 回调函数在编排器锁的保护下执行。如果回调内部需要访问共享资源，需要开发者自行处理其线程安全。
+
+### 日志说明
+
+模块使用 Python 标准库 `logging`，logger 名称为 `solocoder_py.saga.orchestrator`。`resume_unfinished()` 在恢复某实例失败时会以 `WARNING` 级别记录日志，包含实例 ID、当前状态和异常信息，完整堆栈通过 `exc_info=True` 附带。
 
 ## 使用示例
 
@@ -204,7 +224,18 @@ for step in trace:
 ### 恢复未完成实例
 
 ```python
-resumed = orchestrator.resume_unfinished()
-for inst in resumed:
-    print(f"Resumed {inst.id}: {inst.status}")
+from solocoder_py.saga import ResumeResult
+
+result: ResumeResult = orchestrator.resume_unfinished()
+
+print(f"Attempted: {result.total_attempted}, "
+      f"Succeeded: {len(result.succeeded)}, "
+      f"Failed: {len(result.failed)}")
+
+for inst in result:
+    print(f"Resumed OK: {inst.id} -> {inst.status}")
+
+if result.has_failures:
+    for inst, exc in result.failed:
+        print(f"Failed to resume {inst.id} (status={inst.status.value}): {exc}")
 ```

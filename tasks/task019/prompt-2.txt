@@ -1,0 +1,6 @@
+idempotency 模块的锁竞争和过期处理有 BUG，在现有代码上修掉。
+1. _acquire_or_wait 放掉 _global_lock 到拿到 condition 锁之间有个窗口——这期间另一个线程可能已经把 record.state 从 PROCESSING 改成 SUCCESS 了，而且 notify_all 也可能已经发出。如果刚好卡在这个窗口里，当前线程会永久堵在 condition.wait() 上。
+2. 整个模块的 TTL 校验用的 datetime.now()，不是可注入的 Clock。项目里 ratelimiter、retry、token_bucket、circuit_breaker 都走 Clock 模式，idempotency 没跟上统一抽象，过期测试只能等真实时间或者 mock datetime。
+3. IdempotencyRecord.__post_init__ 对非 EXPIRED 状态校验了 expires_at > created_at。但 get_record 拷贝过期记录时会造一个 EXPIRED 状态且 expires_at <= created_at 的副本，__post_init__ 直接抛出 ValueError，导致查过期记录反而炸了。
+4. 验证方式：python -m pytest tests/idempotency/ -q 全过。
+5. README 补上这次的改动，包括并发安全、时钟注入和过期记录查询行为。

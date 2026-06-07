@@ -1,5 +1,4 @@
 import threading
-from datetime import timedelta
 from time import sleep
 
 import pytest
@@ -13,32 +12,41 @@ from solocoder_py.idempotency import (
     IdempotencyResult,
     IdempotencyState,
     IdempotencyStore,
+    ManualClock,
 )
-from .conftest import make_store
+from .conftest import make_store, make_manual_clock
 
 
 class TestStoreConfiguration:
     def test_default_configuration(self):
         store = make_store()
-        assert store.default_ttl == timedelta(hours=24)
+        assert store.default_ttl_seconds == 86400.0
         assert store.failure_replay_policy == FailureReplayPolicy.REJECT
-        assert store.wait_timeout == timedelta(seconds=30)
+        assert store.wait_timeout_seconds == 30.0
 
     def test_negative_default_ttl_rejected(self):
-        with pytest.raises(ValueError, match="default_ttl must be positive"):
-            IdempotencyStore(default_ttl=timedelta(seconds=-1))
+        with pytest.raises(ValueError, match="default_ttl_seconds must be positive"):
+            IdempotencyStore(default_ttl_seconds=-1.0)
 
     def test_zero_default_ttl_rejected(self):
-        with pytest.raises(ValueError, match="default_ttl must be positive"):
-            IdempotencyStore(default_ttl=timedelta(seconds=0))
+        with pytest.raises(ValueError, match="default_ttl_seconds must be positive"):
+            IdempotencyStore(default_ttl_seconds=0.0)
 
     def test_negative_wait_timeout_rejected(self):
-        with pytest.raises(ValueError, match="wait_timeout must be positive"):
-            IdempotencyStore(wait_timeout=timedelta(seconds=-1))
+        with pytest.raises(ValueError, match="wait_timeout_seconds must be positive"):
+            IdempotencyStore(wait_timeout_seconds=-1.0)
 
     def test_zero_wait_poll_interval_rejected(self):
-        with pytest.raises(ValueError, match="wait_poll_interval must be positive"):
-            IdempotencyStore(wait_poll_interval=timedelta(seconds=0))
+        with pytest.raises(ValueError, match="wait_poll_interval_seconds must be positive"):
+            IdempotencyStore(wait_poll_interval_seconds=0.0)
+
+    def test_clock_injection(self):
+        clock = make_manual_clock(start_time=1234.5)
+        store = make_store(clock=clock)
+        store.begin_request("k", "fp")
+        record = store.get_record("k")
+        assert record is not None
+        assert record.created_at == 1234.5
 
 
 class TestBeginRequest:
@@ -62,18 +70,18 @@ class TestBeginRequest:
 
     def test_begin_negative_ttl_rejected(self):
         store = make_store()
-        with pytest.raises(ValueError, match="ttl must be positive"):
-            store.begin_request("k", "fp", ttl=timedelta(seconds=-1))
+        with pytest.raises(ValueError, match="ttl_seconds must be positive"):
+            store.begin_request("k", "fp", ttl_seconds=-1.0)
 
     def test_begin_with_custom_ttl(self):
-        store = make_store()
-        store.begin_request("k", "fp", ttl=timedelta(hours=2))
+        clock = make_manual_clock(start_time=0.0)
+        store = make_store(clock=clock)
+        store.begin_request("k", "fp", ttl_seconds=7200.0)
         record = store.get_record("k")
         assert record is not None
-        remaining = record.remaining_ttl
-        assert remaining is not None
-        assert remaining.total_seconds() > 0
-        assert remaining.total_seconds() <= timedelta(hours=2).total_seconds()
+        assert record.expires_at == 7200.0
+        remaining = record.remaining_ttl(clock)
+        assert remaining == 7200.0
 
 
 class TestNormalFlowSuccess:
@@ -121,16 +129,12 @@ class TestNormalFlowSuccess:
 
 class TestNormalFlowExpiredRecreate:
     def test_expired_then_reprocess(self):
-        store = make_store()
+        clock = make_manual_clock(start_time=0.0)
+        store = make_store(default_ttl_seconds=60.0, clock=clock)
         store.begin_request("key-exp", "fp-exp")
         store.complete_success("key-exp", "fp-exp", {"old": "data"})
 
-        record = store.get_record("key-exp")
-        assert record is not None
-        record.expires_at = __import__("datetime").datetime.now() - timedelta(seconds=1)
-
-        from datetime import datetime
-        store._records["key-exp"].record.expires_at = datetime.now() - timedelta(seconds=1)
+        clock.advance(61.0)
 
         result = store.begin_request("key-exp", "fp-exp")
         assert result.should_execute is True
@@ -253,13 +257,12 @@ class TestCompleteSuccessAndFailure:
 class TestProcessingStateAndConcurrency:
     def test_concurrent_first_request_wins(self):
         store = make_store(
-            wait_timeout=timedelta(seconds=5),
-            wait_poll_interval=timedelta(milliseconds=10),
+            wait_timeout_seconds=5.0,
+            wait_poll_interval_seconds=0.01,
         )
         barrier = threading.Barrier(2, timeout=5)
         execution_counter = [0]
         counter_lock = threading.Lock()
-        results = {}
         errors = {}
 
         def thread_fn(thread_id):
@@ -273,9 +276,6 @@ class TestProcessingStateAndConcurrency:
                     store.complete_success(
                         "concurrent-key", "fp-concurrent", f"from-{thread_id}"
                     )
-                    results[thread_id] = ("executor", result)
-                else:
-                    results[thread_id] = ("waiter", result)
             except Exception as e:
                 errors[thread_id] = e
 
@@ -286,6 +286,7 @@ class TestProcessingStateAndConcurrency:
         t1.join(timeout=10)
         t2.join(timeout=10)
 
+        assert len(errors) == 0, f"Errors: {errors}"
         assert execution_counter[0] == 1, (
             f"Expected exactly one executor, got {execution_counter[0]}"
         )
@@ -295,7 +296,7 @@ class TestProcessingStateAndConcurrency:
         assert final_record.state == IdempotencyState.SUCCESS
 
     def test_concurrent_second_reads_final_result(self):
-        store = make_store(wait_poll_interval=timedelta(milliseconds=10))
+        store = make_store(wait_poll_interval_seconds=0.01)
         result_holder = {}
 
         def first_thread():
@@ -323,11 +324,15 @@ class TestProcessingStateAndConcurrency:
         assert second_result.response_data == {"from": "first"}
 
     def test_wait_timeout_raises_conflict(self):
+        clock = make_manual_clock(start_time=0.0)
         store = make_store(
-            wait_timeout=timedelta(milliseconds=50),
-            wait_poll_interval=timedelta(milliseconds=10),
+            wait_timeout_seconds=0.05,
+            wait_poll_interval_seconds=0.01,
+            clock=clock,
         )
         store.begin_request("key-timeout", "fp-timeout")
+
+        clock.advance(0.1)
 
         with pytest.raises(IdempotencyKeyConflictError):
             store.begin_request("key-timeout", "fp-timeout")
@@ -335,35 +340,35 @@ class TestProcessingStateAndConcurrency:
 
 class TestTTLAndExpiration:
     def test_ttl_just_expired_cleanup_on_access(self):
-        store = make_store()
+        clock = make_manual_clock(start_time=0.0)
+        store = make_store(default_ttl_seconds=60.0, clock=clock)
         store.begin_request("key-ttl", "fp-ttl")
         store.complete_success("key-ttl", "fp-ttl", {"data": "ok"})
 
-        from datetime import datetime
-        store._records["key-ttl"].record.expires_at = datetime.now()
+        clock.advance(60.0)
 
         result = store.begin_request("key-ttl", "fp-ttl")
         assert result.should_execute is True
         assert result.state == IdempotencyState.PROCESSING
 
     def test_complete_success_on_expired_key(self):
-        store = make_store()
+        clock = make_manual_clock(start_time=0.0)
+        store = make_store(default_ttl_seconds=60.0, clock=clock)
         store.begin_request("key-exp-complete", "fp")
 
-        from datetime import datetime
-        store._records["key-exp-complete"].record.expires_at = datetime.now() - timedelta(seconds=1)
+        clock.advance(61.0)
 
         with pytest.raises(IdempotencyKeyExpiredError):
             store.complete_success("key-exp-complete", "fp", "data")
 
     def test_cleanup_expired(self):
-        store = make_store()
+        clock = make_manual_clock(start_time=0.0)
+        store = make_store(default_ttl_seconds=60.0, clock=clock)
         store.begin_request("k1", "fp1")
         store.begin_request("k2", "fp2")
         store.complete_success("k1", "fp1", "d1")
 
-        from datetime import datetime
-        store._records["k1"].record.expires_at = datetime.now() - timedelta(seconds=1)
+        clock.advance(61.0)
 
         removed = store.cleanup_expired()
         assert removed == 1
@@ -371,15 +376,17 @@ class TestTTLAndExpiration:
         assert store.exists("k2") is True
 
     def test_lazy_expiration_in_get_record(self):
-        store = make_store()
+        clock = make_manual_clock(start_time=0.0)
+        store = make_store(default_ttl_seconds=60.0, clock=clock)
         store.begin_request("lazy-key", "fp")
 
-        from datetime import datetime
-        store._records["lazy-key"].record.expires_at = datetime.now() - timedelta(seconds=1)
+        clock.advance(61.0)
 
         record = store.get_record("lazy-key")
         assert record is not None
         assert record.state == IdempotencyState.EXPIRED
+        assert record.expires_at == 60.0
+        assert record.created_at == 0.0
 
 
 class TestQueriesAndManagement:

@@ -7,20 +7,22 @@ from .exceptions import InvalidStateTransitionError
 
 
 class OutboxMessageState(str, Enum):
-    PENDING = "待投递"
-    DELIVERING = "投递中"
-    CONFIRMED = "已确认"
-    FAILED = "投递失败"
-    DEAD_LETTER = "死信"
+    PENDING = "pending"
+    DELIVERING = "delivering"
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
 
 
 _TRANSITIONS: Dict[OutboxMessageState, Set[OutboxMessageState]] = {
     OutboxMessageState.PENDING: {
         OutboxMessageState.DELIVERING,
+        OutboxMessageState.DEAD_LETTER,
     },
     OutboxMessageState.DELIVERING: {
         OutboxMessageState.CONFIRMED,
         OutboxMessageState.FAILED,
+        OutboxMessageState.DEAD_LETTER,
     },
     OutboxMessageState.CONFIRMED: set(),
     OutboxMessageState.FAILED: {

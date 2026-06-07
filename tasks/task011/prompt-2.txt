@@ -1,0 +1,5 @@
+saga 包里的 Saga 编排器还有两个问题没处理干净，你在现有代码基础上改好就行。
+1. resume_unfinished 遍历未完成实例时用 except SagaExecutionError: continue 把所有异常都吞了。要是某个实例恢复过程抛了异常，调用方完全不知道哪些成功哪些失败，也没有任何日志可查。
+2. SagaRepository 的 _definitions 和 _instances 两个字典在并发场景下没有任何保护，多线程同时注册定义或操作实例可能数据打架。SagaOrchestrator 本身也没对仓库操作加锁，整体缺少并发安全。
+3. 修完后用 pytest 跑 tests/saga/，得保证全绿。
+4. README 里补一下这次修复涉及的并发保证说明。

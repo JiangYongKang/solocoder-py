@@ -1,0 +1,6 @@
+leaky_bucket 的漏出计算和溢出策略有些边缘情况没处理好，修一下。
+1. _leak 用 int(elapsed * leak_rate) 计算漏出数量，向下取整在小步长场景下精度损失严重。比如 leak_rate=0.1 经过 5 秒时 int(0.5)=0，这段时间的漏出完全被吞掉，时间长了延迟会越积越多。
+2. DROP_OLDEST 分支里先 pop 了一个元素再 append 新元素，然后调 _estimate_position_and_time(1) 算排队位置。但这个位置是基于 pop 之后的队列长度算的，实际排队身位比返回结果多一个，预估值和真实情况对不上。
+3. 整个 LeakyBucket 没有加锁，_leak、enqueue、get_state 到处改 _queue 和 _last_leak_time，多线程并发入桶队列状态必然乱掉。
+4. 改完之后 python -m pytest tests/leaky_bucket/ -q 必须全过。
+5. README 也更新一下，把漏出精度策略和并发安全保证写进去。

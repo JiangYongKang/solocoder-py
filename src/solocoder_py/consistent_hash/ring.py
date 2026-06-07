@@ -16,7 +16,6 @@ from .models import MigrationStats, NodeInfo, RingSnapshot, VirtualNodeInfo
 
 
 _DEFAULT_VIRTUAL_NODES = 150
-_HASH_SPACE = 2**32
 
 
 class ConsistentHashRing:
@@ -31,6 +30,7 @@ class ConsistentHashRing:
         self._nodes: dict[str, dict] = {}
         self._ring: list[int] = []
         self._hash_to_vnode: dict[int, tuple[str, int]] = {}
+        self._node_hashes: dict[str, list[int]] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -77,35 +77,29 @@ class ConsistentHashRing:
                 "virtual_nodes": effective_vnodes,
                 "weight": weight,
             }
+            self._node_hashes[node_id] = []
 
             for i in range(effective_vnodes):
                 vkey = f"{node_id}#{i}"
                 h = self._hash(vkey)
+                collision_count = 0
                 while h in self._hash_to_vnode:
-                    vkey = f"{node_id}#{i}#{h}"
+                    collision_count += 1
+                    vkey = f"{node_id}#{i}#{collision_count}"
                     h = self._hash(vkey)
                 bisect.insort(self._ring, h)
                 self._hash_to_vnode[h] = (node_id, i)
+                self._node_hashes[node_id].append(h)
 
     def remove_node(self, node_id: str) -> None:
         with self._lock:
             if node_id not in self._nodes:
                 raise NodeNotFoundError(f"node '{node_id}' not found")
 
-            info = self._nodes.pop(node_id)
-            vcount = info["virtual_nodes"]
+            self._nodes.pop(node_id)
+            hash_values = self._node_hashes.pop(node_id, [])
 
-            for i in range(vcount):
-                vkey = f"{node_id}#{i}"
-                h = self._hash(vkey)
-                if h not in self._hash_to_vnode:
-                    alt = 0
-                    while True:
-                        vkey_alt = f"{node_id}#{i}#{alt}"
-                        h = self._hash(vkey_alt)
-                        if h in self._hash_to_vnode:
-                            break
-                        alt += 1
+            for h in hash_values:
                 idx = bisect.bisect_left(self._ring, h)
                 if idx < len(self._ring) and self._ring[idx] == h:
                     self._ring.pop(idx)
@@ -126,13 +120,13 @@ class ConsistentHashRing:
         with self._lock:
             result = []
             for nid, info in self._nodes.items():
-                estimated = self._estimate_key_count(nid)
+                share = self._estimate_hash_space_share(nid)
                 result.append(
                     NodeInfo(
                         node_id=nid,
                         virtual_nodes=info["virtual_nodes"],
                         weight=info["weight"],
-                        estimated_key_count=estimated,
+                        hash_space_share=share,
                     )
                 )
             return result
@@ -146,15 +140,15 @@ class ConsistentHashRing:
                 node_id=node_id,
                 virtual_nodes=info["virtual_nodes"],
                 weight=info["weight"],
-                estimated_key_count=self._estimate_key_count(node_id),
+                hash_space_share=self._estimate_hash_space_share(node_id),
             )
 
-    def _estimate_key_count(self, node_id: str) -> int:
+    def _estimate_hash_space_share(self, node_id: str) -> float:
         if not self._ring:
-            return 0
+            return 0.0
         total = len(self._ring)
         vnodes = self._nodes[node_id]["virtual_nodes"]
-        return int(_HASH_SPACE * (vnodes / total))
+        return vnodes / total
 
     def get_snapshot(self) -> RingSnapshot:
         with self._lock:

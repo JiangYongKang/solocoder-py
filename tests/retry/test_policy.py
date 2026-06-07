@@ -122,9 +122,31 @@ class TestErrorCodePolicy:
         assert policy.is_retryable(ErrorWithCode("TIMEOUT"))
         assert not policy.is_retryable(ErrorWithCode("TIMEOUT_FATAL"))
 
-    def test_no_code_attribute_allows_retry(self):
+    def test_no_code_attribute_with_whitelist_not_retryable(self):
         policy = ErrorCodePolicy(retryable_codes=["TIMEOUT"])
+        assert not policy.is_retryable(Exception("no code attr"))
+
+    def test_no_code_attribute_with_blacklist_only_is_retryable(self):
+        policy = ErrorCodePolicy(non_retryable_codes=["BAD_REQUEST"])
         assert policy.is_retryable(Exception("no code attr"))
+
+    def test_code_none_with_whitelist_not_retryable(self):
+        class NoneCodeError(Exception):
+            def __init__(self) -> None:
+                self.code = None
+                super().__init__()
+
+        policy = ErrorCodePolicy(retryable_codes=["TIMEOUT"])
+        assert not policy.is_retryable(NoneCodeError())
+
+    def test_code_none_with_blacklist_only_is_retryable(self):
+        class NoneCodeError(Exception):
+            def __init__(self) -> None:
+                self.code = None
+                super().__init__()
+
+        policy = ErrorCodePolicy(non_retryable_codes=["BAD_REQUEST"])
+        assert policy.is_retryable(NoneCodeError())
 
     def test_code_converted_to_string(self):
         class IntCodeError(Exception):

@@ -1,0 +1,6 @@
+singleflight 的并发实现在几个地方有潜在问题，在当前包内处理掉。
+1. do() 的领导者分支用 BaseException 接异常，KeyboardInterrupt 这种级别的信号也会被当作业务失败，导致所有等待者拿到一个被错误包裹的异常。
+2. 领导者执行完后 call.event.set() 放在锁外调，虽然 GIL 能降低竞态概率，但从语义上说 event.set() 和 self._calls.pop() 之间没有原子性。等待者可能收到 set 信号开始读数据时，call 已经被 pop 掉了。
+3. 超时等待直接用 time.monotonic() 取时间，但项目里限流器、重试器这些模块都用了可注入的 Clock 抽象。singleflight 没跟这个模式走，超时相关的测试没法精确控制时间。
+4. 改完跑 python -m pytest tests/singleflight/ -q，通过才算完事。
+5. README 也更新一下，把异常传播策略和时钟注入方式写进去。

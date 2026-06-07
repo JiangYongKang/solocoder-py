@@ -96,6 +96,21 @@
 - 所有时间相关操作通过注入的 `Clock.now()` 获取，测试时可用 `ManualClock.advance()` 手动推进时间
 - 无需后台线程，惰性漏出保证时间只前进不后退
 
+## 漏出精度策略
+
+`LeakyBucket._leak()` 内部使用浮点数累积来避免小步长下的精度损失：
+
+- 每次结算时计算 `total_requests_available = elapsed * leak_rate + _leak_fraction`，其中 `_leak_fraction` 保存上次结算后不足 1 个请求的剩余额度
+- 可漏出数量 `can_leak_count = int(total_requests_available)`（向下取整得到整数个请求）
+- 结算后总是将 `_last_leak_time` 推进到当前时间 `now`，剩余额度 `_leak_fraction = total_requests_available - actual_leak` 留到下次结算继续累积
+- 这样即使每次访问只经过很短时间（如 `leak_rate=0.1`、每次 `advance(1.0)`），小数部分也不会因 `int()` 截断而永久丢失，长期累积下漏出总量与理论值一致
+
+## 并发安全保证
+
+- **`LeakyBucket`**：内部持有 `threading.RLock`，所有读写共享状态（`_queue`、`_last_leak_time`、`_leak_fraction`、`_dropped_records`、`_processed_count`）的公共方法和属性都在锁内执行，保证多线程并发 `enqueue`、`current_size`、`get_state`、`peek_next` 等操作不会破坏队列状态
+- **`SubjectLeakyBucketManager`**：内部持有 `threading.RLock`，主体注册/注销、按主体路由入桶等操作均在锁保护下，避免并发场景下字典结构被破坏
+- 两个类的锁均为可重入锁（`RLock`），避免同一线程内嵌套调用产生死锁
+
 ## 使用示例
 
 ### 基础单桶使用

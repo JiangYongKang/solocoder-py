@@ -32,7 +32,7 @@
 | `jitter_ratio` | `float` | `0.2` | 抖动比例（0 到 1 之间） |
 
 主要方法：
-- `calculate_delay(attempt_number, rng=None) -> float`：计算指定尝试序号（从 1 开始）之前的等待时间。第 1 次尝试延迟为 0。
+- `calculate_delay(attempt_number, rng=None) -> float`：计算执行第 `attempt_number` 次尝试**之前**需要等待的时间（秒）。`attempt_number` 从 **1** 开始计数，第 1 次尝试前无需等待，返回 `0.0`；若 `attempt_number < 1` 会抛出 `ValueError`。
 - `should_attempt(attempt_number) -> bool`：判断该尝试序号是否在允许范围内。
 
 ### RetryPolicy（抽象基类）
@@ -41,7 +41,7 @@
 - `RetryAllPolicy`：默认策略，所有异常均视为可重试
 - `RetryNonePolicy`：所有异常均视为不可重试
 - `ExceptionTypePolicy`：基于异常类型的白名单/黑名单策略，支持子类匹配
-- `ErrorCodePolicy`：基于异常属性（如错误码）的白名单/黑名单策略
+- `ErrorCodePolicy`：基于异常属性（如错误码）的白名单/黑名单策略。当配置了 `retryable_codes`（白名单模式）时，缺失代码属性或代码为 `None` 的异常会被视为**不可重试**；仅配置 `non_retryable_codes`（仅黑名单模式）时，缺失代码属性或代码为 `None` 的异常仍视为可重试。
 - `CompositePolicy`：组合多个策略，所有策略均允许时才视为可重试
 
 ### AttemptRecord
@@ -59,39 +59,58 @@
 重试引擎主入口。维护内部尝试轨迹列表，按照策略和分类规则执行目标函数。
 
 主要方法：
-- `execute(func, *args, **kwargs) -> Any`：执行函数，成功返回结果；不可重试失败抛出 `NonRetryableError`；超过最大尝试次数抛出 `MaxAttemptsExceededError`
-- `attempts`：获取尝试轨迹列表（快照）
-- `attempt_count`：当前尝试次数
+- `execute(func, *args, **kwargs) -> Any`：执行函数，成功返回结果；不可重试失败抛出 `NonRetryableError`；超过最大尝试次数抛出 `MaxAttemptsExceededError`。**不会自动清空历史轨迹**，多次调用 `execute()` 会累加历史；上一次运行以 `SUCCESS` 或 `NON_RETRYABLE_FAILURE` 结束时，新运行内部的 `attempt_number` 从 1 重新开始；上一次运行在 `FAILURE` 状态中断时（如进程崩溃），后续 `execute()` 会从下一次尝试继续推进。如需从干净状态开始，显式调用 `reset()`。
+- `attempts`：获取尝试轨迹列表（快照），包含所有历史运行的记录
+- `attempt_count`：当前尝试次数（即轨迹总长度）
 - `last_attempt`：最近一次尝试记录
-- `reset()`：清空尝试轨迹
+- `reset()`：清空尝试轨迹，重置为干净状态
 
 ## 退避时间计算规则
+
+### attempt_number 约定
+
+`calculate_delay(attempt_number)` 的参数 `attempt_number` 从 **1** 开始计数，对应重试序列中的第几次尝试：
+
+| `attempt_number` | 含义 | 返回值 |
+|-----------------|------|--------|
+| 1 | 第 1 次尝试（首次执行） | `0.0`（无需等待） |
+| 2 | 第 2 次尝试（第 1 次重试） | `initial_delay` |
+| 3 | 第 3 次尝试（第 2 次重试） | `initial_delay × backoff_multiplier` |
+| 4 | 第 4 次尝试（第 3 次重试） | `initial_delay × backoff_multiplier²` |
+| … | … | … |
+
+如果 `attempt_number < 1`，方法会抛出 `ValueError`。
+
+### 基础退避公式
 
 设：
 - `D₀` = `initial_delay`（初始延迟）
 - `m` = `backoff_multiplier`（退避倍数）
 - `M` = `max_delay`（最大延迟）
-- `n` = 重试等待的序号（第 1 次重试 n=1，第 2 次重试 n=2，……）
+- `k` = `attempt_number - 1`（已发生的失败次数）
 
-则第 n 次重试前的**基础等待时间**为：
+则第 `attempt_number` 次尝试**之前**的**基础等待时间**为：
 
 ```
-delayₙ = min(D₀ × m^(n-1), M)
+delay = min(D₀ × m^(k-1), M)    （当 attempt_number ≥ 2）
+delay = 0.0                       （当 attempt_number = 1）
 ```
 
-对应 `attempt_number = n + 1`（第 n 次重试对应第 n+1 次尝试）。
+即：
+- `attempt_number = 1` → 首次执行，不等待
+- `attempt_number = n` → 在执行第 n 次尝试前，需要等待 `min(D₀ × m^(n-2), M)` 秒
 
 ### 示例（D₀=1, m=2, M=60）
 
-| attempt | n | delayₙ |
-|---------|---|--------|
-| 1 | — | 0 |
-| 2 | 1 | 1 |
-| 3 | 2 | 2 |
-| 4 | 3 | 4 |
-| 5 | 4 | 8 |
+| attempt_number | 含义 | 等待时间 |
+|----------------|------|----------|
+| 1 | 首次执行 | 0 |
+| 2 | 第 1 次重试 | 1 |
+| 3 | 第 2 次重试 | 2 |
+| 4 | 第 3 次重试 | 4 |
+| 5 | 第 4 次重试 | 8 |
 | ... | ... | ... |
-| 8 | 7 | 60（封顶） |
+| 8 | 第 7 次重试 | 60（封顶） |
 
 ### 启用抖动
 

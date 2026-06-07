@@ -9,6 +9,8 @@ from .models import (
     NotEnoughTokensError,
     TokenBucketConfig,
     TokenBucketState,
+    scaled_to_tokens,
+    tokens_to_scaled,
 )
 
 
@@ -26,7 +28,7 @@ class TokenBucket:
         self._clock: Clock = clock or SystemClock()
         self._lock: threading.Lock = threading.Lock()
         self._state = TokenBucketState(
-            current_tokens=float(capacity),
+            current_tokens_scaled=self._config.capacity_scaled,
             last_refill_time=self._clock.now(),
         )
 
@@ -42,10 +44,12 @@ class TokenBucket:
         elapsed = current_time - self._state.last_refill_time
         if elapsed <= 0:
             return
-        new_tokens = elapsed * self._config.refill_rate_per_second
-        self._state.current_tokens = min(
-            self._state.current_tokens + new_tokens,
-            float(self._config.capacity),
+        new_tokens_scaled = int(round(elapsed * self._config.refill_rate_scaled_per_second))
+        if new_tokens_scaled <= 0:
+            return
+        self._state.current_tokens_scaled = min(
+            self._state.current_tokens_scaled + new_tokens_scaled,
+            self._config.capacity_scaled,
         )
         self._state.last_refill_time = current_time
 
@@ -55,8 +59,9 @@ class TokenBucket:
         with self._lock:
             current_time = self._clock.now()
             self._refill(current_time)
-            if self._state.current_tokens >= tokens:
-                self._state.current_tokens -= tokens
+            requested_scaled = tokens_to_scaled(tokens)
+            if self._state.current_tokens_scaled >= requested_scaled:
+                self._state.current_tokens_scaled -= requested_scaled
                 return True
             return False
 
@@ -71,13 +76,14 @@ class TokenBucket:
         with self._lock:
             current_time = self._clock.now()
             self._refill(current_time)
-            return self._state.current_tokens >= tokens
+            requested_scaled = tokens_to_scaled(tokens)
+            return self._state.current_tokens_scaled >= requested_scaled
 
     def get_available_tokens(self) -> float:
         with self._lock:
             current_time = self._clock.now()
             self._refill(current_time)
-            return self._state.current_tokens
+            return scaled_to_tokens(self._state.current_tokens_scaled)
 
 
 class MultiSubjectTokenBucketLimiter:
@@ -93,7 +99,8 @@ class MultiSubjectTokenBucketLimiter:
         )
         self._clock: Clock = clock or SystemClock()
         self._buckets: Dict[str, TokenBucket] = {}
-        self._buckets_lock: threading.Lock = threading.Lock()
+        self._subject_locks: Dict[str, threading.Lock] = {}
+        self._struct_lock: threading.Lock = threading.Lock()
 
     @property
     def default_capacity(self) -> int:
@@ -103,8 +110,14 @@ class MultiSubjectTokenBucketLimiter:
     def default_refill_rate_per_second(self) -> float:
         return self._global_config.refill_rate_per_second
 
-    def _get_or_create_bucket(self, subject_id: str) -> TokenBucket:
-        with self._buckets_lock:
+    def _get_subject_lock(self, subject_id: str) -> threading.Lock:
+        with self._struct_lock:
+            if subject_id not in self._subject_locks:
+                self._subject_locks[subject_id] = threading.Lock()
+            return self._subject_locks[subject_id]
+
+    def _get_or_create_bucket_locked(self, subject_id: str) -> TokenBucket:
+        with self._struct_lock:
             if subject_id not in self._buckets:
                 self._buckets[subject_id] = TokenBucket(
                     capacity=self._global_config.capacity,
@@ -114,25 +127,33 @@ class MultiSubjectTokenBucketLimiter:
             return self._buckets[subject_id]
 
     def try_acquire(self, subject_id: str, tokens: int = 1) -> bool:
-        bucket = self._get_or_create_bucket(subject_id)
-        return bucket.try_acquire(tokens)
+        subject_lock = self._get_subject_lock(subject_id)
+        with subject_lock:
+            bucket = self._get_or_create_bucket_locked(subject_id)
+            return bucket.try_acquire(tokens)
 
     def acquire(self, subject_id: str, tokens: int = 1) -> None:
-        bucket = self._get_or_create_bucket(subject_id)
-        bucket.acquire(tokens)
+        subject_lock = self._get_subject_lock(subject_id)
+        with subject_lock:
+            bucket = self._get_or_create_bucket_locked(subject_id)
+            bucket.acquire(tokens)
 
     def can_acquire(self, subject_id: str, tokens: int = 1) -> bool:
-        bucket = self._get_or_create_bucket(subject_id)
-        return bucket.can_acquire(tokens)
+        subject_lock = self._get_subject_lock(subject_id)
+        with subject_lock:
+            bucket = self._get_or_create_bucket_locked(subject_id)
+            return bucket.can_acquire(tokens)
 
     def get_available_tokens(self, subject_id: str) -> float:
-        bucket = self._get_or_create_bucket(subject_id)
-        return bucket.get_available_tokens()
+        subject_lock = self._get_subject_lock(subject_id)
+        with subject_lock:
+            bucket = self._get_or_create_bucket_locked(subject_id)
+            return bucket.get_available_tokens()
 
     def has_subject(self, subject_id: str) -> bool:
-        with self._buckets_lock:
+        with self._struct_lock:
             return subject_id in self._buckets
 
     def list_subjects(self) -> list[str]:
-        with self._buckets_lock:
+        with self._struct_lock:
             return list(self._buckets.keys())

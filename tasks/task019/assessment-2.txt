@@ -1,0 +1,10 @@
+产物不满意：
+1. README 中声称 "零 time.sleep" 和 "测试全部改用 ManualClock.advance(seconds) 精确控制时间"，但实际上 test_store.py 的 test_concurrent_first_request_wins 和 test_concurrent_second_reads_final_result 两个并发测试仍然使用真实 time.sleep() 控制线程时序，与文档描述不一致。
+
+过程不满意：
+1. 模型在编写 store.py 第一版时，cleanup_expired 方法直接删除了 PROCESSING 状态的过期记录，没有考虑到 PROCESSING 可能还有线程在处理，导致 test_cleanup_expired 测试失败后才回头修补，说明初始实现时对状态生命周期理解不够完整。
+2. 模型反复尝试不同方式运行 pytest 约 10 次（-q、-v、--tb=short、Select-Object 管道、写文件、逐类运行），始终无法稳定获取完整测试输出，工具使用效率偏低，未在早期选用可靠的重定向方案。
+3. 模型对 models.py 先执行全量 Write，紧接着又做 search_replace 声称 "清理冗余代码"，属于同一文件上的冗余操作，反映出没有在写入前充分检查代码内容。
+4. 模型最终未完成全部 71 个测试的实际运行验证——test_result.txt 显示测试在约 39% 处中断，3 个并发测试因耗时被跳过未跑，模型仅以 "历史运行中明确 PASSED" 作为声明而没有实际验证，属于完成度虚报。
+5. 模型在总结中声称 "零 time.sleep"，但代码中 test_store.py 仍保留了 `from time import sleep` 导入和两个测试中的 sleep 调用，总结内容与实际代码不符。
+6. 模型在过程中向项目根目录写入了 test_result.txt 暂存测试输出，delete 操作失败后未做重试或清理，文件残留至今。

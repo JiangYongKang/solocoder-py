@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Deque, Iterator, Optional
 
-from ..ratelimiter.clock import Clock, SystemClock
+from .clock import Clock, SystemClock
 from .models import (
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
@@ -89,19 +89,21 @@ class CircuitBreaker:
                 f"Circuit breaker is in {self._state.value} state"
             )
         start_time = self._clock.now()
-        success = True
+        success: Optional[bool] = None
         try:
             yield
-        except BaseException:
+            success = True
+        except Exception:
             success = False
             raise
         finally:
-            end_time = self._clock.now()
-            self._record_call(
-                start_time=start_time,
-                end_time=end_time,
-                success=success,
-            )
+            if success is not None:
+                end_time = self._clock.now()
+                self._record_call(
+                    start_time=start_time,
+                    end_time=end_time,
+                    success=success,
+                )
 
     def _record_call(
         self,
@@ -115,26 +117,6 @@ class CircuitBreaker:
 
             self._check_clock_backward(end_time)
 
-            if self._state == CircuitState.HALF_OPEN:
-                self._half_open_probe_count += 1
-                if not success or slow:
-                    self._half_open_failure_observed = True
-
-                if self._half_open_failure_observed:
-                    self._transition_to(
-                        CircuitState.OPEN,
-                        StateChangeReason.HALF_OPEN_FAILURE,
-                    )
-                elif (
-                    self._half_open_probe_count
-                    >= self._config.permitted_number_of_calls_in_half_open_state
-                ):
-                    self._transition_to(
-                        CircuitState.CLOSED,
-                        StateChangeReason.HALF_OPEN_SUCCESS,
-                    )
-                return
-
             if self._state == CircuitState.OPEN:
                 return
 
@@ -147,26 +129,43 @@ class CircuitBreaker:
             self._call_records.append(record)
             self._evict_expired(end_time)
 
-            if self._should_open(end_time):
-                reason = self._get_open_reason(end_time)
-                self._transition_to(CircuitState.OPEN, reason)
+            if self._state == CircuitState.HALF_OPEN:
+                self._half_open_probe_count += 1
+                if not success or slow:
+                    self._half_open_failure_observed = True
 
-    def _should_open(self, current_time: float) -> bool:
+                if self._half_open_failure_observed:
+                    self._transition_to(
+                        CircuitState.OPEN,
+                        StateChangeReason.HALF_OPEN_FAILURE,
+                    )
+                    return
+                if (
+                    self._half_open_probe_count
+                    >= self._config.permitted_number_of_calls_in_half_open_state
+                ):
+                    self._transition_to(
+                        CircuitState.CLOSED,
+                        StateChangeReason.HALF_OPEN_SUCCESS,
+                    )
+                    return
+
+            if self._state == CircuitState.CLOSED:
+                open_reason = self._evaluate_open_condition(end_time)
+                if open_reason is not None:
+                    self._transition_to(CircuitState.OPEN, open_reason)
+
+    def _evaluate_open_condition(
+        self, current_time: float
+    ) -> Optional[StateChangeReason]:
         stats = self._compute_stats(current_time)
         if stats.total_count < self._config.minimum_number_of_calls:
-            return False
-        return (
-            stats.failure_rate >= self._config.failure_rate_threshold
-            or stats.slow_call_rate >= self._config.slow_call_rate_threshold
-        )
-
-    def _get_open_reason(self, current_time: float) -> StateChangeReason:
-        stats = self._compute_stats(current_time)
+            return None
         if stats.failure_rate >= self._config.failure_rate_threshold:
             return StateChangeReason.FAILURE_RATE_THRESHOLD_EXCEEDED
         if stats.slow_call_rate >= self._config.slow_call_rate_threshold:
             return StateChangeReason.SLOW_CALL_RATE_THRESHOLD_EXCEEDED
-        return StateChangeReason.FAILURE_RATE_THRESHOLD_EXCEEDED
+        return None
 
     def _maybe_transition_open_to_half_open(self) -> None:
         if (

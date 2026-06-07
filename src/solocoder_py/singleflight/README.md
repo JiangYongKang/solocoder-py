@@ -8,10 +8,19 @@
 2. **不同 key 并发隔离**：不同 key 的请求完全并行执行，互不阻塞，某个 key 的慢请求不会影响其他 key 的处理效率。
 3. **结果共享与及时清理**：领导者请求完成后，所有等待者获得相同结果；该 key 的进行中记录立即从内部字典中移除，后续新的同 key 请求会重新触发计算。
 4. **失败不缓存**：领导者请求执行失败时，所有等待者获得同一个异常对象；失败不会被长期缓存，下一次同 key 请求会重新执行计算函数。
-5. **超时等待**：等待者可以配置等待超时时间，超时未得到结果会抛出 `WaitTimeoutError`。
+5. **超时等待**：等待者可以配置等待超时时间，超时未得到结果会抛出 `WaitTimeoutError`。超时判断使用可注入的 `Clock` 抽象，便于测试中精确控制时间。
 6. **调用统计**：合并器统计每个 key 的真实执行次数（executions）、共享命中次数（shared_hits）和失败次数（failures）。
+7. **异常分层传播**：仅捕获并共享 `Exception` 级别的业务异常；`BaseException`（如 `KeyboardInterrupt`、`SystemExit`）会原样穿透，不会被当作业务失败传播给等待者。
 
 ## 核心类职责
+
+### clock.py
+
+| 类名 | 职责 |
+|------|------|
+| `Clock` | 时钟抽象接口（ABC），定义 `now() -> float` 方法，返回单调递增的时间戳（秒） |
+| `SystemClock` | 系统默认时钟实现，基于 `time.monotonic()` 返回真实单调时间 |
+| `ManualClock` | 手动控制时钟，提供 `advance()`、`set()` 方法用于测试中精确推进时间 |
 
 ### models.py
 
@@ -26,7 +35,54 @@
 
 | 类名 | 职责 |
 |------|------|
-| `SingleFlight` | 单飞请求合并器，线程安全，维护进行中请求字典和统计字典，提供 `do()` 方法发起合并请求及各类统计查询接口 |
+| `SingleFlight` | 单飞请求合并器，线程安全。可通过构造参数注入自定义 `Clock`；维护进行中请求字典和统计字典，提供 `do()` 方法发起合并请求及各类统计查询接口 |
+
+## 异常传播策略
+
+为避免将系统级信号误判为业务失败，本模块采用分层异常传播策略：
+
+```
+fn() 抛出异常
+    │
+    ├─ 是 Exception 子类（业务异常）
+    │      ├─ 领导者：记录为 call.error，更新 failures 统计
+    │      └─ 等待者：收到同一个 Exception 对象
+    │
+    └─ 是 BaseException 但非 Exception（如 KeyboardInterrupt、SystemExit）
+           ├─ 领导者：不记录统计，仅清理 _calls 条目后原样 re-raise
+           └─ 等待者：不受影响（该异常不会通过 event 传播）
+```
+
+### 设计理由
+
+- `KeyboardInterrupt`、`SystemExit`、`GeneratorExit` 等 `BaseException` 属于进程级控制信号，不属于业务计算的"失败"。
+- 若将此类信号包装后共享给等待者，会导致等待者错误地认为业务逻辑失败，进而触发不必要的重试或告警。
+- 领导者在接收到 `BaseException` 时会先从 `_calls` 中移除该 key，确保后续新请求不会被"死条目"阻塞。
+
+## 时钟注入
+
+### 设计动机
+
+项目中限流器、重试器等模块均采用可注入的 `Clock` 抽象来解耦真实时间，使得超时、窗口计算等逻辑在测试中可被精确控制。单飞模块遵循同一模式。
+
+### 使用方式
+
+```python
+from solocoder_py.singleflight import SingleFlight, SystemClock, ManualClock
+
+# 默认使用 SystemClock
+sf_default = SingleFlight()
+assert isinstance(sf_default.clock, SystemClock)
+
+# 注入自定义时钟（测试场景）
+clock = ManualClock()
+sf_test = SingleFlight(clock=clock)
+assert sf_test.clock is clock
+
+# 手动推进时间
+clock.advance(5.0)
+assert clock.now() == 5.0
+```
 
 ## 并发合并流程
 
@@ -42,12 +98,15 @@ Thread-A (Leader)                Thread-B (Waiter)            Thread-C (Waiter)
      |  execute fn()                  |  call.event.wait()        |  call.event.wait()
      |    ...耗时计算...               |     ......阻塞......      |     ......阻塞......
      |                                |                            |
-     |  store result/error in call    |                            |
-     |  update stats                  |                            |
-     |  remove _calls["k"]            |                            |
-     |  call.event.set() ────────────►│  wake up                  │  wake up
+     |  ┌───────── WITHIN LOCK ────────────────────────────────────────┐
+     |  │  store result/error in call                                    │
+     |  │  update stats                                                  │
+     |  │  self._calls.pop(key, None)   ← 原子移除                       │
+     |  │  call.event.set()              ← 原子唤醒（与 pop 同一临界区）  │
+     |  └───────────────────────────────────────────────────────────────┘
+     |         event signal ───────────►│  wake up                  │  wake up
      |                                |  read result/error        |  read result/error
-     |  return result                 |  return result/raise      |  return result/raise
+     |  return result/raise           |  return result/raise      |  return result/raise
      |                                |                            |
      ▼                                ▼                            ▼
 ```
@@ -56,9 +115,10 @@ Thread-A (Leader)                Thread-B (Waiter)            Thread-C (Waiter)
 
 1. **竞争领导者**：多个线程同时调用 `do(key, fn)` 时，第一个获取锁并发现 `_calls` 中无该 key 的线程成为领导者，负责创建 `_Call` 条目。
 2. **等待者登记**：后续到达的线程发现 `_Call` 已存在，将自身登记为等待者（`call.waiters++`）。
-3. **领导者执行**：领导者释放锁后执行计算函数 `fn()`，将结果或异常写入 `_Call`，更新统计数据，从 `_calls` 中移除条目，最后通过 Event 唤醒所有等待者。
-4. **等待者唤醒**：等待者被唤醒后读取 `_Call` 中的结果或异常，返回给调用方。
-5. **清理完毕**：领导者从 `_calls` 中移除条目后，新请求会重新触发计算，不会复用旧结果。
+3. **领导者执行**：领导者释放锁后执行计算函数 `fn()`。
+4. **原子完成**：领导者完成（成功或失败）后，在同一把锁内完成：写入结果/异常 → 更新统计 → 从 `_calls` 移除条目 → 调用 `call.event.set()` 唤醒所有等待者。这保证了等待者被唤醒时，所有状态均已就绪，不存在"事件已触发但数据未写入"的竞态窗口。
+5. **等待者唤醒**：等待者被唤醒后进入锁内读取 `_Call` 中的结果或异常，返回给调用方。
+6. **清理完毕**：领导者从 `_calls` 中移除条目后，新请求会重新触发计算，不会复用旧结果。
 
 ## 使用示例
 
@@ -166,13 +226,14 @@ except WaitTimeoutError as e:
     print(f"Timed out: {e}")
 ```
 
-### 异常共享与失败重试
+### 异常共享与 BaseException 穿透
 
 ```python
 from solocoder_py.singleflight import SingleFlight
 
 sf = SingleFlight()
 
+# --- 业务异常（Exception）会被共享给等待者 ---
 class ServiceDown(Exception):
     pass
 
@@ -197,6 +258,35 @@ except ServiceDown as e:
 
 result = sf.do("api", flaky_fn)
 print(result)  # success on attempt 3
+
+# --- 系统级信号（BaseException）会穿透 ---
+class FatalSignal(BaseException):
+    pass
+
+try:
+    sf.do("fatal", lambda: (_ for _ in ()).throw(FatalSignal("system")))
+except FatalSignal:
+    print("Fatal signal propagated directly")  # ✓ 不会被包装或共享
+
+stats = sf.get_stats("fatal")
+assert stats is None or stats.executions == 0  # ✓ 不计入失败统计
+```
+
+### 注入 ManualClock 控制时间
+
+```python
+from solocoder_py.singleflight import SingleFlight, ManualClock
+
+clock = ManualClock(start_time=0.0)
+sf = SingleFlight(clock=clock)
+
+assert sf.clock.now() == 0.0
+
+clock.advance(10.0)
+assert sf.clock.now() == 10.0
+
+clock.set(100.0)
+assert sf.clock.now() == 100.0
 ```
 
 ### 调用统计

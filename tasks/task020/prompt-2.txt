@@ -1,0 +1,7 @@
+outbox 包里有几处可以改进的地方，在现有代码上改一改。
+1. claim_next_messages 里用 try/except Exception: continue 把 mark_delivering 抛的所有异常都吞了。如果有消息因为状态非法被拒绝领取，调用方只发现消息没被领到，完全不知道原因，排查起来很困难。
+2. force_to_dead_letter 走 PENDING 路径时做了 PENDING→DELIVERING→FAILED→DEAD_LETTER 的多步跳转。DELIVERING→FAILED 那一步会自动 retry_count += 1，然后代码又手动把 retry_count 设为 max_retries，中间那一次自增纯属多余。
+3. OutboxMessageState 枚举值用了中文（"待投递"、"投递中"），序列化到 JSON 或日志时中文编码在某些工具链下会有兼容风险。
+4. write_with_message 的回滚只在 try/except 里触发，如果 create_business_record 和 create_message 都成功了但外层调用者紧接着崩了，写入的数据就回不掉了。原子写入的边界和责任归属需要明确一下。
+5. 修完跑 python -m pytest tests/outbox/ -q，确保全过。
+6. README 也更新一下，把状态枚举约定、异常传播和原子写入行为写进去。

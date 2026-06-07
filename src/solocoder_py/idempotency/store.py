@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from .clock import Clock, SystemClock
 from .exceptions import (
     IdempotencyError,
     IdempotencyKeyConflictError,
@@ -38,30 +37,29 @@ class IdempotencyResult:
 @dataclass
 class _RecordHolder:
     record: IdempotencyRecord
-    condition: threading.Condition = field(default_factory=threading.Condition)
+    ready: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass
 class IdempotencyStore:
     _records: Dict[str, _RecordHolder] = field(default_factory=dict)
     _global_lock: threading.RLock = field(default_factory=threading.RLock)
-    default_ttl: timedelta = field(default_factory=lambda: timedelta(hours=24))
+    _clock: Clock = field(default_factory=SystemClock)
+    default_ttl_seconds: float = 86400.0
     failure_replay_policy: FailureReplayPolicy = FailureReplayPolicy.REJECT
-    wait_timeout: timedelta = field(default_factory=lambda: timedelta(seconds=30))
-    wait_poll_interval: timedelta = field(default_factory=lambda: timedelta(milliseconds=50))
+    wait_timeout_seconds: float = 30.0
+    wait_poll_interval_seconds: float = 0.05
 
     def __post_init__(self) -> None:
-        if self.default_ttl.total_seconds() <= 0:
-            raise ValueError("default_ttl must be positive")
-        if self.wait_timeout.total_seconds() <= 0:
-            raise ValueError("wait_timeout must be positive")
-        if self.wait_poll_interval.total_seconds() <= 0:
-            raise ValueError("wait_poll_interval must be positive")
+        if self.default_ttl_seconds <= 0:
+            raise ValueError("default_ttl_seconds must be positive")
+        if self.wait_timeout_seconds <= 0:
+            raise ValueError("wait_timeout_seconds must be positive")
+        if self.wait_poll_interval_seconds <= 0:
+            raise ValueError("wait_poll_interval_seconds must be positive")
 
     def _is_expired(self, record: IdempotencyRecord) -> bool:
-        if record.state == IdempotencyState.EXPIRED:
-            return True
-        return datetime.now() >= record.expires_at
+        return record.is_expired(self._clock)
 
     def _expire_if_needed(self, holder: _RecordHolder) -> None:
         if self._is_expired(holder.record):
@@ -71,26 +69,27 @@ class IdempotencyStore:
         self,
         key: str,
         request_fingerprint: str,
-        ttl: Optional[timedelta] = None,
+        ttl_seconds: Optional[float] = None,
     ) -> Tuple[Optional[_RecordHolder], IdempotencyResult]:
-        effective_ttl = ttl if ttl is not None else self.default_ttl
-
-        deadline = datetime.now() + self.wait_timeout
+        effective_ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds
+        deadline = self._clock.now() + self.wait_timeout_seconds
 
         while True:
             with self._global_lock:
                 holder = self._records.get(key)
 
                 if holder is None:
+                    now = self._clock.now()
                     new_record = IdempotencyRecord(
                         key=key,
                         request_fingerprint=request_fingerprint,
-                        expires_at=datetime.now() + effective_ttl,
+                        created_at=now,
+                        expires_at=now + effective_ttl,
                     )
                     new_holder = _RecordHolder(record=new_record)
                     self._records[key] = new_holder
                     return new_holder, IdempotencyResult(
-                        record=new_record,
+                        record=new_record.snapshot(),
                         is_replay=False,
                         should_execute=True,
                     )
@@ -98,14 +97,17 @@ class IdempotencyStore:
                 self._expire_if_needed(holder)
 
                 if holder.record.state == IdempotencyState.EXPIRED:
+                    now = self._clock.now()
                     new_record = IdempotencyRecord(
                         key=key,
                         request_fingerprint=request_fingerprint,
-                        expires_at=datetime.now() + effective_ttl,
+                        created_at=now,
+                        expires_at=now + effective_ttl,
                     )
                     holder.record = new_record
+                    holder.ready.clear()
                     return holder, IdempotencyResult(
-                        record=new_record,
+                        record=new_record.snapshot(),
                         is_replay=False,
                         should_execute=True,
                     )
@@ -117,7 +119,7 @@ class IdempotencyStore:
 
                 if holder.record.state == IdempotencyState.SUCCESS:
                     return None, IdempotencyResult(
-                        record=holder.record,
+                        record=holder.record.snapshot(),
                         is_replay=True,
                         should_execute=False,
                     )
@@ -125,7 +127,7 @@ class IdempotencyStore:
                 if holder.record.state == IdempotencyState.FAILED:
                     if self.failure_replay_policy == FailureReplayPolicy.REPLAY:
                         return None, IdempotencyResult(
-                            record=holder.record,
+                            record=holder.record.snapshot(),
                             is_replay=True,
                             should_execute=False,
                         )
@@ -137,40 +139,39 @@ class IdempotencyStore:
                         holder.record.state = IdempotencyState.PROCESSING
                         holder.record.error_message = None
                         holder.record.response_data = None
-                        holder.record.refresh_ttl(effective_ttl)
+                        holder.record.refresh_ttl(effective_ttl, self._clock)
+                        holder.ready.clear()
                         return holder, IdempotencyResult(
-                            record=holder.record,
+                            record=holder.record.snapshot(),
                             is_replay=False,
                             should_execute=True,
                         )
 
                 if holder.record.state == IdempotencyState.PROCESSING:
-                    condition = holder.condition
+                    ready_event = holder.ready
 
-            with condition:
-                if holder.record.state == IdempotencyState.PROCESSING:
-                    remaining = (deadline - datetime.now()).total_seconds()
-                    if remaining <= 0:
-                        raise IdempotencyKeyConflictError(
-                            f"Timed out waiting for idempotency key '{key}' processing to complete"
-                        )
-                    wait_time = min(remaining, self.wait_poll_interval.total_seconds())
-                    condition.wait(timeout=wait_time)
+            remaining = deadline - self._clock.now()
+            if remaining <= 0:
+                raise IdempotencyKeyConflictError(
+                    f"Timed out waiting for idempotency key '{key}' processing to complete"
+                )
+            wait_for = min(remaining, self.wait_poll_interval_seconds)
+            ready_event.wait(timeout=wait_for)
 
     def begin_request(
         self,
         key: str,
         request_fingerprint: str,
-        ttl: Optional[timedelta] = None,
+        ttl_seconds: Optional[float] = None,
     ) -> IdempotencyResult:
         if not key:
             raise ValueError("key cannot be empty")
         if not request_fingerprint:
             raise ValueError("request_fingerprint cannot be empty")
-        if ttl is not None and ttl.total_seconds() <= 0:
-            raise ValueError("ttl must be positive")
+        if ttl_seconds is not None and ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
 
-        _, result = self._acquire_or_wait(key, request_fingerprint, ttl)
+        _, result = self._acquire_or_wait(key, request_fingerprint, ttl_seconds)
         return result
 
     def complete_success(
@@ -207,12 +208,10 @@ class IdempotencyStore:
                 )
 
             holder.record.mark_success(response_data)
-
-            with holder.condition:
-                holder.condition.notify_all()
+            holder.ready.set()
 
             return IdempotencyResult(
-                record=holder.record,
+                record=holder.record.snapshot(),
                 is_replay=False,
                 should_execute=False,
             )
@@ -253,12 +252,10 @@ class IdempotencyStore:
                 )
 
             holder.record.mark_failed(error_message)
-
-            with holder.condition:
-                holder.condition.notify_all()
+            holder.ready.set()
 
             return IdempotencyResult(
-                record=holder.record,
+                record=holder.record.snapshot(),
                 is_replay=False,
                 should_execute=False,
             )
@@ -268,12 +265,12 @@ class IdempotencyStore:
         key: str,
         request_fingerprint: str,
         operation: Callable[[], Any],
-        ttl: Optional[timedelta] = None,
+        ttl_seconds: Optional[float] = None,
     ) -> IdempotencyResult:
         if not callable(operation):
             raise ValueError("operation must be callable")
 
-        result = self.begin_request(key, request_fingerprint, ttl)
+        result = self.begin_request(key, request_fingerprint, ttl_seconds)
 
         if not result.should_execute:
             return result
@@ -294,16 +291,7 @@ class IdempotencyStore:
             if holder is None:
                 return None
             self._expire_if_needed(holder)
-            record = holder.record
-            return IdempotencyRecord(
-                key=record.key,
-                request_fingerprint=record.request_fingerprint,
-                state=record.state,
-                response_data=record.response_data,
-                error_message=record.error_message,
-                created_at=record.created_at,
-                expires_at=record.expires_at,
-            )
+            return holder.record.snapshot()
 
     def exists(self, key: str) -> bool:
         return self.get_record(key) is not None
@@ -330,6 +318,8 @@ class IdempotencyStore:
         with self._global_lock:
             expired_keys = []
             for key, holder in self._records.items():
+                if holder.record.state == IdempotencyState.PROCESSING:
+                    continue
                 if self._is_expired(holder.record):
                     expired_keys.append(key)
             for key in expired_keys:

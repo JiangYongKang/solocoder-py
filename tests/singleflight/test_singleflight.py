@@ -6,9 +6,12 @@ import time
 import pytest
 
 from solocoder_py.singleflight import (
+    Clock,
     KeyStats,
+    ManualClock,
     SingleFlight,
     SingleFlightError,
+    SystemClock,
     WaitTimeoutError,
 )
 
@@ -45,6 +48,55 @@ class TestKeyStatsModel:
     def test_key_stats_negative_failures_rejected(self):
         with pytest.raises(ValueError, match="failures cannot be negative"):
             KeyStats(key="k", failures=-1)
+
+
+class TestClock:
+    def test_system_clock_returns_monotonic(self):
+        clock = SystemClock()
+        t1 = clock.now()
+        time.sleep(0.01)
+        t2 = clock.now()
+        assert t2 >= t1
+
+    def test_manual_clock_initial_value(self):
+        clock = ManualClock()
+        assert clock.now() == 0.0
+
+    def test_manual_clock_custom_start(self):
+        clock = ManualClock(start_time=100.5)
+        assert clock.now() == 100.5
+
+    def test_manual_clock_advance(self):
+        clock = ManualClock()
+        clock.advance(5.0)
+        assert clock.now() == 5.0
+        clock.advance(2.5)
+        assert clock.now() == 7.5
+
+    def test_manual_clock_set(self):
+        clock = ManualClock()
+        clock.set(42.0)
+        assert clock.now() == 42.0
+
+    def test_manual_clock_advance_negative_rejected(self):
+        clock = ManualClock()
+        with pytest.raises(ValueError, match="Cannot advance by negative seconds"):
+            clock.advance(-1)
+
+    def test_clock_is_abc(self):
+        with pytest.raises(TypeError):
+            Clock()
+
+
+class TestSingleFlightDefaultClock:
+    def test_default_clock_is_system_clock(self):
+        sf = make_sf()
+        assert isinstance(sf.clock, SystemClock)
+
+    def test_custom_clock_injected(self):
+        clock = ManualClock()
+        sf = make_sf(clock=clock)
+        assert sf.clock is clock
 
 
 class TestSingleRequestNoMerge:
@@ -278,6 +330,65 @@ class TestWaitTimeout:
 
     def test_timeout_error_is_single_flight_error(self):
         assert issubclass(WaitTimeoutError, SingleFlightError)
+
+
+class TestExceptionPropagation:
+    def test_regular_exception_is_shared_with_waiters(self):
+        sf = make_sf()
+        barrier = threading.Barrier(3)
+        errors = []
+
+        class CustomError(Exception):
+            pass
+
+        def worker():
+            barrier.wait()
+            def fn():
+                time.sleep(0.05)
+                raise CustomError("business error")
+            try:
+                sf.do("fail-key", fn)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert len(errors) == 3
+        for e in errors:
+            assert isinstance(e, CustomError)
+            assert str(e) == "business error"
+
+    def test_base_exception_not_captured_as_failure(self):
+        sf = make_sf()
+
+        class FatalSignal(BaseException):
+            pass
+
+        with pytest.raises(FatalSignal):
+            sf.do("fatal", lambda: (_ for _ in ()).throw(FatalSignal("system signal")))
+
+        stats = sf.get_stats("fatal")
+        assert stats is None or stats.executions == 0
+
+        assert sf.in_flight_count("fatal") == 0
+
+    def test_regular_exception_counts_as_failure(self):
+        sf = make_sf()
+
+        class BizError(Exception):
+            pass
+
+        with pytest.raises(BizError):
+            sf.do("biz", lambda: (_ for _ in ()).throw(BizError("oops")))
+
+        stats = sf.get_stats("biz")
+        assert stats is not None
+        assert stats.executions == 1
+        assert stats.failures == 1
 
 
 class TestLeaderFailure:

@@ -1,0 +1,6 @@
+retry 引擎的一些边界行为可以做得更好，在现有代码上改一下。
+1. RetryEngine.execute 每次都被 reset() 清空历史尝试记录。如果调用方想分多次调用 execute 来推进重试（比如跨进程恢复场景），之前的轨迹就全丢了。execute 应该保留历史，而不是每次都推倒重来。
+2. RetryStrategy.calculate_delay 在 attempt_number <= 1 时返回 0.0，意味着第一次执行的延迟是 0、第二次才开始退避。但这个约定文档里没提，调用方看到 attempt_number 这个名字也不会想到从 1 起计是什么含义。
+3. ErrorCodePolicy._get_code 用 str() 转异常上的 code 再和 Set[str] 比对，如果 code 是 None 就直接返回 None 然后被当作可重试——这个兜底对于没有 code 属性的异常太宽松了，不该重试的也可能被放行。
+4. 验证方式：python -m pytest tests/retry/ -q 全过。
+5. README 的退避时间计算说明里补上 attempt_number 的起始约定和 calculate_delay 的返回值含义。

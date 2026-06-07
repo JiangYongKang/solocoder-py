@@ -1,0 +1,8 @@
+产物不满意：
+1. execute 移除了 reset() 调用并引入 _current_run_attempt_count 反向扫描历史来判定当前运行内尝试序号，功能正确，但 MaxAttemptsExceededError 抛出后历史中只留下 FAILURE 记录且无终止状态，此时再次调用 execute 会因为 _current_run_attempt_count 扫出全部 FAILURE 记录导致 attempt_number 超限立即报错，引擎进入不可恢复状态，而 README 和代码注释都没有说明这种场景下必须先调 reset()。
+2. ErrorCodePolicy 修复中引入了模块级 _MISSING 哨兵来区分"异常无 code 属性"和"code 属性值为 None"，但在 _get_code 里两者最终都返回 None，在 is_retryable 中被完全同等对待，哨兵没有产生任何行为差异，属于增加了代码复杂度但没有实际价值的改动。
+过程不满意：
+1. 模型在读完 4 个源文件后立即创建 TodoList（第 60-65 行），没有先分析每个具体问题再规划任务，创建 TodoList 的时机过早。
+2. 模型先查看了 engine.py（第 10-18 行），做了一次编辑后又马上重新查看同一文件（第 118-124 行），整个文件内容已载入上下文，重复读取属于信息获取效率低。
+3. resume_mid_run 测试的初始版本逻辑有误（call_count 在崩溃时已经是 2，第二次 execute 直接就成功了），模型是在运行测试发现失败后才意识到并修正（第 407-435 行），说明测试逻辑在编写时没有充分推演。
+4. 模型在跑完第一次测试后遇到终端异常，后续又重复跑了两轮测试（第 444-466 行），虽然终端问题不完全算模型责任，但多轮重复跑同一个命令没有产出新信息，过程不够高效。

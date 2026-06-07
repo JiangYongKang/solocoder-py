@@ -11,6 +11,8 @@
 - **半开探测恢复**：冷却时间结束后进入半开状态，有限次探测请求全部成功则恢复关闭
 - **可注入时钟**：时间来源可通过依赖注入替换，便于在测试中精确控制时间流逝
 - **状态可观测**：支持查询当前状态、窗口统计数据、最近一次状态切换原因及时间
+- **异常隔离策略**：仅将业务异常（`Exception` 子类）计为调用失败；系统级异常（如 `KeyboardInterrupt`、`SystemExit`）不会被纳入熔断统计
+- **全状态统计时效性**：CLOSED 与 HALF_OPEN 状态下的所有调用都会写入滑动窗口，`get_window_stats()` 始终反映最新的调用情况
 
 ## 核心类职责
 
@@ -72,7 +74,8 @@
 - `state` 属性：获取当前状态（会触发 OPEN → HALF_OPEN 的自动转换检查）
 - `is_call_permitted() -> bool`：非消耗性检查当前是否允许通过请求
 - `acquire()` 上下文管理器：包裹业务调用，自动记录结果与耗时；被拒绝时抛出 `CircuitBreakerOpenError`
-- `get_window_stats() -> WindowStats`：获取当前滑动窗口的统计快照
+  - 异常捕获策略：仅捕获 `Exception` 子类并计为调用失败。`BaseException` 类的系统级异常（如 `KeyboardInterrupt`、`SystemExit`）会原样向上抛出，且**不会**被熔断器记录为成功或失败，避免误将用户中断/进程退出计入失败率
+- `get_window_stats() -> WindowStats`：获取当前滑动窗口的统计快照（HALF_OPEN 期间的探测请求也会计入统计）
 - `last_state_change_event` 属性：获取最近一次状态切换事件
 
 ### 异常类
@@ -81,9 +84,10 @@
 - `CircuitBreakerOpenError`：熔断器打开时尝试调用被拒绝
 - `InvalidConfigError`：配置参数不合法
 
-### Clock（从 ratelimiter 模块复用）
-时间来源抽象接口。
+### Clock
+时间来源抽象接口（本模块自带独立实现，不依赖其他包）。
 
+- `Clock`：抽象基类，定义 `now()` 方法返回当前时间戳
 - `SystemClock`：默认实现，使用系统单调时钟（`time.monotonic()`）
 - `ManualClock`：手动时钟，用于测试，通过 `advance()` 推进或 `set()` 设置时间
 
@@ -98,7 +102,7 @@
      │                                    │ 冷却时间结束
      │                                    ▼
      │                                HALF_OPEN
-     │                                    │
+     │     (探测请求同时写入窗口统计)      │
      │           探测全部成功              │
      └────────────────────────────────────┘
                     探测失败/慢调用
@@ -110,6 +114,8 @@
 2. **OPEN → HALF_OPEN**：在 OPEN 状态停留时间 ≥ `wait_duration_in_open_state`（自动转换）
 3. **HALF_OPEN → OPEN**：任意一次探测请求失败或判定为慢调用
 4. **HALF_OPEN → CLOSED**：已完成的探测请求数达到 `permitted_number_of_calls_in_half_open_state` 且全部成功
+5. CLOSED 与 HALF_OPEN 状态下的调用都会写入滑动窗口，OPEN 状态下的调用不记录
+6. 切换至 CLOSED 时会清空窗口统计，开始新一轮数据采集
 
 ## 使用示例
 
@@ -145,6 +151,8 @@ def call_downstream():
         return get_fallback()
     except Exception as e:
         # 业务异常会被熔断器记录为失败并重新抛出
+        # 注意：KeyboardInterrupt / SystemExit 等系统异常不会被熔断器捕获，
+        # 它们会直接向上传播且不计入统计
         raise
 ```
 
@@ -171,9 +179,14 @@ assert breaker.state.value == "OPEN"
 clock.advance(30.0)
 assert breaker.state.value == "HALF_OPEN"
 
-# 半开探测成功
+# 半开探测期间也会写入窗口统计
+stats_before = breaker.get_window_stats()
 with breaker.acquire():
     clock.advance(0.1)
+stats_after = breaker.get_window_stats()
+assert stats_after.total_count == stats_before.total_count + 1
+
+# 半开探测成功
 with breaker.acquire():
     clock.advance(0.1)
 with breaker.acquire():

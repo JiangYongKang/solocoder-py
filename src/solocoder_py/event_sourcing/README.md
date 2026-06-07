@@ -49,18 +49,25 @@
     ▼
 EventStore.save_aggregate(aggregate)
     │
-    │ ① 计算 expected_version = aggregate.version - len(pending)
-    │ ② append_events(id, pending, expected_version)
-    │    ├── 校验：存储当前版本 == expected_version → 否则 VersionConflictError
-    │    ├── 校验：每个事件版本号连续且匹配 → 否则 EventVersionGapError
-    │    ├── 校验：不覆盖已有事件 → 否则 EventOverwriteError
-    │    └── 追加到事件流
+    │ 在单一线程锁保护下原子执行：
+    │   ① 计算 expected_version = aggregate.version - len(pending)
+    │   ② append_events(id, pending, expected_version)
+    │      ├── 校验：存储当前版本 == expected_version → 否则 VersionConflictError
+    │      ├── 校验：每个事件版本号连续且匹配 → 否则 EventVersionGapError
+    │      ├── 校验：不覆盖已有事件 → 否则 EventOverwriteError
+    │      └── 追加到事件流
+    │   ③ 若 should_create_snapshot()，在内存中构造快照对象并保存
     │
-    │ ③ 若 should_create_snapshot()，则自动创建快照
-    │ ④ 清除聚合根的 pending_events
+    │ ④ 仅在上述步骤全部成功后，清除聚合根的 pending_events
+    │    —— 任何异常均不会提前清除 pending_events，便于调用方重试
     ▼
 完成
 ```
+
+**save_aggregate 行为约定**：
+- 原子性：事件追加与快照创建在同一把锁内完成，要么都成功，要么都不产生可见副作用（快照构造本身失败时事件同样已写入，由 `Snapshot` 的 `__post_init__` 校验保证构造失败前不会写入存储）。
+- 幂等安全：无 `pending_events` 时直接返回，不做任何写入。
+- 异常语义：抛异常时 `aggregate.pending_events` 保持不变，调用方可选择重新加载聚合后再次提交。
 
 ### 读取流程（从快照 + 增量事件恢复）
 
@@ -80,6 +87,12 @@ EventStore.load_aggregate(id, AggregateClass)
     ▼
 返回完整状态的聚合根实例
 ```
+
+**版本约束说明**：
+- 事件版本号从 `1` 开始连续递增；`Snapshot.version` 允许为 `0`，表示"聚合创建前"的初始快照。
+- `get_events(id, from_version=0)` 与省略 `from_version` 等价，返回所有事件（即从版本 1 起的完整事件流），与 `Snapshot.version == 0` 对齐使用。
+- `get_events(id, to_version=0)` 返回空列表。
+- `from_version` 与 `to_version` 均不允许为负数。
 
 ### 快照触发策略
 

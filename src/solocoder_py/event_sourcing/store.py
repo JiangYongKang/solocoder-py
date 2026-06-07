@@ -91,13 +91,14 @@ class EventStore:
             result = list(stream)
 
             if from_version is not None:
-                if from_version <= 0:
-                    raise ValueError("from_version must be positive")
-                result = [e for e in result if e.version >= from_version]
+                if from_version < 0:
+                    raise ValueError("from_version cannot be negative")
+                if from_version > 0:
+                    result = [e for e in result if e.version >= from_version]
 
             if to_version is not None:
-                if to_version <= 0:
-                    raise ValueError("to_version must be positive")
+                if to_version < 0:
+                    raise ValueError("to_version cannot be negative")
                 result = [e for e in result if e.version <= to_version]
 
             if event_type is not None:
@@ -215,10 +216,23 @@ class EventStore:
             return
 
         current_version = aggregate.version - len(pending)
-        self.append_events(aggregate.id, pending, expected_version=current_version)
 
-        if self.should_create_snapshot(aggregate.id):
-            self.create_snapshot(aggregate)
+        with self._lock:
+            self.append_events(
+                aggregate.id, pending, expected_version=current_version
+            )
+
+            snapshot_to_save: Optional[Snapshot] = None
+            if self.should_create_snapshot(aggregate.id):
+                snapshot_to_save = Snapshot(
+                    aggregate_id=aggregate.id,
+                    aggregate_type=aggregate.get_aggregate_type(),
+                    state=aggregate.get_snapshot_state(),
+                    version=aggregate.version,
+                )
+
+            if snapshot_to_save is not None:
+                self.save_snapshot(snapshot_to_save)
 
         aggregate.clear_pending_events()
 
@@ -237,11 +251,8 @@ class EventStore:
 
             all_events: List[DomainEvent] = []
             for aid in self._events:
-                try:
-                    evts = self.get_events(aid, from_version, to_version, event_type)
-                    all_events.extend(evts)
-                except AggregateNotFoundError:
-                    pass
+                evts = self.get_events(aid, from_version, to_version, event_type)
+                all_events.extend(evts)
 
             all_events.sort(key=lambda e: (e.occurred_at, e.version))
             return all_events

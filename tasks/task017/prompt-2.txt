@@ -1,0 +1,5 @@
+token_bucket 限流器有两个隐患，在当前包内修掉。
+1. current_tokens 用 float 但 capacity 是 int，长时间运算后浮点误差会累积，边界上可能出现 2.9999999 >= 3 返回 False 的精度问题。
+2. MultiSubjectTokenBucketLimiter 用 _buckets_lock 保护桶字典，TokenBucket 内部用 _lock 保护桶状态，但 get_or_create 和 try_acquire 之间不是原子的。桶取出来后到真正扣减之间，外部可能已经改了桶的状态，两层锁没解决跨步操作的原子性问题。
+3. 修完跑一下 python -m pytest tests/token_bucket/ -q，全部通过。
+4. README 同步更新，把精度保证和并发安全约定写清楚。

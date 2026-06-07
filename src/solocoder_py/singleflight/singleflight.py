@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
+from .clock import Clock, SystemClock
 from .models import KeyStats, WaitTimeoutError, _Call
 
 
 @dataclass
 class SingleFlight:
+    clock: Clock = field(default_factory=SystemClock)
     _calls: Dict[str, _Call] = field(default_factory=dict)
     _stats: Dict[str, KeyStats] = field(default_factory=dict)
     _mu: threading.Lock = field(default_factory=threading.Lock)
@@ -43,7 +44,7 @@ class SingleFlight:
                 is_leader = False
 
         if is_leader:
-            leader_error: Optional[BaseException] = None
+            leader_error: Optional[Exception] = None
             leader_result: Any = None
             try:
                 try:
@@ -55,7 +56,9 @@ class SingleFlight:
                         stats = self._get_or_create_stats(key)
                         stats.executions += 1
                         stats.shared_hits += call.waiters
-                except BaseException as e:
+                        self._calls.pop(key, None)
+                        call.event.set()
+                except Exception as e:
                     leader_error = e
                     with self._mu:
                         call.result = None
@@ -65,22 +68,24 @@ class SingleFlight:
                         stats.executions += 1
                         stats.shared_hits += call.waiters
                         stats.failures += 1
-            finally:
+                        self._calls.pop(key, None)
+                        call.event.set()
+            except BaseException:
                 with self._mu:
                     self._calls.pop(key, None)
-                call.event.set()
+                raise
             if leader_error is not None:
                 raise leader_error
             return leader_result
         else:
             deadline: Optional[float] = None
             if timeout is not None:
-                deadline = time.monotonic() + timeout
+                deadline = self.clock.now() + timeout
 
             while True:
                 remaining: Optional[float] = None
                 if deadline is not None:
-                    remaining = deadline - time.monotonic()
+                    remaining = deadline - self.clock.now()
                     if remaining <= 0:
                         with self._mu:
                             if not call.done:

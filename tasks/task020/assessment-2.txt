@@ -1,0 +1,6 @@
+产物不满意：
+1. README 的「异常传播策略」章节说 claim_next_messages "对于状态非法、数据损坏等其他异常，直接抛出"，但代码实际通过 can_transition_to 预检查让无法转移的消息静默跳过，既没抛出异常也没记录任何信息，文档对行为的描述与代码实现不一致。
+2. force_to_dead_letter 新增了 PENDING→DEAD_LETTER 和 DELIVERING→DEAD_LETTER 两条合法转移，但测试只覆盖了 PENDING→DEAD_LETTER 路径，没有显式验证 DELIVERING→DEAD_LETTER 和通过 force_to_dead_letter 从 FAILED 直接转死信的路径，新增转移规则缺少独立测试覆盖。
+
+过程不满意：
+1. 模型在收到任务后第一件事就是创建 TodoList（"好的，我来逐步改进这些问题。先创建任务列表："），没有先读取和分析现有代码。按照规范要求，应先分析问题再规划，不能刚收到任务就直接列清单。

@@ -1,0 +1,8 @@
+产物不满意：
+1. 测试文件 test_models.py 中直接 import 了模块私有常量 _TOKEN_SCALE（第12行），TestTokenBucketConfigScaled 和 TestTokenPrecisionHelpers 中的断言都用 _TOKEN_SCALE 构造期望值。_TOKEN_SCALE 是模块实现细节，测试应该通过公开的 tokens_to_scaled / scaled_to_tokens 函数完成验证，直接依赖私有常量耦合了实现细节。
+2. refill_rate_scaled_per_second 属性返回类型是 float，refill 计算时 elapsed * refill_rate_scaled_per_second 仍经过浮点乘法，round 能纠偏但不能消除单次乘法产生的微小偏差。README 里写"经过极长时间整数存储也不会累积误差"不够准确，单次 refill 计算仍受浮点精度影响，只是 round 把偏差控制在 0.5 微令牌以内。
+
+过程不满意：
+1. 模型在收到任务后立刻创建了 TodoList（session-cot-2.md 第2-10行），没有先通读代码分析两个问题的根因和影响范围就直接做规划，违反了标注规范中"应先分析问题再规划"的要求。
+2. 模型用 Write 工具整体重写 models.py 和 limiter.py，而非用 StrReplace 做精准编辑。重写后第一次运行测试就失败（第92-98行），原因是字段名从 current_tokens 改为 current_tokens_scaled 后测试代码没有同步更新。说明改动前没有用搜索工具检查所有 current_tokens 的引用点，规划不周全。
+3. 修复并发原子性问题后，思考过程中没有任何关于并发测试是否充分覆盖修复场景的讨论，也没有新增针对性测试验证 get_or_create 与 try_acquire 之间不再存在竞态窗口。改动触碰线程安全但缺少验证闭环。

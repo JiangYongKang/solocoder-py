@@ -487,3 +487,128 @@ class TestThresholdExactly:
         stats = breaker.get_window_stats()
         assert stats.slow_call_rate == 0.5
         assert breaker.state == CircuitState.OPEN
+
+
+class TestBaseExceptionNotCounted:
+    def test_system_exit_not_recorded_as_failure(self):
+        clock = ManualClock()
+        breaker = _make_breaker(
+            clock,
+            minimum_number_of_calls=5,
+            failure_rate_threshold=0.5,
+        )
+        _run_success(breaker, clock, n=3)
+        try:
+            with breaker.acquire():
+                clock.advance(0.1)
+                raise SystemExit(1)
+        except SystemExit:
+            pass
+        stats = breaker.get_window_stats()
+        assert stats.total_count == 3
+        assert stats.failure_count == 0
+
+    def test_keyboard_interrupt_not_recorded_as_failure(self):
+        clock = ManualClock()
+        breaker = _make_breaker(
+            clock,
+            minimum_number_of_calls=5,
+            failure_rate_threshold=0.5,
+        )
+        _run_success(breaker, clock, n=2)
+        try:
+            with breaker.acquire():
+                clock.advance(0.1)
+                raise KeyboardInterrupt()
+        except KeyboardInterrupt:
+            pass
+        stats = breaker.get_window_stats()
+        assert stats.total_count == 2
+        assert stats.failure_count == 0
+        assert breaker.state == CircuitState.CLOSED
+
+    def test_generator_exit_not_recorded_as_failure(self):
+        clock = ManualClock()
+        breaker = _make_breaker(
+            clock,
+            minimum_number_of_calls=5,
+            failure_rate_threshold=0.5,
+        )
+        try:
+            with breaker.acquire():
+                clock.advance(0.1)
+                raise GeneratorExit()
+        except GeneratorExit:
+            pass
+        stats = breaker.get_window_stats()
+        assert stats.total_count == 0
+
+
+class TestHalfOpenStatsTimeliness:
+    def test_half_open_probes_recorded_in_window_stats(self):
+        clock = ManualClock()
+        breaker = _make_breaker(
+            clock,
+            window_seconds=600.0,
+            minimum_number_of_calls=5,
+            failure_rate_threshold=0.5,
+            permitted_number_of_calls_in_half_open_state=3,
+            wait_duration_in_open_state=30.0,
+        )
+        _run_failure(breaker, clock, n=5)
+        assert breaker.state == CircuitState.OPEN
+        open_stats = breaker.get_window_stats()
+        assert open_stats.total_count == 5
+
+        clock.advance(30.0)
+        assert breaker.state == CircuitState.HALF_OPEN
+
+        _run_success(breaker, clock, n=1, duration=0.1)
+        mid_stats = breaker.get_window_stats()
+        assert mid_stats.total_count == 6
+        assert mid_stats.success_count == open_stats.success_count + 1
+
+        _run_success(breaker, clock, n=2, duration=0.1)
+        assert breaker.state == CircuitState.CLOSED
+
+    def test_half_open_failure_recorded_in_stats_before_reopen(self):
+        clock = ManualClock()
+        breaker = _make_breaker(
+            clock,
+            window_seconds=600.0,
+            minimum_number_of_calls=5,
+            failure_rate_threshold=0.5,
+            permitted_number_of_calls_in_half_open_state=3,
+            wait_duration_in_open_state=30.0,
+        )
+        _run_failure(breaker, clock, n=5)
+        clock.advance(30.0)
+        assert breaker.state == CircuitState.HALF_OPEN
+
+        _run_success(breaker, clock, n=1)
+        try:
+            with breaker.acquire():
+                clock.advance(0.1)
+                raise RuntimeError("probe failed")
+        except RuntimeError:
+            pass
+        event = breaker.last_state_change_event
+        assert event.reason == StateChangeReason.HALF_OPEN_FAILURE
+        assert event.stats is not None
+        assert event.stats.total_count == 7
+        assert event.stats.failure_count == 6
+
+
+class TestModuleIndependence:
+    def test_clock_classes_defined_in_circuit_breaker_package(self):
+        import solocoder_py.circuit_breaker as cb
+        assert cb.Clock.__module__.startswith("solocoder_py.circuit_breaker")
+        assert cb.SystemClock.__module__.startswith("solocoder_py.circuit_breaker")
+        assert cb.ManualClock.__module__.startswith("solocoder_py.circuit_breaker")
+
+    def test_manual_clock_works_standalone(self):
+        import solocoder_py.circuit_breaker as cb
+        clock = cb.ManualClock(start_time=42.0)
+        assert clock.now() == 42.0
+        clock.advance(8.0)
+        assert clock.now() == 50.0

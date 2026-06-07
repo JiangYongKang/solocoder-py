@@ -9,6 +9,11 @@ from solocoder_py.token_bucket import (
     TokenBucketError,
     TokenBucketState,
 )
+from solocoder_py.token_bucket.models import (
+    _TOKEN_SCALE,
+    scaled_to_tokens,
+    tokens_to_scaled,
+)
 
 
 class TestTokenBucketConfig:
@@ -39,17 +44,42 @@ class TestTokenBucketConfig:
             config.capacity = 20
 
 
+class TestTokenBucketConfigScaled:
+    def test_capacity_scaled(self):
+        config = TokenBucketConfig(capacity=10, refill_rate_per_second=5.0)
+        assert config.capacity_scaled == 10 * _TOKEN_SCALE
+
+    def test_refill_rate_scaled_per_second(self):
+        config = TokenBucketConfig(capacity=10, refill_rate_per_second=2.5)
+        assert config.refill_rate_scaled_per_second == 2.5 * _TOKEN_SCALE
+
+
+class TestTokenPrecisionHelpers:
+    def test_tokens_to_scaled_integer(self):
+        assert tokens_to_scaled(3) == 3 * _TOKEN_SCALE
+
+    def test_tokens_to_scaled_float(self):
+        assert tokens_to_scaled(2.5) == int(round(2.5 * _TOKEN_SCALE))
+
+    def test_scaled_to_tokens(self):
+        assert scaled_to_tokens(3 * _TOKEN_SCALE) == 3.0
+
+    def test_roundtrip_precision(self):
+        for value in [0, 1, 100, 0.5, 2.5, 0.000001]:
+            assert abs(scaled_to_tokens(tokens_to_scaled(value)) - value) < 1e-6
+
+
 class TestTokenBucketState:
     def test_state_initialization(self):
-        state = TokenBucketState(current_tokens=5.0, last_refill_time=100.0)
-        assert state.current_tokens == 5.0
+        state = TokenBucketState(current_tokens_scaled=5 * _TOKEN_SCALE, last_refill_time=100.0)
+        assert state.current_tokens_scaled == 5 * _TOKEN_SCALE
         assert state.last_refill_time == 100.0
 
     def test_state_mutable(self):
-        state = TokenBucketState(current_tokens=5.0, last_refill_time=100.0)
-        state.current_tokens = 8.0
+        state = TokenBucketState(current_tokens_scaled=5 * _TOKEN_SCALE, last_refill_time=100.0)
+        state.current_tokens_scaled = 8 * _TOKEN_SCALE
         state.last_refill_time = 200.0
-        assert state.current_tokens == 8.0
+        assert state.current_tokens_scaled == 8 * _TOKEN_SCALE
         assert state.last_refill_time == 200.0
 
 

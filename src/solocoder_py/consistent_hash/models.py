@@ -9,7 +9,7 @@ class NodeInfo:
     node_id: str
     virtual_nodes: int
     weight: float
-    estimated_key_count: int = 0
+    hash_space_share: float = 0.0
 
 
 @dataclass

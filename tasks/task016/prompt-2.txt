@@ -1,0 +1,6 @@
+consistent_hash 的哈希环在特定场景下有 BUG，在现有代码里改好。
+1. _estimate_key_count 算的是 HASH_SPACE * (vnodes / total)，返回的是哈希空间占比（2^32 空间下的范围大小），不是真的 key 数量。方法名和 NodeInfo.estimated_key_count 字段名都暗示"这是 key 计数"，语义对不上。
+2. add_node 在哈希碰撞时生成的后缀是 "{node_id}#{i}#{h}"（h 是哈希值），但 remove_node 找虚拟节点时用的是 alt 递增扫描，两边后缀生成规则不一致。一旦 add 阶段真撞了，remove 就找不到匹配项然后死循环。
+3. VirtualNodeInfo 定义在 models.py 但没有从 __init__.py 暴露出去，RingSnapshot.virtual_nodes 的类型是 list[VirtualNodeInfo]，外面拿到快照想用这个类型却发现 import 不了。
+4. 改完确保 python -m pytest tests/consistent_hash/ -q 全绿。
+5. README 里补上节点删除时碰撞处理逻辑的说明和公开接口的变化。

@@ -35,7 +35,7 @@ class KeyStats:
 class _Call:
     key: str
     result: Any = None
-    error: Optional[BaseException] = None
+    error: Optional[Exception] = None
     done: bool = False
     waiters: int = 0
 

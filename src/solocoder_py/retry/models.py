@@ -55,7 +55,10 @@ class RetryStrategy:
             )
 
     def calculate_delay(self, attempt_number: int, rng: Optional[random.Random] = None) -> float:
-        if attempt_number <= 1:
+        if attempt_number < 1:
+            raise ValueError("attempt_number must be >= 1")
+
+        if attempt_number == 1:
             return 0.0
 
         exponent = attempt_number - 2
