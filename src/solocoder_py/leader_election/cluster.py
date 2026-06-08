@@ -3,10 +3,11 @@ from __future__ import annotations
 import random
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from .clock import Clock, SystemClock
+from .clock import Clock, ManualClock, SystemClock
 from .enums import NodeState
 from .exceptions import (
     AlreadyVotedError,
@@ -90,9 +91,14 @@ class LeaderElectionCluster:
         while not self._auto_election_stop_event.is_set():
             try:
                 self.check_and_run_elections()
-            except LeaderElectionError:
-                pass
-            time.sleep(self.auto_election_interval)
+            except Exception:
+                traceback.print_exc()
+            try:
+                self.clock.sleep(self.auto_election_interval)
+            except Exception:
+                traceback.print_exc()
+            if isinstance(self.clock, ManualClock):
+                time.sleep(0.001)
 
     @property
     def majority_count(self) -> int:

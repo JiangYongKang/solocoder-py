@@ -685,3 +685,99 @@ class TestAutoElectionBackgroundThread:
             assert cluster.leader_id == original_leader
         finally:
             cluster.stop_auto_election()
+
+
+class TestAutoElectionWithManualClock:
+    def test_auto_election_uses_clock_sleep_not_time_sleep(self, manual_clock):
+        cluster = LeaderElectionCluster(
+            node_count=3,
+            clock=manual_clock,
+            election_timeout_seconds=2.0,
+            auto_election_interval=0.5,
+        )
+        assert len(manual_clock.sleep_history) == 0
+
+        try:
+            cluster.start_auto_election()
+            import time as real_time
+            real_time.sleep(0.1)
+
+            assert len(manual_clock.sleep_history) >= 1
+            assert manual_clock.sleep_history[0] == 0.5
+
+            real_time.sleep(0.15)
+            assert len(manual_clock.sleep_history) >= 2
+        finally:
+            cluster.stop_auto_election()
+
+    def test_manual_clock_auto_election_triggers_when_time_advances(self, manual_clock):
+        cluster = LeaderElectionCluster(
+            node_count=3,
+            clock=manual_clock,
+            election_timeout_seconds=2.0,
+            auto_election_interval=0.5,
+        )
+        cluster.run_election("node-0")
+        cluster.partition_node("node-0")
+        cluster._leader_id = None
+        cluster.get_node("node-0").step_down()
+
+        try:
+            cluster.start_auto_election()
+            import time as real_time
+
+            deadline = real_time.monotonic() + 3.0
+            while real_time.monotonic() < deadline:
+                if cluster.leader_id is not None and cluster.leader_id != "node-0":
+                    break
+                real_time.sleep(0.05)
+
+            assert cluster.leader_id is not None
+            assert cluster.leader_id != "node-0"
+            leader = cluster.get_node(cluster.leader_id)
+            assert leader.state == NodeState.LEADER
+        finally:
+            cluster.stop_auto_election()
+
+    def test_manual_clock_time_advances_via_clock_sleep(self, manual_clock):
+        cluster = LeaderElectionCluster(
+            node_count=3,
+            clock=manual_clock,
+            election_timeout_seconds=1.0,
+            auto_election_interval=0.3,
+        )
+
+        initial_time = manual_clock.now()
+        try:
+            cluster.start_auto_election()
+            import time as real_time
+            real_time.sleep(0.2)
+
+            assert manual_clock.now() > initial_time
+        finally:
+            cluster.stop_auto_election()
+
+    def test_auto_election_exception_not_silently_swallowed(self, capsys, manual_clock):
+        cluster = LeaderElectionCluster(
+            node_count=3,
+            clock=manual_clock,
+            election_timeout_seconds=2.0,
+            auto_election_interval=0.1,
+        )
+
+        original_method = cluster.check_and_run_elections
+
+        def failing_check():
+            raise RuntimeError("intentional test error")
+
+        cluster.check_and_run_elections = failing_check
+        try:
+            cluster.start_auto_election()
+            import time as real_time
+            real_time.sleep(0.3)
+
+            captured = capsys.readouterr()
+            assert "intentional test error" in captured.err or "RuntimeError" in captured.err
+        finally:
+            cluster.check_and_run_elections = original_method
+            cluster.stop_auto_election()

@@ -1,0 +1,5 @@
+你的代码变动加上了自动选举，但定时器实现有个隐蔽 bug。
+1. _auto_election_loop 里用 time.sleep() 而不是 clock.sleep()，穿过了 Clock 抽象层。集群注入 ManualClock 时后台线程睡的是真实时间但时钟始终不推进，is_election_timed_out() 永远返回 False，自动选举实际上不工作。提示词要求节点能自动发起选举，用 ManualClock 的测试场景下这个能力等于没有。
+2. _auto_election_loop 里用 except LeaderElectionError: pass 兜底捕获了所有选举异常，StaleTermError、NodeNotFoundError 等全部被静默吞掉。一旦内部逻辑以后变了产生非预期异常，问题完全无从排查。
+3. 修完跑 poetry run pytest tests/leader_election/ -q，确保全过。
+4. README 同步更新，说明时钟注入场景下自动选举线程的行为约定和使用限制。

@@ -1,0 +1,4 @@
+你的代码变更修改了查询副作用和并发测试，还是没改到位。
+1. reader 线程仍然只在循环里调用查询方法然后抓异常，对 contains()、get_record()、window_count() 的返回值一个都没校验。所有自洽性断言被挪到了主线程 post-join 块里。提示词要求的是 reader 线程自己在并发读写过程中验证查询返回值彼此自洽，现在 reader 线程内部等于什么都没做。
+2. window_count() 和 get_stats()、list_records() 共用一个 _valid_records_list()，每次调用都遍历所有记录做 TTL 和时间检查后生成 snapshot 副本再处理。window_count() 只需要一个计数，没必要把全量记录拷贝一遍。
+3. 修完跑 poetry run pytest tests/inbox/ -q，确保全过。

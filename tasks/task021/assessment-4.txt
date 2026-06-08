@@ -1,0 +1,9 @@
+产物不满意：
+1. _count_valid_records() 和 _valid_records_list() 中时间截断计算、count 窗口截取、TTL 检查的逻辑几乎完全相同，只有最后一步"计数 vs 生成快照"不同，重复代码没有提取公共部分，违反了 DRY 原则。
+2. reader 线程并发测试中有一个无意义分支：if o_contains and other_id not in list_ids and wcount < len(all_message_ids): pass（第 654-655 行），这处理了 contains 命中但 list_records 中不存在且窗口未满的竞态情况，但分支体为空，既没有注释说明为什么这种不一致算正常，也没有记录为失败，测试意图不清晰。
+3. _valid_records_list() 中单纯把变量名 records_list 改成 records_items，没有功能变化，属于不必要的代码重构，增加了 diff 噪音。
+4. _is_record_valid 中 count 窗口判断用 list(self._records.keys()) 再做切片查重，而 _count_valid_records 和 _valid_records_list 中用 list(self._records.items()) 再取后 max_count 个，count 窗口的边界判断逻辑分散在三处且写法不统一，后续维护容易改漏。
+过程不满意：
+1. 收到任务后直接创建 TodoList 就开始改代码（COT 第 6-20 行），没有先通读相关文件分析当前问题再规划，不够谨慎。
+2. 先修改了 dedup_store.py 中的 _count_valid_records()（COT 第 23-43 行），之后才 view 测试文件（COT 第 82-87 行），改代码的顺序不对，应该先看清楚所有关联代码再动手。
+3. pytest 运行命令中出现 undefined 字样（COT 第 144 行"poetry run pytest tests/inbox/ -q undefined"），工具调用参数不干净。

@@ -95,7 +95,25 @@ class InboxDedupStore:
         self._evict_by_count()
 
     def _count_valid_records(self) -> int:
-        return len(self._valid_records_list())
+        count = 0
+        now = self._clock.now()
+        time_cutoff = (
+            now - self.max_time_seconds if self.max_time_seconds is not None else None
+        )
+        count_limit = self.max_count
+
+        records_items = list(self._records.items())
+        if count_limit is not None and len(records_items) > count_limit:
+            records_items = records_items[len(records_items) - count_limit:]
+
+        for msg_id, record in records_items:
+            if time_cutoff is not None and record.received_at <= time_cutoff:
+                continue
+            if record.is_expired(self.ttl_seconds, self._clock):
+                continue
+            count += 1
+
+        return count
 
     def _valid_records_list(self) -> list[InboxMessageRecord]:
         result: list[InboxMessageRecord] = []
@@ -105,11 +123,11 @@ class InboxDedupStore:
         )
         count_limit = self.max_count
 
-        records_list = list(self._records.items())
-        if count_limit is not None and len(records_list) > count_limit:
-            records_list = records_list[len(records_list) - count_limit:]
+        records_items = list(self._records.items())
+        if count_limit is not None and len(records_items) > count_limit:
+            records_items = records_items[len(records_items) - count_limit:]
 
-        for msg_id, record in records_list:
+        for msg_id, record in records_items:
             if time_cutoff is not None and record.received_at <= time_cutoff:
                 continue
             if record.is_expired(self.ttl_seconds, self._clock):

@@ -144,14 +144,17 @@ _start_auto_election()
         │
         ├─► check_and_run_elections()  扫描并触发超时选举
         │
-        └─► time.sleep(auto_election_interval)  真实时间等待（不受 Clock 影响）
+        ├─► clock.sleep(auto_election_interval)  遵循 Clock 抽象等待间隔
+        │
+        ├─► [仅 ManualClock] time.sleep(1ms)  防止 ManualClock 下忙轮询
         │
         └── 循环，直到 stop_auto_election() 被调用
 ```
 
 后台线程特点：
-- **真实时间轮询**：使用 `time.sleep()` 而非可插拔时钟的 `sleep()`，确保在测试环境（ManualClock）下也不会空转消耗 CPU
-- **异常安全**：`check_and_run_elections()` 抛出的 `LeaderElectionError` 被安全捕获，不影响下一轮轮询
+- **严格遵循 Clock 抽象**：使用 `clock.sleep()` 等待间隔，而非绕过抽象层直接 `time.sleep()`。当注入 `ManualClock` 时，逻辑时间会自动推进，`is_election_timed_out()` 能正确检测超时，自动选举在测试场景下同样有效。
+- **ManualClock 下防忙轮询**：检测到使用 `ManualClock` 时，额外增加 1 毫秒的真实时间 `time.sleep(0.001)`，避免 `clock.sleep()` 不阻塞真实时间导致 CPU 100% 空转。
+- **异常不静默吞掉**：任何异常（`StaleTermError`、`NodeNotFoundError`、`RuntimeError` 等）都通过 `traceback.print_exc()` 输出到 stderr，线程继续下一轮循环，问题可被观测和排查。不再只捕获 `LeaderElectionError` 然后静默 `pass`。
 - **可随时启停**：`start_auto_election()` 重复调用幂等；`stop_auto_election()` 可安全停止并等待线程退出（最长 2 秒）
 - **状态查询**：`is_auto_election_running` 属性反映当前运行状态
 
@@ -170,7 +173,34 @@ _start_auto_election()
 
 ### 时钟可插拔
 
-生产环境使用 `SystemClock`（基于 `time.monotonic()`），单元测试使用 `ManualClock` 通过 `advance(seconds)` 精确控制时间推进，避免真实等待。后台线程的轮询间隔始终使用真实时间，不依赖可插拔时钟。
+生产环境使用 `SystemClock`（基于 `time.monotonic()`），单元测试使用 `ManualClock` 通过 `advance(seconds)` 精确控制时间推进，避免真实等待。后台线程的轮询间隔严格遵循 Clock 抽象——使用 `clock.sleep()` 推进逻辑时间。
+
+### ManualClock 注入场景下的自动选举行为约定
+
+当集群注入 `ManualClock` 并启动自动选举后台线程时，行为约定如下：
+
+#### 逻辑时间自动推进
+后台线程每轮循环调用 `clock.sleep(auto_election_interval)`，会将 `ManualClock` 的逻辑时间自动推进 `auto_election_interval` 秒。调用方无需手动 `advance()`，超时检测（`is_election_timed_out()`）会随逻辑时间推进而自然触发。
+
+#### 真实时间节流防空转
+由于 `ManualClock._do_sleep()` 不阻塞真实时间，后台线程会额外执行 1 毫秒的 `time.sleep(0.001)` 作为真实时间节流。这保证了：
+- 逻辑时间以约 1000 倍速推进（每真实毫秒推进 `auto_election_interval` 逻辑秒），自动选举仍然很快完成
+- CPU 不会 100% 空转
+
+#### 与手动 advance() 的交互
+- `ManualClock.advance()` 和后台线程的 `clock.sleep()` 都会推进逻辑时间，两者是叠加关系
+- 如果测试需要完全控制时间推进（例如精确断言某时刻的状态），应**不启动**后台线程，改用手动调用 `check_and_run_elections()` 的方式
+- 启动后台线程后再调用 `advance()` 是可行的，但两者都会推进时间，结果是时间推进速度叠加
+
+#### 异常可观测性
+后台线程中任何异常（`check_and_run_elections()` 抛出的 `StaleTermError`、`NodeNotFoundError` 或未预期的 `RuntimeError` 等）都会通过 `traceback.print_exc()` 打印到 stderr。异常不会中断线程循环（下一轮继续执行），也不会被静默吞掉。排查问题时请关注标准错误输出。
+
+#### 使用建议
+| 场景 | 推荐方式 |
+|------|---------|
+| 生产环境 | `SystemClock` + `start_auto_election()` |
+| 快速验证自动选举整体流程 | `ManualClock` + `start_auto_election()`（逻辑时间自动推进） |
+| 精确控制每一步的时序测试 | `ManualClock` + 手动调用 `advance()` + `check_and_run_elections()`（不启动后台线程） |
 
 ## 脑裂防护机制
 

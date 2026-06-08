@@ -572,6 +572,7 @@ class TestConcurrency:
     def test_concurrent_reads_and_writes(self):
         store = make_store(max_count=1000)
         errors = {}
+        assertions_failed: dict[str, list[str]] = {}
         writer_count = 3
         msgs_per_writer = 20
 
@@ -581,6 +582,11 @@ class TestConcurrency:
             for i in range(msgs_per_writer)
         ]
 
+        def record_failure(thread_name: str, msg: str) -> None:
+            if thread_name not in assertions_failed:
+                assertions_failed[thread_name] = []
+            assertions_failed[thread_name].append(msg)
+
         def writer(writer_id):
             try:
                 for i in range(msgs_per_writer):
@@ -589,20 +595,68 @@ class TestConcurrency:
                 errors[f"writer-{writer_id}"] = e
 
         def reader(reader_id):
+            name = f"reader-{reader_id}"
             try:
                 for loop in range(50):
-                    store.window_count()
-                    store.get_stats()
-                    store.list_records()
-                    msg_idx = (reader_id * 10 + loop) % len(all_message_ids)
-                    target_id = all_message_ids[msg_idx]
-                    store.contains(target_id)
-                    store.get_record(target_id)
+                    wcount = store.window_count()
+                    stats = store.get_stats()
+                    records = store.list_records()
+
+                    if stats.window_size != wcount:
+                        record_failure(
+                            name,
+                            f"loop {loop}: stats.window_size={stats.window_size} != window_count={wcount}",
+                        )
+                    if len(records) != wcount:
+                        record_failure(
+                            name,
+                            f"loop {loop}: len(list_records)={len(records)} != window_count={wcount}",
+                        )
+
+                    list_ids = {r.message_id for r in records}
+                    if len(list_ids) != len(records):
+                        record_failure(
+                            name,
+                            f"loop {loop}: duplicate ids in list_records",
+                        )
+
+                    sample_idx = (reader_id * 10 + loop) % len(all_message_ids)
+                    target_id = all_message_ids[sample_idx]
+                    in_contains = store.contains(target_id)
+                    in_get_record = store.get_record(target_id) is not None
+                    if in_contains != in_get_record:
+                        record_failure(
+                            name,
+                            f"loop {loop}: contains({target_id})={in_contains} != get_record is not None={in_get_record}",
+                        )
+
+                    for rec in records:
+                        if not store.contains(rec.message_id):
+                            record_failure(
+                                name,
+                                f"loop {loop}: list_records has {rec.message_id} but contains returns False",
+                            )
+                        if store.get_record(rec.message_id) is None:
+                            record_failure(
+                                name,
+                                f"loop {loop}: list_records has {rec.message_id} but get_record returns None",
+                            )
+
                     other_idx = (loop * 7) % len(all_message_ids)
-                    store.contains(all_message_ids[other_idx])
+                    other_id = all_message_ids[other_idx]
+                    o_contains = store.contains(other_id)
+                    o_record = store.get_record(other_id)
+                    if o_contains != (o_record is not None):
+                        record_failure(
+                            name,
+                            f"loop {loop}: contains({other_id})={o_contains} mismatch get_record is None={o_record is None}",
+                        )
+                    if o_contains and other_id not in list_ids and wcount < len(all_message_ids):
+                        pass
+
                     sleep(0.001)
             except Exception as e:
-                errors[f"reader-{reader_id}"] = e
+                errors[name] = e
 
         threads = []
         for i in range(writer_count):
@@ -615,6 +669,7 @@ class TestConcurrency:
             t.join(timeout=30)
 
         assert len(errors) == 0, f"Errors: {errors}"
+        assert len(assertions_failed) == 0, f"Assertion failures: {assertions_failed}"
         stats = store.get_stats()
         assert stats.total_received >= writer_count * msgs_per_writer
 

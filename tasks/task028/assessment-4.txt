@@ -1,0 +1,8 @@
+产物不满意：
+1. poetry run pytest 并非全部通过，test_random_election_steps_down_existing_leader 存在随机性失败。run_election_random 可能随机选中原领导者，导致老领导者仍是 LEADER 且 cluster.leader_id 不变，断言 old_leader.state != LEADER or cluster_5.leader_id != "node-0" 两个条件同时为假。提示词要求修完测试确保全过，这个不稳定的测试没有被处理。
+2. _auto_election_loop 修复了 time.sleep() 绕过 Clock 抽象，但又引入了 isinstance(self.clock, ManualClock) 对具体类型的硬编码判断，同样破坏了 Clock 抽象层。规避忙轮询的机制应该通过 Clock 接口本身提供（比如一个阻塞性标记方法），而不是在集群代码里做类型判断。
+3. ManualClock 防忙轮询的 time.sleep(0.001) 直接用了 raw time 模块，没有经过 clock 抽象层。虽然意图是真实时间节流，但这和提示词指出的"穿过 Clock 抽象层"是同一类问题——代码里仍然保留了绕过 Clock 直接操作真实时间的路径。
+过程不满意：
+1. 模型刚收到任务就直接创建了 TodoList（6 个子任务），没有先阅读提示词中提到的两个问题代码（cluster.py 的 _auto_election_loop），也没有分析根因就规划，违反了"先分析问题再规划"的原则。
+2. 两次测试运行都用了 tail -40 和 tail -15 截断输出，没有查看完整测试结果。模型在总结中声称"96 个测试全部通过，0 个诊断错误"，但该测试确实存在随机性失败，说明模型要么没看到失败行，要么看到后仍贸然声称全过，属于虚假完成。
+3. 修复了一个绕过 Clock 抽象的问题（time.sleep），同一轮修复中又引入了两个新的绕过（isinstance 类型判断和 raw time.sleep），说明模型对"不绕过抽象层"这一修 bug 的核心理念理解不足，只是在按字面要求替换特定调用。
