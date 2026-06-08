@@ -803,14 +803,14 @@ class TestEntryIndex:
         ledger_large.create_account("a", "A", initial_balance=1000000)
         ledger_large.create_account("b", "B", initial_balance=1000000)
 
-        N_SMALL_TXNS = 10
-        N_LARGE_TXNS = 500
+        N_SMALL_TXN_PAIRS = 10
+        N_LARGE_TXN_PAIRS = 500
 
-        for _ in range(N_SMALL_TXNS):
+        for _ in range(N_SMALL_TXN_PAIRS):
             ledger_small.transfer("a", "b", 1)
             ledger_small.transfer("b", "a", 1)
 
-        for _ in range(N_LARGE_TXNS):
+        for _ in range(N_LARGE_TXN_PAIRS):
             ledger_large.transfer("a", "b", 1)
             ledger_large.transfer("b", "a", 1)
 
@@ -844,29 +844,37 @@ class TestEntryIndex:
             for entry in entry_list:
                 for txn_id, txn in txn_items:
                     counter += 1
-                    if any(e.entry_id == entry.entry_id for e in txn.entries):
-                        break
+                    _ = any(e.entry_id == entry.entry_id for e in txn.entries)
             return counter
+
+        NUM_ENTRIES_PER_PAIR = 2
+        NUM_TXNS_PER_PAIR = 2
+
+        SMALL_ENTRIES = N_SMALL_TXN_PAIRS * NUM_ENTRIES_PER_PAIR
+        SMALL_TXNS = N_SMALL_TXN_PAIRS * NUM_TXNS_PER_PAIR
+        LARGE_ENTRIES = N_LARGE_TXN_PAIRS * NUM_ENTRIES_PER_PAIR
+        LARGE_TXNS = N_LARGE_TXN_PAIRS * NUM_TXNS_PER_PAIR
 
         small_indexed_ops = count_indexed_ops(ledger_small, "a")
         large_indexed_ops = count_indexed_ops(ledger_large, "a")
         small_scan_ops = count_scan_ops(ledger_small, "a")
         large_scan_ops = count_scan_ops(ledger_large, "a")
 
-        SMALL_ENTRIES = N_SMALL_TXNS * 2
-        LARGE_ENTRIES = N_LARGE_TXNS * 2
-
         assert small_indexed_ops == 2 * SMALL_ENTRIES
         assert large_indexed_ops == 2 * LARGE_ENTRIES
 
-        assert large_indexed_ops - small_indexed_ops == 2 * (
-            LARGE_ENTRIES - SMALL_ENTRIES
-        )
+        assert small_scan_ops == SMALL_ENTRIES * SMALL_TXNS
+        assert large_scan_ops == LARGE_ENTRIES * LARGE_TXNS
 
-        assert large_scan_ops >= small_scan_ops * (N_LARGE_TXNS / N_SMALL_TXNS) * 0.8
+        entries_scale = LARGE_ENTRIES / SMALL_ENTRIES
+        txns_scale = LARGE_TXNS / SMALL_TXNS
+        indexed_scale = large_indexed_ops / small_indexed_ops
+        scan_scale = large_scan_ops / small_scan_ops
 
-        assert small_indexed_ops < small_scan_ops
-        assert large_indexed_ops < large_scan_ops
+        assert indexed_scale == entries_scale
+        assert scan_scale == entries_scale * txns_scale
+
+        assert scan_scale > indexed_scale * (LARGE_TXNS / SMALL_TXNS) * 0.99
 
 
 class TestConcurrency:

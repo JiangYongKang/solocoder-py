@@ -406,7 +406,6 @@ class BillingEngine:
                 if account_id not in self._bills:
                     self._bills[account_id] = []
                 self._bills[account_id].append(bill)
-                self._seen_accounts.add(account_id)
                 bills.append(bill)
 
             return bills

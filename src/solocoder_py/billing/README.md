@@ -128,7 +128,7 @@ tiers = [
 2. 若资源已注册，但在 `reported_at` 时刻尚无生效定价，抛出 `PricingNotFoundError`。
 
 ### 账户校验
-引擎内部维护 `_seen_accounts` 集合，记录所有曾经上报过用量或生成过账单的账户（只增不减）。查询账单时：
+引擎内部维护 `_seen_accounts` 集合，**只在 `report_usage` 调用成功时写入**，记录所有曾经上报过用量的账户（只增不减）。查询账单、用量时通过 `_require_account_seen` 进行校验：
 - 若账户既不在 `_seen_accounts` 中，也不在 `_bills` 中，说明该账户从未与引擎发生过任何交互，抛出 `AccountNotFoundError`。
 
 该语义称为"账户已交互校验"，只判断账户是否完全陌生，不校验账户当前是否仍活跃。

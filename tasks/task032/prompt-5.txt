@@ -1,0 +1,4 @@
+你修复的舱壁隔离执行器的短轮询方案还存在问题，需要修正：
+1. 上一轮为 _wait_for_slot 引入的短轮询（_POLL_INTERVAL 固定间隔 condition.wait）破坏了等待队列的 FIFO 顺序语义。多个线程在每轮轮询超时释放锁的窗口内竞争重新获取锁，导致先入队的线程不一定先出队。对应的 FIFO 排序测试挂掉了，执行顺序与预期不一致。
+2. 需要找到一个既能用 ManualClock 控制超时判定、又不破坏队列 FIFO 顺序的方案，让超时测试和 FIFO 排序测试同时通过。
+3. 重新运行 poetry run pytest tests/bulkhead/ -q，需要让所有测试通过。

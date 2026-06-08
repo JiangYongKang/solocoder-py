@@ -203,8 +203,11 @@ class BulkheadExecutor:
 
         try:
             while True:
-                if state.current_concurrency < state.config.max_concurrency:
-                    state.queue.remove(entry)
+                if (
+                    state.queue[0] is entry
+                    and state.current_concurrency < state.config.max_concurrency
+                ):
+                    state.queue.popleft()
                     return self._clock.now() - queue_start
 
                 if deadline is not None and self._clock.now() >= deadline:
