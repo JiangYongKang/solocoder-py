@@ -29,6 +29,7 @@ class MVCCStore:
     _next_version: int = 1
     _committed_version: int = 0
     _next_transaction_id: int = 1
+    _next_snapshot_id: int = 1
     _lock: threading.RLock = field(default_factory=threading.RLock)
     _reclaimed_versions: Set[int] = field(default_factory=set)
 
@@ -41,6 +42,11 @@ class MVCCStore:
         tid = self._next_transaction_id
         self._next_transaction_id += 1
         return tid
+
+    def _allocate_snapshot_id(self) -> int:
+        sid = self._next_snapshot_id
+        self._next_snapshot_id += 1
+        return sid
 
     def _get_active_transaction_ids(self) -> Set[int]:
         return {
@@ -62,23 +68,25 @@ class MVCCStore:
 
     def create_snapshot(self) -> Snapshot:
         with self._lock:
+            snapshot_id = self._allocate_snapshot_id()
             snapshot_version = self._committed_version
             active = tuple(sorted(self._get_active_transaction_ids()))
             snapshot = Snapshot(
+                snapshot_id=snapshot_id,
                 snapshot_version=snapshot_version,
                 active_transactions=active,
             )
-            self._active_snapshots[snapshot_version] = snapshot
+            self._active_snapshots[snapshot_id] = snapshot
             return snapshot
 
     def release_snapshot(self, snapshot: Snapshot) -> None:
         with self._lock:
-            self._active_snapshots.pop(snapshot.snapshot_version, None)
+            self._active_snapshots.pop(snapshot.snapshot_id, None)
 
     def _get_min_snapshot_version(self) -> Optional[int]:
         if not self._active_snapshots:
             return None
-        return min(self._active_snapshots.keys())
+        return min(s.snapshot_version for s in self._active_snapshots.values())
 
     def read(self, key: str, snapshot: Optional[Snapshot] = None) -> Any:
         with self._lock:
@@ -338,6 +346,7 @@ class MVCCStore:
                 return value
 
             snapshot = Snapshot(
+                snapshot_id=self._allocate_snapshot_id(),
                 snapshot_version=transaction.start_version,
                 active_transactions=tuple(sorted(self._get_active_transaction_ids())),
             )
@@ -364,6 +373,7 @@ class MVCCStore:
             self._next_version = 1
             self._committed_version = 0
             self._next_transaction_id = 1
+            self._next_snapshot_id = 1
 
 
 class _Tombstone:

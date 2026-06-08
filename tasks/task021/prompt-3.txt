@@ -1,0 +1,5 @@
+你的代码变更改了查询方法想把副作用去掉，但改得不够彻底，还有遗留问题。
+1. contains() 和 get_record() 在判断 TTL 过期后仍然偷偷执行 del self._records[message_id] 删记录，查询操作的副作用其实没消干净。提示词要求查询是只读操作，内部状态不能有任何修改。
+2. 上一轮扩展了并发测试的多 key 覆盖，但 reader 线程对所有查询方法只检查了不抛异常，没验证返回值语义对不对。需要让 reader 线程在并发读写结束后校验 contains()、get_record()、window_count() 的返回值是否彼此自洽。
+3. 修完跑 poetry run pytest tests/inbox/ -q，确保全过。
+4. README 同步更新，把查询方法的完全只读语义说清楚，不再保留所谓的"微量副作用"。

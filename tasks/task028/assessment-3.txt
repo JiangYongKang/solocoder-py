@@ -1,0 +1,10 @@
+产物不满意：
+1. _auto_election_loop 里用 time.sleep() 而不是 clock.sleep()，当集群注入 ManualClock 时后台线程睡了真实时间但始终不会推进时钟，节点 is_election_timed_out() 永远不会返回 True，自动选举实际上不工作。Clock 抽象明明定义了 sleep 方法却绕过去不用，设计一致性被破坏了。对应提示词第 3 条。
+2. _auto_election_loop 里用 except LeaderElectionError: pass 兜底捕获所有选举异常，StaleTermError、NodeNotFoundError 都会被静默吞掉。虽然当前 check_and_run_elections 调用链路不太会触发这些异常，但兜底太宽，一旦内部逻辑演变产生了非预期异常，问题无从排查。对应提示词第 3 条。
+3. leader_send_heartbeat 里判断 leader.state != LEADER 时新增了 self._leader_id = None 清理操作，但这行清理不在提示词要求范围内，而且和 leader_id 局部变量保存的顺序逻辑上可以更清晰——先保存再清空，现在保存和清空紧挨着但语义不完全对等，容易让人误解为什么这里才清零。
+
+过程不满意：
+1. 模型收到任务后第一件事就是创建 TodoList，此时还没开始读任何文件分析问题，不符合"先分析再规划"的要求。
+2. 首次编辑 cluster.py 时路径写成了 src/solocoder-py/src/solocoder-py/…/cluster.py，严重拼写错误导致第一次替换失败，工具使用不够仔细。
+3. README 被拆成了至少 8 次零散小编辑，每次只替换一两段。应该先通读完整内容再一次性或分批做块级替换，频繁的小编辑效率低且容易引入格式不一致。
+4. 每次跑测试都只 tail 截取最后 20-40 行输出，如果中间有测试失败信息会被截断漏掉，这类命令习惯在排查阶段不够安全。

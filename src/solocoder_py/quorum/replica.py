@@ -58,9 +58,9 @@ class Replica:
     def read(self, key: str) -> Optional[StoredValue]:
         self._total_reads += 1
         self._check_reachable()
-        self._sleep_latency()
         if self._fail_reads:
             raise ReplicaInjectedFailureError(self.id, "read")
+        self._sleep_latency()
         start = time.monotonic()
         value = self._store.get(key)
         elapsed_ms = (time.monotonic() - start) * 1000.0
@@ -71,9 +71,9 @@ class Replica:
     def write(self, key: str, value: Any, version: int) -> bool:
         self._total_writes += 1
         self._check_reachable()
-        self._sleep_latency()
         if self._fail_writes:
             raise ReplicaInjectedFailureError(self.id, "write")
+        self._sleep_latency()
         start = time.monotonic()
         existing = self._store.get(key)
         if existing is not None and version < existing.version:

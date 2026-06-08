@@ -42,31 +42,37 @@ class TestVersionModel:
 
 class TestSnapshotModel:
     def test_snapshot_creation(self):
-        snap = Snapshot(snapshot_version=10)
+        snap = Snapshot(snapshot_id=1, snapshot_version=10)
+        assert snap.snapshot_id == 1
         assert snap.snapshot_version == 10
         assert snap.active_transactions == ()
 
     def test_snapshot_with_active_transactions(self):
-        snap = Snapshot(snapshot_version=10, active_transactions=(1, 2, 3))
+        snap = Snapshot(snapshot_id=1, snapshot_version=10, active_transactions=(1, 2, 3))
+        assert snap.snapshot_id == 1
         assert snap.snapshot_version == 10
         assert snap.active_transactions == (1, 2, 3)
 
+    def test_snapshot_invalid_id(self):
+        with pytest.raises(ValueError, match="snapshot_id must be positive"):
+            Snapshot(snapshot_id=0, snapshot_version=10)
+
     def test_snapshot_invalid_version(self):
         with pytest.raises(ValueError, match="snapshot_version cannot be negative"):
-            Snapshot(snapshot_version=-1)
+            Snapshot(snapshot_id=1, snapshot_version=-1)
 
     def test_snapshot_is_visible_committed_version(self):
-        snap = Snapshot(snapshot_version=10, active_transactions=())
+        snap = Snapshot(snapshot_id=1, snapshot_version=10, active_transactions=())
         v = Version(key="k1", value="v1", version=5, transaction_id=1)
         assert snap.is_visible(v) is True
 
     def test_snapshot_is_visible_future_version(self):
-        snap = Snapshot(snapshot_version=10, active_transactions=())
+        snap = Snapshot(snapshot_id=1, snapshot_version=10, active_transactions=())
         v = Version(key="k1", value="v1", version=15, transaction_id=1)
         assert snap.is_visible(v) is False
 
     def test_snapshot_is_visible_active_transaction(self):
-        snap = Snapshot(snapshot_version=10, active_transactions=(1,))
+        snap = Snapshot(snapshot_id=1, snapshot_version=10, active_transactions=(1,))
         v = Version(key="k1", value="v1", version=5, transaction_id=1)
         assert snap.is_visible(v) is False
 
@@ -774,8 +780,10 @@ class TestConcurrency:
 
         assert t1.is_alive() is False
         assert t2.is_alive() is False
-        assert store.read("counter-a") + store.read("counter-b") == 40
-        assert results["success"] + results["conflict"] == 40
+        assert results["success"] == 40
+        assert results["conflict"] == 0
+        assert store.read("counter-a") == 20
+        assert store.read("counter-b") == 20
 
     def test_concurrent_writes_same_key_trigger_conflicts(self):
         import threading
@@ -874,6 +882,7 @@ class TestConcurrency:
 
         errors = []
         completed = {"count": 0}
+        write_stats = {"success": 0, "conflict": 0}
         lock = threading.Lock()
 
         def op_read():
@@ -895,8 +904,12 @@ class TestConcurrency:
                     val = store.transaction_read(txn, f"key-{i}")
                     store.write(txn, f"key-{i}", val + 10)
                 store.commit(txn)
+                with lock:
+                    write_stats["success"] += 1
             except WriteWriteConflictError:
                 store.rollback(txn)
+                with lock:
+                    write_stats["conflict"] += 1
             except Exception as e:
                 errors.append(e)
             finally:
@@ -933,3 +946,55 @@ class TestConcurrency:
 
         assert len(errors) == 0, f"Errors: {errors}"
         assert completed["count"] == 15
+        assert write_stats["success"] + write_stats["conflict"] == 5
+        assert write_stats["success"] >= 1, (
+            "At least one write operation should succeed; got "
+            f"success={write_stats['success']}, conflict={write_stats['conflict']}"
+        )
+
+    def test_multiple_snapshots_same_version_not_overwritten(self):
+        store = make_store()
+
+        txn = store.begin_transaction()
+        store.write(txn, "key1", "v1")
+        cv1 = store.commit(txn)
+
+        snap1 = store.create_snapshot()
+        snap2 = store.create_snapshot()
+
+        assert snap1.snapshot_id != snap2.snapshot_id
+        assert snap1.snapshot_version == cv1
+        assert snap2.snapshot_version == cv1
+        assert store.count_active_snapshots() == 2
+
+        store.release_snapshot(snap1)
+        assert store.count_active_snapshots() == 1
+        assert store.read("key1", snap2) == "v1"
+
+        store.release_snapshot(snap2)
+        assert store.count_active_snapshots() == 0
+
+    def test_release_one_snapshot_preserves_others_for_gc(self):
+        store = make_store()
+
+        txn1 = store.begin_transaction()
+        store.write(txn1, "key1", "old")
+        cv1 = store.commit(txn1)
+
+        snap_preserve = store.create_snapshot()
+        snap_release = store.create_snapshot()
+
+        for _ in range(5):
+            txn = store.begin_transaction()
+            store.write(txn, "key1", "newer")
+            store.commit(txn)
+
+        store.release_snapshot(snap_release)
+        assert store.count_active_snapshots() == 1
+
+        store.collect_garbage()
+        assert store.read_version("key1", cv1) == "old"
+        assert store.read("key1", snap_preserve) == "old"
+
+        store.release_snapshot(snap_preserve)
+        assert store.count_active_snapshots() == 0

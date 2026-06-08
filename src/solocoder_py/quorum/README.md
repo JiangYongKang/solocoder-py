@@ -364,9 +364,17 @@ assert len(result.successful_replicas) >= result.required_w
 |------|------------------|------|
 | 读/写操作成功 | ✅ 计入 | 仅统计核心存储操作耗时（字典查询/写入） |
 | 副本不可达（`ReplicaUnreachableError`） | ❌ 不计入 | 请求未真正到达存储逻辑，无性能意义 |
-| 人工注入故障（`ReplicaInjectedFailureError`） | ❌ 不计入 | 测试注入的失败，不应污染生产指标 |
+| 人工注入故障（`ReplicaInjectedFailureError`） | ❌ 不计入 | 故障检查在人工延迟前执行，立即抛出异常不阻塞，不参与统计 |
 | 写入因版本落后被拒绝（返回 `False`） | ❌ 不计入 | 仅做版本比较，未执行实际写入 |
-| 人工注入延迟（`set_artificial_latency()`） | ❌ 不计入 | 延迟在计时前通过 `time.sleep()` 注入，不计入操作本身耗时 |
+| 人工注入延迟（`set_artificial_latency()`） | ❌ 不计入 | 延迟通过 `time.sleep()` 注入，位于故障检查之后、存储操作计时之前，不计入操作本身耗时 |
+
+**read/write 执行顺序**：
+1. `total_reads += 1` / `total_writes += 1`（总调用计数）
+2. `_check_reachable()` → 不可达则立即抛 `ReplicaUnreachableError`
+3. 故障注入检查 → 若 `_fail_reads` / `_fail_writes` 为真，立即抛 `ReplicaInjectedFailureError`（**不先等待人工延迟**）
+4. `_sleep_latency()` → 模拟网络/IO 延迟（仅在确认无故障后才 sleep）
+5. `time.monotonic()` 开始计时 → 执行实际存储操作 → 结束计时并将样本加入延迟列表
+6. `successful_reads += 1` / `successful_writes += 1`
 
 **计数规则**：
 - `total_reads` / `total_writes` 统计**所有调用次数**（包括不可达和注入失败的调用），用于计算成功率。

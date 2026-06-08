@@ -506,3 +506,182 @@ class TestClusterConfigurationValidation:
     def test_zero_election_timeout_rejected(self, make_cluster):
         with pytest.raises(ValueError):
             make_cluster(5, election_timeout_seconds=0)
+
+    def test_negative_auto_election_interval_rejected(self):
+        with pytest.raises(ValueError):
+            LeaderElectionCluster(node_count=3, auto_election_interval=-1)
+
+    def test_zero_auto_election_interval_rejected(self):
+        with pytest.raises(ValueError):
+            LeaderElectionCluster(node_count=3, auto_election_interval=0)
+
+
+class TestBroadcastHeartbeatStaleTermInvalidatesElection:
+    def test_run_election_broadcast_stale_term_returns_failed_result(self, cluster_5):
+        from solocoder_py.leader_election import StaleTermError
+
+        cluster_5.run_election("node-0")
+        original_leader_id = cluster_5.leader_id
+        assert original_leader_id == "node-0"
+
+        cluster_5._leader_id = None
+        cluster_5.get_node("node-0").step_down()
+
+        def fake_broadcast(leader):
+            raise StaleTermError("Simulated stale term during broadcast")
+
+        original_broadcast = cluster_5._broadcast_heartbeat_from_leader
+        try:
+            cluster_5._broadcast_heartbeat_from_leader = fake_broadcast
+            result = cluster_5.run_election("node-1")
+            assert result.is_successful is False
+            assert result.leader_id is None
+            assert cluster_5.leader_id is None
+            assert cluster_5.get_node("node-1").state == NodeState.FOLLOWER
+        finally:
+            cluster_5._broadcast_heartbeat_from_leader = original_broadcast
+
+    def test_run_election_random_broadcast_stale_term_returns_failed_result(self, cluster_5):
+        from solocoder_py.leader_election import StaleTermError
+
+        cluster_5.run_election("node-0")
+        cluster_5._leader_id = None
+        cluster_5.get_node("node-0").step_down()
+
+        def fake_broadcast(leader):
+            raise StaleTermError("Simulated stale term during broadcast")
+
+        original_broadcast = cluster_5._broadcast_heartbeat_from_leader
+        try:
+            cluster_5._broadcast_heartbeat_from_leader = fake_broadcast
+            result = cluster_5.run_election_random()
+            assert result.is_successful is False
+            assert result.leader_id is None
+            assert cluster_5.leader_id is None
+            for node in cluster_5.list_nodes():
+                if node.state == NodeState.LEADER:
+                    assert False, f"Expected no LEADER nodes but found {node.node_id}"
+        finally:
+            cluster_5._broadcast_heartbeat_from_leader = original_broadcast
+
+    def test_check_and_run_broadcast_stale_term_returns_failed_result(
+        self, cluster_5_manual, manual_clock
+    ):
+        from solocoder_py.leader_election import StaleTermError
+
+        cluster_5_manual.run_election("node-0")
+        cluster_5_manual._leader_id = None
+        cluster_5_manual.get_node("node-0").step_down()
+        manual_clock.advance(10.0)
+
+        def fake_broadcast(leader):
+            raise StaleTermError("Simulated stale term during broadcast")
+
+        original_broadcast = cluster_5_manual._broadcast_heartbeat_from_leader
+        try:
+            cluster_5_manual._broadcast_heartbeat_from_leader = fake_broadcast
+            result = cluster_5_manual.check_and_run_elections()
+            assert result is not None
+            assert result.is_successful is False
+            assert result.leader_id is None
+            assert cluster_5_manual.leader_id is None
+        finally:
+            cluster_5_manual._broadcast_heartbeat_from_leader = original_broadcast
+
+
+class TestLeaderHeartbeatErrorMessagePreservesId:
+    def test_heartbeat_error_message_contains_original_leader_id(self, cluster_5):
+        cluster_5.run_election("node-2")
+        assert cluster_5.leader_id == "node-2"
+
+        leader = cluster_5.get_node("node-2")
+        leader._state = NodeState.FOLLOWER
+
+        with pytest.raises(LeaderElectionError, match=r"Node node-2 is not leader"):
+            cluster_5.leader_send_heartbeat()
+
+    def test_heartbeat_no_leader_error_message(self, cluster_5):
+        with pytest.raises(LeaderElectionError, match="No leader in cluster"):
+            cluster_5.leader_send_heartbeat()
+
+
+class TestAutoElectionBackgroundThread:
+    def test_start_and_stop_auto_election(self):
+        cluster = LeaderElectionCluster(
+            node_count=3, election_timeout_seconds=0.1, auto_election_interval=0.05
+        )
+        assert cluster.is_auto_election_running is False
+
+        cluster.start_auto_election()
+        assert cluster.is_auto_election_running is True
+
+        cluster.start_auto_election()
+        assert cluster.is_auto_election_running is True
+
+        cluster.stop_auto_election()
+        assert cluster.is_auto_election_running is False
+
+        cluster.stop_auto_election()
+        assert cluster.is_auto_election_running is False
+
+    def test_auto_election_thread_elects_leader_after_timeout(self):
+        import time as real_time
+
+        cluster = LeaderElectionCluster(
+            node_count=3, election_timeout_seconds=0.1, auto_election_interval=0.02
+        )
+        try:
+            cluster.start_auto_election()
+            deadline = real_time.monotonic() + 2.0
+            while real_time.monotonic() < deadline:
+                if cluster.leader_id is not None:
+                    break
+                real_time.sleep(0.02)
+            assert cluster.leader_id is not None
+            leader = cluster.get_node(cluster.leader_id)
+            assert leader.state == NodeState.LEADER
+        finally:
+            cluster.stop_auto_election()
+
+    def test_auto_election_picks_new_leader_after_partition(self):
+        import time as real_time
+
+        cluster = LeaderElectionCluster(
+            node_count=5, election_timeout_seconds=0.1, auto_election_interval=0.02
+        )
+        cluster.run_election("node-0")
+        original_leader = cluster.leader_id
+        assert original_leader == "node-0"
+
+        cluster.partition_node("node-0")
+        cluster._leader_id = None
+
+        try:
+            cluster.start_auto_election()
+            deadline = real_time.monotonic() + 2.0
+            while real_time.monotonic() < deadline:
+                if cluster.leader_id is not None and cluster.leader_id != "node-0":
+                    break
+                real_time.sleep(0.02)
+            assert cluster.leader_id is not None
+            assert cluster.leader_id != "node-0"
+        finally:
+            cluster.stop_auto_election()
+
+    def test_heartbeat_suppresses_auto_election(self):
+        import time as real_time
+
+        cluster = LeaderElectionCluster(
+            node_count=3, election_timeout_seconds=0.3, auto_election_interval=0.02
+        )
+        cluster.run_election("node-0")
+        original_leader = cluster.leader_id
+
+        try:
+            cluster.start_auto_election()
+            for _ in range(10):
+                cluster.leader_send_heartbeat()
+                real_time.sleep(0.05)
+            assert cluster.leader_id == original_leader
+        finally:
+            cluster.stop_auto_election()

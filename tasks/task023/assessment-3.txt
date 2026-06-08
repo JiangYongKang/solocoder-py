@@ -1,0 +1,7 @@
+产物不满意：
+1. 提示词第1条要求修复快照覆盖问题，模型通过新增 snapshot_id 字段解决了。但 transaction_read 里每次调用都通过 _allocate_snapshot_id() 为临时快照分配 ID，这些临时快照不注册到 _active_snapshots 也不回收，_next_snapshot_id 的增长与实际活跃快照数量脱钩——如果事务内频繁调用 transaction_read，ID 会无意义地快速增长。
+2. 模型新增了两个快照覆盖的验证测试 test_multiple_snapshots_same_version_not_overwritten 和 test_release_one_snapshot_preserves_others_for_gc，但它们完全没有使用 threading，却被放在了 TestConcurrency 类下。测试行为和类名语义不匹配，未来的维护者会被误导。
+3. 提示词第4条和第6条要求 README 锁描述与代码对齐，模型如实写了 RLock 导致方法互斥执行。但紧接着加了一段"说明"声称"写写冲突通过版本号检测而非锁超时来发现"，这个表述有误导性——在 RLock 保护下，commit 时的冲突检测是在持锁状态中做的，冲突能否触发取决于事务间在方法调用间隙的 interleaving，而不是"版本号机制替代了锁的冲突检测"。这段说明的措辞把 RLock 的串行化和 MVCC 的版本检测两个不同层面的机制混在一起谈了。
+过程不满意：
+1. 模型一上来就直接创建了 5 个 TODO 项（第1-12行），然后才说"让我先查看相关代码"。在没看任何代码、没分析当前实现细节的情况下就制定了修复计划，违反了"应该先分析问题再规划"的原则。
+2. 模型在修改 README.md 的过程中，先用 search_by_regex 定位并发安全部分、view_files 读了一遍完整内容，执行一次替换后立即又 view_files 重新读了一遍相同文件、相同区域。第一次读取和第二次读取之间只有一个编辑操作，第二次读取的目的不明确，属于重复劳动。

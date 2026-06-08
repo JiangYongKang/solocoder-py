@@ -30,10 +30,13 @@ class Version:
 
 @dataclass
 class Snapshot:
+    snapshot_id: int
     snapshot_version: int
     active_transactions: Tuple[int, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
+        if self.snapshot_id <= 0:
+            raise ValueError("snapshot_id must be positive")
         if self.snapshot_version < 0:
             raise ValueError("snapshot_version cannot be negative")
 

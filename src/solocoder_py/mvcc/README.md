@@ -68,11 +68,13 @@
 
 ## 快照版本选取规则
 
-`create_snapshot()` 返回的快照版本号**严格等于当前已提交的最大版本号**（`_committed_version`），确保：
+`create_snapshot()` 返回的快照有两个关键属性：
 
-1. 快照仅包含创建时刻之前已成功提交的所有数据。
-2. 快照不会落在未提交事务占用的"占位"版本上（因为不存在占位版本）。
-3. 快照版本本身一定是一个真实的、已提交的、可通过 `read_version()` 访问的版本号。
+- **`snapshot_id`**：每次调用分配的唯一递增 ID，用于内部追踪活跃快照。即使多次快照的版本号相同，它们也有独立的 `snapshot_id`，不会互相覆盖。释放其中一个快照不影响其他快照对旧版本的 GC 保护。
+- **`snapshot_version`**：严格等于创建快照时当前已提交的最大版本号（`_committed_version`），确保：
+  1. 快照仅包含创建时刻之前已成功提交的所有数据。
+  2. 快照不会落在未提交事务占用的"占位"版本上（因为不存在占位版本）。
+  3. 快照版本本身一定是一个真实的、已提交的、可通过 `read_version()` 访问的版本号（空库时为 0）。
 
 快照创建时还会记录当时的活跃事务 ID 列表（`active_transactions`），用于排除那些在快照创建时已经开始但尚未提交的事务所做的写入。
 
@@ -93,7 +95,6 @@
 
 ### 快照隔离语义
 
-- **读取不阻塞写入，写入不阻塞读取**：读操作基于快照，写操作创建新版本，互不干扰。
 - **事务内读已快照**：事务 T 内的读操作基于 T 的 `start_version` 创建的快照，事务执行期间该快照保持稳定，不受其他事务提交影响。
 - **事务内写可见**：事务 T 可以读取自己写入但尚未提交的数据（读己之写）。
 - **不可重复读被避免**：同一事务内两次读取同一 key 结果一致（除非事务自身修改了该 key）。
@@ -284,28 +285,32 @@ store.collect_garbage()  # 现在旧版本可以被回收
 
 `MVCCStore` 的所有公共 API 均由 `threading.RLock`（可重入互斥锁）保护，确保多线程环境下的正确性：
 
-- **锁范围**：每次 `begin_transaction`、`commit`、`rollback`、`read`、`write`、`create_snapshot`、`collect_garbage` 等公共操作都会先获取锁，执行完毕后释放。
+- **锁范围**：每次 `begin_transaction`、`commit`、`rollback`、`read`、`write`、`create_snapshot`、`collect_garbage` 等公共操作都会先获取锁，执行完毕后释放。因此任意两个公共方法在多线程下**会互斥等待**，读与写之间、写与写之间、读与读之间都不会真正并发执行。
 - **可重入性**：使用 `RLock` 而非普通 `Lock`，允许在持有锁的方法内部递归调用其他加锁方法（如 `commit` 内部调用 `_check_write_conflicts`）。
 - **原子性**：`commit()` 的冲突检测、版本号分配、写入物化是一个原子操作，不会出现部分提交。
 - **快照一致性**：`create_snapshot()` 原子地获取当前已提交版本和活跃事务列表，确保快照是自洽的。
+
+> **说明**：虽然锁导致方法层面串行执行，但 MVCC 多版本机制仍然提供了重要的语义价值：写写冲突通过版本号检测而非锁超时来发现；快照读可以基于已创建的快照稳定读取历史版本，不受后续写入的影响（即 MVCC 的"快照隔离"语义在逻辑层面成立，只是物理上的方法调用被串行化了）。
 
 ### 并发场景下的隔离性
 
 在多线程并发访问时，MVCC 快照隔离保证：
 
-1. **读写不阻塞**：读操作（快照读）与写操作互不干扰，读不会等待写，写也不会等待读。
-2. **写写冲突检测**：两个线程同时修改同一 key 时，后提交者会因冲突被回滚，不会出现丢失更新。
-3. **快照读隔离**：一个线程持有的快照不会看到其他线程在快照创建后提交的数据。
+1. **快照读隔离**：一个线程持有的快照不会看到其他线程在快照创建后提交的数据。
+2. **写写冲突检测**：两个线程同时修改同一 key 时，后提交者会因冲突被显式回滚（抛出 `WriteWriteConflictError`），不会出现丢失更新。
+3. **事务读一致**：同一事务内多次读取结果一致，不会因为其他线程的提交而变化。
 4. **GC 安全**：活跃快照和活跃事务会保护其需要的旧版本不被 GC 回收。
 
 ### 并发测试覆盖
 
 测试文件 `tests/mvcc/test_mvcc_store.py` 中 `TestConcurrency` 类包含以下并发测试场景：
 
-- `test_concurrent_writes_different_keys`：多线程写不同 key，验证无冲突时全部成功。
-- `test_concurrent_writes_same_key_trigger_conflicts`：多线程竞争写同一 key，验证写写冲突正确触发。
-- `test_concurrent_snapshot_reads_are_isolated`：快照读线程与写线程并发，验证快照值不变。
-- `test_concurrent_mixed_operations`：读、写、快照创建/释放 15 个线程混合操作，验证无异常。
+- `test_concurrent_writes_different_keys`：多线程写不同 key，验证无冲突时全部成功、冲突计数为 0、每个 key 值精确正确。
+- `test_concurrent_writes_same_key_trigger_conflicts`：多线程竞争写同一 key，验证写写冲突正确触发且最终值合理。
+- `test_concurrent_snapshot_reads_are_isolated`：快照读线程与写线程并发，验证快照值始终不变且无异常。
+- `test_concurrent_mixed_operations`：读、写、快照创建/释放 15 个线程混合操作，验证无异常、写操作至少部分成功。
+- `test_multiple_snapshots_same_version_not_overwritten`：同版本多个快照有独立 ID，释放一个不影响另一个。
+- `test_release_one_snapshot_preserves_others_for_gc`：释放一个快照后，另一个同版本快照仍能保护旧版本不被回收。
 
 ## 运行测试
 

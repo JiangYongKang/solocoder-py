@@ -1,0 +1,6 @@
+你的代码变更修了几处但还是有缺陷没闭环，在当前包内继续修。
+1. _broadcast_heartbeat_from_leader 捕获 StaleTermError 后做了退位和清理，但 run_election 和 check_and_run_elections 外层用 except StaleTermError: pass 把异常吃掉了，返回的 ElectionResult 仍然标记 is_successful=True，而集群实际已经没了领导者。调用方拿到一份过期的虚假成功结果，脑裂防护没真正闭环。
+2. leader_send_heartbeat 里先把 self._leader_id 置 None 清零，再在错误消息里引用它，导致 f"Node {self._leader_id} is not leader" 变成 "Node None is not leader"，丢了原始领导者 ID，排查问题时没法定位。
+3. check_and_run_elections 仍然是一个被动轮询接口，节点自身没有任何后台线程或定时器去主动检测心跳超时并自动触发选举。提示词要求节点能在领导者失联后自动发起选举，不是靠外部隔一段时间调一次。
+4. 修完跑 poetry run pytest tests/leader_election/ -q，确保全过。
+5. README 同步更新，说明新实现的实际行为。

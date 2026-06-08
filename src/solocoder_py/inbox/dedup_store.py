@@ -153,6 +153,24 @@ class InboxDedupStore:
                 record=new_record.snapshot(),
             )
 
+    def _is_record_valid(
+        self, message_id: str, record: InboxMessageRecord
+    ) -> bool:
+        now = self._clock.now()
+        if self.max_time_seconds is not None:
+            time_cutoff = now - self.max_time_seconds
+            if record.received_at <= time_cutoff:
+                return False
+        if record.is_expired(self.ttl_seconds, self._clock):
+            return False
+        if self.max_count is not None:
+            records_list = list(self._records.keys())
+            if len(records_list) > self.max_count:
+                start = len(records_list) - self.max_count
+                if message_id not in records_list[start:]:
+                    return False
+        return True
+
     def contains(self, message_id: str) -> bool:
         if not message_id:
             raise ValueError("message_id cannot be empty")
@@ -160,18 +178,7 @@ class InboxDedupStore:
             record = self._records.get(message_id)
             if record is None:
                 return False
-            now = self._clock.now()
-            time_cutoff = (
-                now - self.max_time_seconds
-                if self.max_time_seconds is not None
-                else None
-            )
-            if time_cutoff is not None and record.received_at <= time_cutoff:
-                return False
-            if record.is_expired(self.ttl_seconds, self._clock):
-                del self._records[message_id]
-                return False
-            return True
+            return self._is_record_valid(message_id, record)
 
     def get_record(self, message_id: str) -> Optional[InboxMessageRecord]:
         if not message_id:
@@ -180,16 +187,7 @@ class InboxDedupStore:
             record = self._records.get(message_id)
             if record is None:
                 return None
-            now = self._clock.now()
-            time_cutoff = (
-                now - self.max_time_seconds
-                if self.max_time_seconds is not None
-                else None
-            )
-            if time_cutoff is not None and record.received_at <= time_cutoff:
-                return None
-            if record.is_expired(self.ttl_seconds, self._clock):
-                del self._records[message_id]
+            if not self._is_record_valid(message_id, record):
                 return None
             return record.snapshot()
 

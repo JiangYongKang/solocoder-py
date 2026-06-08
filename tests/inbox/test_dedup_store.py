@@ -332,23 +332,70 @@ class TestTTLExpiration:
         result = store.check_duplicate("msg-boundary")
         assert result.is_duplicate is True
 
-    def test_lazy_expiration_on_contains(self):
+    def test_query_is_read_only_on_contains(self):
         clock = make_manual_clock(start_time=0.0)
         store = make_store(max_count=100, ttl_seconds=30.0, clock=clock)
 
         store.check_duplicate("msg-lazy")
+        internal_count_before = len(store._records)
         clock.advance(31.0)
 
         assert store.contains("msg-lazy") is False
+        assert len(store._records) == internal_count_before
+        assert "msg-lazy" in store._records
 
-    def test_lazy_expiration_on_get_record(self):
+    def test_query_is_read_only_on_get_record(self):
         clock = make_manual_clock(start_time=0.0)
         store = make_store(max_count=100, ttl_seconds=30.0, clock=clock)
 
         store.check_duplicate("msg-lazy")
+        internal_count_before = len(store._records)
         clock.advance(31.0)
 
         assert store.get_record("msg-lazy") is None
+        assert len(store._records) == internal_count_before
+        assert "msg-lazy" in store._records
+
+    def test_query_is_read_only_count_window(self):
+        clock = make_manual_clock(start_time=0.0)
+        store = make_store(max_count=5, ttl_seconds=3600.0, clock=clock)
+
+        store.check_duplicate("msg-1")
+        store.check_duplicate("msg-2")
+        store.check_duplicate("msg-3")
+        internal_count_before = len(store._records)
+
+        assert store.contains("msg-1") is True
+        assert store.get_record("msg-1") is not None
+        assert store.window_count() == 3
+        assert len(store._records) == internal_count_before
+
+        store.contains("msg-1")
+        store.get_record("msg-1")
+        store.window_count()
+        store.get_stats()
+        store.list_records()
+        assert len(store._records) == internal_count_before
+
+    def test_query_is_read_only_after_expired(self):
+        clock = make_manual_clock(start_time=0.0)
+        store = make_store(max_count=100, ttl_seconds=10.0, clock=clock)
+
+        store.check_duplicate("msg-a")
+        store.check_duplicate("msg-b")
+        internal_count_before = len(store._records)
+        clock.advance(11.0)
+
+        for _ in range(3):
+            assert store.contains("msg-a") is False
+            assert store.get_record("msg-a") is None
+            assert store.contains("msg-b") is False
+            assert store.get_record("msg-b") is None
+            assert store.window_count() == 0
+
+        assert len(store._records) == internal_count_before
+        assert "msg-a" in store._records
+        assert "msg-b" in store._records
 
     def test_cleanup_expired_removes_all_expired(self):
         clock = make_manual_clock(start_time=0.0)
@@ -570,6 +617,25 @@ class TestConcurrency:
         assert len(errors) == 0, f"Errors: {errors}"
         stats = store.get_stats()
         assert stats.total_received >= writer_count * msgs_per_writer
+
+        window_count_val = store.window_count()
+        records_list = store.list_records()
+        assert len(records_list) == window_count_val
+        assert stats.window_size == window_count_val
+
+        list_ids = {r.message_id for r in records_list}
+        contains_count = 0
+        for mid in all_message_ids:
+            in_contains = store.contains(mid)
+            in_get_record = store.get_record(mid) is not None
+            assert in_contains == in_get_record
+            if in_contains:
+                contains_count += 1
+                assert mid in list_ids
+            else:
+                assert mid not in list_ids
+
+        assert contains_count == window_count_val
 
 
 class TestManagementOperations:

@@ -674,3 +674,37 @@ class TestLatencyStatistics:
             assert lat < 10.0
         for lat in stats.write_latencies_ms:
             assert lat < 10.0
+
+    def test_injected_failure_does_not_wait_artificial_latency(self):
+        import time as _time
+        r = make_replica()
+        r.set_artificial_latency(200.0)
+        r.set_fail_reads(True)
+        start = _time.monotonic()
+        with pytest.raises(ReplicaInjectedFailureError):
+            r.read("k")
+        elapsed_ms = (_time.monotonic() - start) * 1000.0
+        assert elapsed_ms < 50.0
+        r.set_fail_reads(False)
+        r.set_fail_writes(True)
+        start = _time.monotonic()
+        with pytest.raises(ReplicaInjectedFailureError):
+            r.write("k", "v", 1)
+        elapsed_ms = (_time.monotonic() - start) * 1000.0
+        assert elapsed_ms < 50.0
+
+    def test_unreachable_does_not_wait_artificial_latency(self):
+        import time as _time
+        r = make_replica()
+        r.set_artificial_latency(200.0)
+        r.mark_unreachable()
+        start = _time.monotonic()
+        with pytest.raises(ReplicaUnreachableError):
+            r.read("k")
+        elapsed_ms = (_time.monotonic() - start) * 1000.0
+        assert elapsed_ms < 50.0
+        start = _time.monotonic()
+        with pytest.raises(ReplicaUnreachableError):
+            r.write("k", "v", 1)
+        elapsed_ms = (_time.monotonic() - start) * 1000.0
+        assert elapsed_ms < 50.0

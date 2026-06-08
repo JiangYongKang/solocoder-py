@@ -5,12 +5,12 @@
 本模块实现了基于 Raft 共识算法任期投票机制的领导者选举，使用内存 Mock 节点模拟分布式选举过程。支持以下核心能力：
 
 1. **任期管理与选举发起**：集群包含固定数量节点，每个节点维护当前任期号（单调递增）。节点在超时未收到领导心跳时可发起选举，自增任期号并向其他节点请求投票。
-2. **选举超时机制**：每个节点独立维护心跳计时器，超时未收到领导者心跳自动触发新一轮选举，无需外部干预。支持可插拔时钟（`SystemClock` 实时光钟 / `ManualClock` 测试可控时钟）。
+2. **选举超时与后台自动选举**：每个节点独立维护心跳计时器。集群启动后台线程后（`start_auto_election()`），会按 `auto_election_interval` 间隔周期性扫描超时节点，自动触发选举，无需外部调用方轮询。支持可插拔时钟（`SystemClock` 实时光钟 / `ManualClock` 测试可控时钟）。
 3. **多数派当选规则**：候选节点收集集群投票，获得超过半数（多数派）投票后当选为领导者。每个节点在同一任期内只能投一票，投票时持久化记录已投票的任期号，重复计票防护确保每张票只被统计一次。
 4. **任期递增与过期消息拒绝**：节点收到任期号低于自身当前任期的消息时直接拒绝处理。投票请求任期号落后时拒绝投票。领导者发现更高任期号时立即退位为跟随者。
-5. **心跳异常处理**：领导者发送心跳时若检测到任何跟随者拥有更高任期号，立即自动退位并清空领导者身份，抛出 `StaleTermError` 通知调用方，不静默吞掉异常。
+5. **心跳异常处理**：领导者发送心跳时若检测到任何跟随者拥有更高任期号，立即自动退位并清空领导者身份，抛出 `StaleTermError` 通知调用方，不静默吞掉异常。新领导者当选后广播心跳若因任期冲突失败，选举结果会被正确标记为失败，不会返回虚假成功。
 6. **脑裂防护**：新领导者当选时强制清理所有其他领导者状态；通过全局唯一且单调递增的任期号保证任意时刻最多只有一个合法领导者。网络分区恢复后，旧领导者因任期号落后而被节点拒绝，自动退位。
-7. **选举状态查询**：支持查询当前领导者、集群任期号、各节点投票记录、最近一次选举的得票分布等信息。
+7. **选举状态查询**：支持查询当前领导者、集群任期号、各节点投票记录、最近一次选举的得票分布、自动选举线程运行状态等信息。
 
 ## 核心类职责
 
@@ -60,7 +60,7 @@
 
 | 类名 | 职责 |
 |------|------|
-| `LeaderElectionCluster` | 选举集群管理器：维护节点集合、模拟网络通信、协调整体选举流程；支持网络分区模拟、手动运行选举、超时自动选举、发送心跳、旧领导者退位清理、查询状态等操作 |
+| `LeaderElectionCluster` | 选举集群管理器：维护节点集合、模拟网络通信、协调整体选举流程；支持网络分区模拟、手动运行选举、后台线程自动选举、发送心跳、旧领导者退位清理、查询状态等操作。关键参数 `auto_election_interval` 控制后台线程轮询间隔（默认 0.5 秒） |
 
 ## 选举流程
 
@@ -87,8 +87,9 @@
 
 1. **跟随者超时**：当跟随者在 `election_timeout_seconds` 窗口内未收到任何领导者心跳，`is_election_timed_out()` 返回 `True`，认为当前无有效领导者。
 2. **自动或手动触发选举**：
-   - 自动：集群调用 `check_and_run_elections()`，从所有超时节点中随机选一个作为候选者
-   - 手动：调用 `run_election(candidate_id)` 或 `run_election_random()`
+   - **后台线程自动触发**（推荐）：调用 `cluster.start_auto_election()` 启动后台守护线程，每 `auto_election_interval` 秒调用一次 `check_and_run_elections()`。无需外部调用方手动轮询。通过 `cluster.is_auto_election_running` 查询运行状态，`cluster.stop_auto_election()` 停止线程。
+   - 手动轮询：外部调用方周期性调用 `check_and_run_elections()`，从所有超时节点中随机选一个作为候选者
+   - 手动指定：调用 `run_election(candidate_id)` 或 `run_election_random()`
 3. **清理旧领导者**：任何选举开始前，`_clear_old_leader()` 强制将现有领导者退位为跟随者，避免双领导。
 4. **候选者发起选举**：
    - 自增当前任期号 `term += 1`
@@ -104,7 +105,11 @@
    - 集群计票时去重，确保同一投票者不会被重复统计
    - 若赞成票数 ≥ `majority_count`（超过半数）：当选领导者
    - 否则：选举失败，转为跟随者
-7. **新领导者广播心跳**：当选后立即向所有可达节点发送心跳，通知并重置所有节点的超时计时器，同时强制所有其他领导者退位。
+7. **新领导者广播心跳（含结果失效保护）**：当选后立即向所有可达节点发送心跳，通知并重置所有节点的超时计时器，同时强制所有其他领导者退位。若广播期间检测到任期冲突（`StaleTermError`），则**立即撤销本次选举结果**：
+   - 候选者退位为跟随者
+   - `ElectionResult.leader_id` 置为 `None`（`is_successful` 变为 `False`）
+   - 清空集群 `_leader_id`
+   - 调用方不会拿到虚假的成功结果
 8. **领导者持续心跳**：领导者周期性调用 `leader_send_heartbeat()` 维持权威，若检测到任何跟随者任期更高则立即退位。
 
 ## 选举超时机制
@@ -126,20 +131,46 @@
 - 若当前状态为 `LEADER`：永远不超时（领导者自身不需要心跳）
 - 否则：比较 `clock.now() - last_heartbeat_at >= election_timeout_seconds`
 
-### 自动触发选举
+### 两种触发模式
 
-`LeaderElectionCluster.check_and_run_elections()` 流程：
+#### 模式一：后台线程自动选举（推荐）
+
+调用 `start_auto_election()` 后，集群启动独立守护线程，按 `auto_election_interval`（默认 0.5 秒）周期性执行：
+
+```
+_start_auto_election()
+  │
+  └─► _auto_election_loop()  (后台守护线程)
+        │
+        ├─► check_and_run_elections()  扫描并触发超时选举
+        │
+        └─► time.sleep(auto_election_interval)  真实时间等待（不受 Clock 影响）
+        │
+        └── 循环，直到 stop_auto_election() 被调用
+```
+
+后台线程特点：
+- **真实时间轮询**：使用 `time.sleep()` 而非可插拔时钟的 `sleep()`，确保在测试环境（ManualClock）下也不会空转消耗 CPU
+- **异常安全**：`check_and_run_elections()` 抛出的 `LeaderElectionError` 被安全捕获，不影响下一轮轮询
+- **可随时启停**：`start_auto_election()` 重复调用幂等；`stop_auto_election()` 可安全停止并等待线程退出（最长 2 秒）
+- **状态查询**：`is_auto_election_running` 属性反映当前运行状态
+
+#### 模式二：外部手动轮询
+
+调用方自行控制节奏，周期性调用 `check_and_run_elections()`。适用于需要精细控制时机的集成测试。
+
+`check_and_run_elections()` 流程：
 1. 扫描所有节点，筛选满足以下条件的候选节点：
    - `is_election_timed_out() == True`
    - 不在网络分区中
    - 状态不是 `LEADER`
 2. 若无超时节点：返回 `None`，不做任何操作
-3. 随机选一个超时节点，执行完整的选举流程（清理旧领导→发起选举→收集投票→广播心跳）
-4. 返回 `ElectionResult`
+3. 随机选一个超时节点，执行完整的选举流程（清理旧领导→发起选举→收集投票→广播心跳→结果失效保护）
+4. 返回 `ElectionResult`（可能因广播冲突而标记为失败）
 
 ### 时钟可插拔
 
-生产环境使用 `SystemClock`（基于 `time.monotonic()`），单元测试使用 `ManualClock` 通过 `advance(seconds)` 精确控制时间推进，避免真实等待。
+生产环境使用 `SystemClock`（基于 `time.monotonic()`），单元测试使用 `ManualClock` 通过 `advance(seconds)` 精确控制时间推进，避免真实等待。后台线程的轮询间隔始终使用真实时间，不依赖可插拔时钟。
 
 ## 脑裂防护机制
 
@@ -171,6 +202,13 @@
 2. 若领导者状态不是 `FOLLOWER`，调用 `step_down()` 退位
 3. 清空集群 `_leader_id`
 4. 向上抛出 `StaleTermError` 通知调用方
+
+#### 第六层：广播心跳失效使选举结果作废
+新领导者当选后广播心跳期间，若检测到任期冲突（`StaleTermError`），则整个选举结果被立即撤销：
+1. 新当选的领导者退位为跟随者
+2. `ElectionResult.leader_id` 置为 `None`（`is_successful` 变为 `False`）
+3. 清空集群 `_leader_id`
+4. 调用方始终拿到与实际集群状态一致的选举结果，不会出现"返回成功但集群无领导者"的不一致
 
 ### 分区恢复场景
 
@@ -206,9 +244,15 @@ T3: 新领导者 node-1 发送 Heartbeat(term=2) 到达 node-0
 |---------|---------|
 | `StaleTermError`（跟随者任期更高） | 1. 领导者更新任期并退位<br>2. 清空集群 `_leader_id`<br>3. 重新抛出异常通知调用方 |
 | 其他节点在网络分区中 | 正常跳过，不影响其他节点 |
+| `LeaderElectionError`（无领导者 / 节点不是领导者） | 抛出异常，错误消息中保留原始领导者 ID（如 `"Node node-2 is not leader"`，不会变成 `"Node None is not leader"`） |
 
 ### 不静默吞异常
 旧版本使用裸 `except Exception` 吞掉所有异常，可能导致领导者在已过期时仍自认为合法。新版本仅允许网络分区类的跳过，任期冲突必须触发退位并上报。
+
+### 选举结果一致性保障
+所有选举方法（`run_election` / `run_election_random` / `check_and_run_elections`）在广播心跳阶段遇到任期冲突时，都会**同步撤销选举成功标记**，确保返回的 `ElectionResult.is_successful` 与实际集群状态一致：
+- 返回值 `is_successful=True` ⟺ 集群确实有合法领导者
+- 返回值 `is_successful=False` ⟹ 集群处于无领导者状态，调用方应再次触发选举
 
 ## 使用示例
 
@@ -322,6 +366,61 @@ if status.last_election:
 records = cluster.get_vote_records()
 for node_id, rec in records.items():
     print(f"{node_id}: term={rec.term}, voted_for={rec.voted_for}")
+```
+
+### 启动后台自动选举线程
+
+```python
+from solocoder_py.leader_election import LeaderElectionCluster
+import time
+
+# 缩短超时和轮询间隔，快速观察自动选举
+cluster = LeaderElectionCluster(
+    node_count=5,
+    election_timeout_seconds=0.2,
+    auto_election_interval=0.05,
+)
+
+print(f"自动选举运行中: {cluster.is_auto_election_running}")  # False
+
+# 启动后台线程
+cluster.start_auto_election()
+print(f"自动选举运行中: {cluster.is_auto_election_running}")  # True
+
+# 等待自动选举产生领导者（使用真实时间等待）
+time.sleep(1.0)
+print(f"自动选出的领导者: {cluster.leader_id}")
+
+# 模拟领导者失联
+cluster.partition_node(cluster.leader_id)
+cluster._leader_id = None
+time.sleep(1.0)
+print(f"重新选出的领导者: {cluster.leader_id}")  # 选出新领导者
+
+# 停止后台线程
+cluster.stop_auto_election()
+print(f"自动选举运行中: {cluster.is_auto_election_running}")  # False
+```
+
+### 心跳异常时错误消息保留领导者 ID
+
+```python
+from solocoder_py.leader_election import LeaderElectionCluster, LeaderElectionError
+
+cluster = LeaderElectionCluster(node_count=5)
+cluster.run_election("node-2")
+assert cluster.leader_id == "node-2"
+
+# 模拟领导者状态异常被重置
+leader = cluster.get_node("node-2")
+leader._state = "follower"  # 已退位
+
+# 错误消息中保留原始领导者 ID，不会变成 "Node None is not leader"
+try:
+    cluster.leader_send_heartbeat()
+except LeaderElectionError as e:
+    print(str(e))  # "Node node-2 is not leader"
+    assert "node-2" in str(e)
 ```
 
 ## 运行测试

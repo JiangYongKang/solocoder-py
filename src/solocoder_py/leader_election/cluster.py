@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -30,18 +31,24 @@ class LeaderElectionCluster:
     node_count: int
     clock: Clock = field(default_factory=SystemClock)
     election_timeout_seconds: float = 5.0
+    auto_election_interval: float = 0.5
     _nodes: Dict[str, RaftNode] = field(default_factory=dict)
     _current_term: int = 0
     _leader_id: Optional[str] = None
     _last_election: Optional[ElectionResult] = None
     _partitioned_nodes: set = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _auto_election_running: bool = field(default=False, init=False)
+    _auto_election_stop_event: threading.Event = field(default_factory=threading.Event, init=False)
+    _auto_election_thread: Optional[threading.Thread] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.node_count < 1:
             raise ValueError("node_count must be at least 1")
         if self.election_timeout_seconds <= 0:
             raise ValueError("election_timeout_seconds must be positive")
+        if self.auto_election_interval <= 0:
+            raise ValueError("auto_election_interval must be positive")
         for i in range(self.node_count):
             node_id = f"node-{i}"
             self._nodes[node_id] = RaftNode(
@@ -49,6 +56,43 @@ class LeaderElectionCluster:
                 clock=self.clock,
                 election_timeout_seconds=self.election_timeout_seconds,
             )
+
+    def start_auto_election(self) -> None:
+        with self._lock:
+            if self._auto_election_running:
+                return
+            self._auto_election_running = True
+            self._auto_election_stop_event.clear()
+            self._auto_election_thread = threading.Thread(
+                target=self._auto_election_loop,
+                name="LeaderElectionAutoElection",
+                daemon=True,
+            )
+            self._auto_election_thread.start()
+
+    def stop_auto_election(self) -> None:
+        with self._lock:
+            if not self._auto_election_running:
+                return
+            self._auto_election_running = False
+            self._auto_election_stop_event.set()
+            thread = self._auto_election_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        with self._lock:
+            self._auto_election_thread = None
+
+    @property
+    def is_auto_election_running(self) -> bool:
+        return self._auto_election_running
+
+    def _auto_election_loop(self) -> None:
+        while not self._auto_election_stop_event.is_set():
+            try:
+                self.check_and_run_elections()
+            except LeaderElectionError:
+                pass
+            time.sleep(self.auto_election_interval)
 
     @property
     def majority_count(self) -> int:
@@ -179,7 +223,10 @@ class LeaderElectionCluster:
                 try:
                     self._broadcast_heartbeat_from_leader(candidate)
                 except StaleTermError:
-                    pass
+                    result.leader_id = None
+                    if candidate.state != NodeState.FOLLOWER:
+                        candidate.step_down()
+                    self._leader_id = None
             else:
                 candidate.step_down()
 
@@ -219,7 +266,10 @@ class LeaderElectionCluster:
                 try:
                     self._broadcast_heartbeat_from_leader(candidate)
                 except StaleTermError:
-                    pass
+                    result.leader_id = None
+                    if candidate.state != NodeState.FOLLOWER:
+                        candidate.step_down()
+                    self._leader_id = None
             else:
                 candidate.step_down()
 
@@ -254,7 +304,10 @@ class LeaderElectionCluster:
                 try:
                     self._broadcast_heartbeat_from_leader(candidate)
                 except StaleTermError:
-                    pass
+                    result.leader_id = None
+                    if candidate.state != NodeState.FOLLOWER:
+                        candidate.step_down()
+                    self._leader_id = None
             else:
                 candidate.step_down()
 
@@ -266,10 +319,11 @@ class LeaderElectionCluster:
             if self._leader_id is None:
                 raise LeaderElectionError("No leader in cluster")
 
-            leader = self.get_node(self._leader_id)
+            leader_id = self._leader_id
+            leader = self.get_node(leader_id)
             if leader.state != NodeState.LEADER:
                 self._leader_id = None
-                raise LeaderElectionError(f"Node {self._leader_id} is not leader")
+                raise LeaderElectionError(f"Node {leader_id} is not leader")
 
             heartbeat = leader.send_heartbeat()
             heartbeats: List[Heartbeat] = [heartbeat]

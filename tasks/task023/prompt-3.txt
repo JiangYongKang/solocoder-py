@@ -1,0 +1,7 @@
+你的代码变修复了几处但是引入了新问题，在当前基础上修。
+1. create_snapshot 用 _committed_version 作为 _active_snapshots 字典的主键，如果两次快照调用之间没有新提交，后一次快照会覆盖前一次的快照记录。释放其中一个时 GC 保护就一起丢了，活跃快照依赖的旧版本可能被误回收。
+2. 并发测试 test_concurrent_writes_different_keys 只校验两个 key 最终值之和等于 40，没有分别验证每个 key 各自的精确值和写写冲突计数。两个线程写不同 key 理论上不该有冲突，这个路径需要被显式断言。
+3. test_concurrent_mixed_operations 里写线程捕获 WriteWriteConflictError 后做了 rollback 但不把异常记入 errors，如果所有写线程都因冲突失败回滚，测试仍能通过。写冲突需要反映到测试结果里。
+4. README 并发安全部分写着"读不会等待写，写也不会等待读"，但实际上所有公共方法都用 threading.RLock 保护，读写之间确实会互斥阻塞。文档描述和代码实现矛盾，需要对齐。
+5. 修完跑 poetry run pytest tests/mvcc/ -q，确保全过。
+6. README 同步更新，如实描述锁机制的实际行为。
