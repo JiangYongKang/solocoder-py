@@ -437,13 +437,12 @@ class TestQueueAndTimeout:
         assert stats_final.current_concurrency == 0
 
     def test_queue_timeout(self):
-        clock = ManualClock()
-        executor = _make_executor(clock=clock)
+        executor = _make_executor()
         executor.create_group(
             _make_config(
                 max_concurrency=1,
                 full_strategy=FullStrategy.QUEUE,
-                queue_timeout=1.0,
+                queue_timeout=0.1,
             )
         )
         result1_holder: list[TaskResult] = []
@@ -474,8 +473,6 @@ class TestQueueAndTimeout:
         stats = executor.get_group_stats("test_group")
         assert stats.queue_size == 1
 
-        clock.advance(2.0)
-
         t2.join(timeout=5.0)
         assert not t2.is_alive()
 
@@ -485,6 +482,7 @@ class TestQueueAndTimeout:
         assert isinstance(r2.exception, BulkheadQueueTimeoutError)
         assert r2.exception.task_id == r2.task_id
         assert r2.exception.group_name == "test_group"
+        assert r2.queue_wait_time >= 0.08
 
         continue_event.set()
         t1.join()
@@ -923,13 +921,12 @@ class TestAcquireQueueStrategy:
         assert stats_final.queue_size == 0
 
     def test_acquire_queue_timeout(self):
-        clock = ManualClock()
-        executor = _make_executor(clock=clock)
+        executor = _make_executor()
         executor.create_group(
             _make_config(
                 max_concurrency=1,
                 full_strategy=FullStrategy.QUEUE,
-                queue_timeout=1.0,
+                queue_timeout=0.1,
             )
         )
         start_event = threading.Event()
@@ -960,13 +957,13 @@ class TestAcquireQueueStrategy:
         stats_with_waiter = executor.get_group_stats("test_group")
         assert stats_with_waiter.queue_size == 1
 
-        clock.advance(2.0)
         t2.join(timeout=5.0)
         assert not t2.is_alive()
 
         assert len(error_holder) == 1
         assert isinstance(error_holder[0], BulkheadQueueTimeoutError)
         assert error_holder[0].group_name == "test_group"
+        assert error_holder[0].queue_wait_time >= 0.08
 
         stats_final = executor.get_group_stats("test_group")
         assert stats_final.queue_size == 0

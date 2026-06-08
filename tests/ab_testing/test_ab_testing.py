@@ -450,84 +450,130 @@ class TestMutexGroup:
 
 
 class TestMutexGroupNonContiguousBuckets:
-    def test_mutex_group_noncontiguous_release_does_not_hurt_others(self):
+    @staticmethod
+    def _build_noncontiguous_mutex_group() -> tuple[ABTestManager, list[int], list[int]]:
         manager = ABTestManager()
 
-        manager.create_experiment("independent", traffic_percentage=20)
-        manager.start_experiment("independent")
-
-        manager.create_experiment("mutex_a", traffic_percentage=30, mutex_group="mg")
+        manager.create_experiment("mutex_a", traffic_percentage=20, mutex_group="mg")
         manager.start_experiment("mutex_a")
 
-        manager.create_experiment("mutex_b", traffic_percentage=30, mutex_group="mg")
+        manager.create_experiment("filler1", traffic_percentage=20)
+        manager.start_experiment("filler1")
+        manager.create_experiment("filler2", traffic_percentage=20)
+        manager.start_experiment("filler2")
+        manager.create_experiment("filler3", traffic_percentage=20)
+        manager.start_experiment("filler3")
+
+        manager.create_experiment("mutex_b", traffic_percentage=20, mutex_group="mg")
         manager.start_experiment("mutex_b")
 
+        occupancy = manager.get_bucket_occupancy()
+        mutex_buckets = sorted(o.bucket for o in occupancy if o.experiment_name in {"mutex_a", "mutex_b"})
+        filler_buckets = sorted(
+            o.bucket for o in occupancy if o.experiment_name in {"filler1", "filler2", "filler3"}
+        )
+
+        assert len(mutex_buckets) == 40
+        assert len(filler_buckets) == 60
+
+        has_gap = False
+        for i in range(len(mutex_buckets) - 1):
+            if mutex_buckets[i + 1] - mutex_buckets[i] > 1:
+                has_gap = True
+                break
+        assert has_gap, "mutual exclusion group buckets should be non-contiguous with a gap"
+
+        return manager, mutex_buckets, filler_buckets
+
+    def test_mutex_group_noncontiguous_release_does_not_hurt_others(self):
+        manager, mutex_buckets, filler_buckets = self._build_noncontiguous_mutex_group()
+
         occupancy_before = manager.get_bucket_occupancy()
-        independent_buckets_before = [
-            o.bucket for o in occupancy_before if o.experiment_name == "independent"
-        ]
-        assert len(independent_buckets_before) == 20
+        filler_experiments_before = {
+            o.bucket: o.experiment_name
+            for o in occupancy_before
+            if o.experiment_name in {"filler1", "filler2", "filler3"}
+        }
 
         manager.stop_experiment("mutex_a")
         manager.stop_experiment("mutex_b")
 
         occupancy_after = manager.get_bucket_occupancy()
-        independent_buckets_after = [
-            o.bucket for o in occupancy_after if o.experiment_name == "independent"
-        ]
-        assert len(independent_buckets_after) == 20
-        assert independent_buckets_before == independent_buckets_after
+        filler_experiments_after = {
+            o.bucket: o.experiment_name
+            for o in occupancy_after
+            if o.experiment_name is not None
+        }
 
-        for b in independent_buckets_after:
-            assert manager._bucket_owner[b] == {"type": "experiment", "name": "independent"}
+        assert len(filler_experiments_after) == 60
+        assert filler_experiments_before == filler_experiments_after
+
+        mutex_remaining = [
+            o for o in occupancy_after if o.experiment_name in {"mutex_a", "mutex_b"}
+        ]
+        assert len(mutex_remaining) == 0
 
     def test_mutex_group_noncontiguous_bucket_occupancy_correct(self):
-        manager = ABTestManager()
-
-        manager.create_experiment("filler1", traffic_percentage=20)
-        manager.start_experiment("filler1")
-
-        manager.create_experiment("mutex_a", traffic_percentage=20, mutex_group="g")
-        manager.start_experiment("mutex_a")
-
-        manager.create_experiment("filler2", traffic_percentage=20)
-        manager.start_experiment("filler2")
-
-        manager.create_experiment("mutex_b", traffic_percentage=20, mutex_group="g")
-        manager.start_experiment("mutex_b")
+        manager, mutex_buckets, filler_buckets = self._build_noncontiguous_mutex_group()
 
         occupancy = manager.get_bucket_occupancy()
-        mutex_buckets = [o for o in occupancy if o.experiment_name in {"mutex_a", "mutex_b"}]
-        assert len(mutex_buckets) == 40
+        by_bucket = {o.bucket: o.experiment_name for o in occupancy}
 
-        for occ in mutex_buckets:
-            assert occ.experiment_name in {"mutex_a", "mutex_b"}
+        for b in mutex_buckets:
+            assert by_bucket[b] in {"mutex_a", "mutex_b"}
 
-        mutex_a_count = sum(1 for o in mutex_buckets if o.experiment_name == "mutex_a")
-        mutex_b_count = sum(1 for o in mutex_buckets if o.experiment_name == "mutex_b")
+        mutex_a_count = sum(1 for b in mutex_buckets if by_bucket[b] == "mutex_a")
+        mutex_b_count = sum(1 for b in mutex_buckets if by_bucket[b] == "mutex_b")
         assert mutex_a_count == 20
         assert mutex_b_count == 20
 
+        for b in filler_buckets:
+            assert by_bucket[b] in {"filler1", "filler2", "filler3"}
+
     def test_mutex_group_noncontiguous_user_allocation_in_all_group_buckets(self):
-        manager = ABTestManager()
+        manager, mutex_buckets, filler_buckets = self._build_noncontiguous_mutex_group()
 
-        manager.create_experiment("filler", traffic_percentage=40)
-        manager.start_experiment("filler")
+        seen_mutex_a = False
+        seen_mutex_b = False
+        seen_filler = False
+        seen_control = False
 
-        manager.create_experiment("ma", traffic_percentage=30, mutex_group="x")
-        manager.start_experiment("ma")
+        for i in range(10000):
+            alloc = manager.get_user_allocation(f"user-{i}")
+            exp = alloc.experiment_name
+            if exp == "mutex_a":
+                seen_mutex_a = True
+            elif exp == "mutex_b":
+                seen_mutex_b = True
+            elif exp in {"filler1", "filler2", "filler3"}:
+                seen_filler = True
+            elif exp is None:
+                seen_control = True
+            else:
+                pytest.fail(f"unexpected experiment: {exp}")
 
-        manager.create_experiment("mb", traffic_percentage=30, mutex_group="x")
-        manager.start_experiment("mb")
+        assert seen_mutex_a
+        assert seen_mutex_b
+        assert seen_filler
 
-        for i in range(5000):
-            alloc = manager.get_user_allocation(f"u-{i}")
-            assert alloc.experiment_name in {"filler", "ma", "mb", None}
-
-        occupancy = manager.get_bucket_occupancy()
-        for occ in occupancy:
-            if occ.experiment_name in {"ma", "mb"}:
-                assert occ.experiment_name is not None
+        mutex_a_exp = manager.get_experiment("mutex_a")
+        mutex_b_exp = manager.get_experiment("mutex_b")
+        assert mutex_a_exp.bucket_start is None
+        assert mutex_a_exp.bucket_end is None
+        assert mutex_b_exp.bucket_start is None
+        assert mutex_b_exp.bucket_end is None
+        assert mutex_a_exp.group_bucket_start is not None
+        assert mutex_a_exp.group_bucket_end is not None
+        assert mutex_b_exp.group_bucket_start is not None
+        assert mutex_b_exp.group_bucket_end is not None
+        assert (
+            mutex_a_exp.group_bucket_end - mutex_a_exp.group_bucket_start + 1
+            == mutex_a_exp.traffic_percentage
+        )
+        assert (
+            mutex_b_exp.group_bucket_end - mutex_b_exp.group_bucket_start + 1
+            == mutex_b_exp.traffic_percentage
+        )
 
 
 class TestBucketOccupancy:

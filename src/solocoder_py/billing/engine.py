@@ -23,6 +23,7 @@ from .models import (
     PriceChange,
     PricingTier,
     ProportionalSplitDetail,
+    TierCalculationDetail,
     TieredPricing,
     UsageRecord,
 )
@@ -62,8 +63,7 @@ class BillingEngine:
         self._lock = threading.RLock()
         self._amount_precision = amount_precision
         self._quantity_precision = quantity_precision
-        self._known_accounts: set[str] = set()
-        self._known_resources: set[str] = set()
+        self._seen_accounts: set[str] = set()
 
     @property
     def amount_precision(self) -> int:
@@ -97,7 +97,6 @@ class BillingEngine:
 
             self._pricing_configs[resource_type].append((effective_from, pricing))
             self._pricing_configs[resource_type].sort(key=lambda x: x[0])
-            self._known_resources.add(resource_type)
 
             return pricing
 
@@ -130,13 +129,15 @@ class BillingEngine:
             )
         return pricing
 
-    def _require_resource_exists(self, resource_type: str) -> None:
-        if resource_type not in self._known_resources:
-            raise ResourceNotFoundError(f"Resource not found: {resource_type}")
+    def _require_resource_registered(self, resource_type: str) -> None:
+        if resource_type not in self._pricing_configs:
+            raise ResourceNotFoundError(f"Resource not registered: {resource_type}")
 
-    def _require_account_has_bills(self, account_id: str) -> None:
-        if account_id not in self._bills and account_id not in self._known_accounts:
-            raise AccountNotFoundError(f"Account not found: {account_id}")
+    def _require_account_seen(self, account_id: str) -> None:
+        if account_id not in self._bills and account_id not in self._seen_accounts:
+            raise AccountNotFoundError(
+                f"Account has no recorded usage or bills: {account_id}"
+            )
 
     def open_period(self, start_time: datetime, duration: timedelta) -> BillingPeriod:
         with self._lock:
@@ -190,7 +191,7 @@ class BillingEngine:
                     "Cannot report usage to a settled period"
                 )
 
-            self._require_resource_exists(resource_type)
+            self._require_resource_registered(resource_type)
 
             period = self._current_period
 
@@ -215,7 +216,7 @@ class BillingEngine:
                 units=rounded_units,
                 reported_at=reported_at,
             )
-            self._known_accounts.add(account_id)
+            self._seen_accounts.add(account_id)
             return record
 
     def get_current_usage(
@@ -297,18 +298,24 @@ class BillingEngine:
             )
 
             if allocated_units > 0:
-                seg_cost_raw, tier_details = pricing.calculate_cost(allocated_units)
+                _, tier_details = pricing.calculate_cost(allocated_units)
 
-                rounded_tier_details = []
+                rounded_tier_details: List[TierCalculationDetail] = []
                 seg_cost_from_tiers = 0.0
                 for td in tier_details:
                     rounded_cost = _round_amount(td.tier_cost, self._amount_precision)
                     rounded_units = _round_quantity(
                         td.units_applied, self._quantity_precision
                     )
-                    td.tier_cost = rounded_cost
-                    td.units_applied = rounded_units
-                    rounded_tier_details.append(td)
+                    rounded_tier_details.append(
+                        TierCalculationDetail(
+                            tier_min=td.tier_min,
+                            tier_max=td.tier_max,
+                            unit_price=td.unit_price,
+                            units_applied=rounded_units,
+                            tier_cost=rounded_cost,
+                        )
+                    )
                     seg_cost_from_tiers = _round_amount(
                         seg_cost_from_tiers + rounded_cost, self._amount_precision
                     )
@@ -405,12 +412,12 @@ class BillingEngine:
 
     def get_bills(self, account_id: str) -> List[Bill]:
         with self._lock:
-            self._require_account_has_bills(account_id)
+            self._require_account_seen(account_id)
             return list(self._bills.get(account_id, []))
 
     def get_bill(self, account_id: str, bill_id: str) -> Optional[Bill]:
         with self._lock:
-            self._require_account_has_bills(account_id)
+            self._require_account_seen(account_id)
             for bill in self._bills.get(account_id, []):
                 if bill.id == bill_id:
                     return bill

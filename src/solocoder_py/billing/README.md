@@ -120,6 +120,26 @@ tiers = [
 
 示例：账期 1/1 ~ 1/31，资源在 1/10 生效新定价。则 1/9 的用量上报会被拒绝，1/10 00:00:00 及之后的上报被接受。
 
+## 账户与资源校验语义
+
+### 资源校验
+资源通过 `configure_tiered_pricing` 进行注册，是否注册以 `_pricing_configs` 的键集作为唯一判断依据（不维护独立的副本集合）。上报用量时：
+1. 若资源从未注册过，抛出 `ResourceNotFoundError`；
+2. 若资源已注册，但在 `reported_at` 时刻尚无生效定价，抛出 `PricingNotFoundError`。
+
+### 账户校验
+引擎内部维护 `_seen_accounts` 集合，记录所有曾经上报过用量或生成过账单的账户（只增不减）。查询账单时：
+- 若账户既不在 `_seen_accounts` 中，也不在 `_bills` 中，说明该账户从未与引擎发生过任何交互，抛出 `AccountNotFoundError`。
+
+该语义称为"账户已交互校验"，只判断账户是否完全陌生，不校验账户当前是否仍活跃。
+
+## 计算过程不可变性保证
+
+引擎在计算过程中不会修改任何模型层返回的对象，具体保证如下：
+
+- **`TieredPricing.calculate_cost()` 返回值不可变**：`_calculate_line_item` 对返回的 `TierCalculationDetail` 列表进行读取时，不会原地修改其 `tier_cost`、`units_applied` 等字段，而是重新构造新的 `TierCalculationDetail` 实例存放舍入后的值。
+- **副作用隔离**：多次调用 `pricing.calculate_cost(n)` 返回的结果始终一致，不会因被引擎调用过而发生变化。
+
 ## 并发线程安全保证
 
 `BillingEngine` 通过 `threading.RLock` 可重入锁对所有读写操作提供线程安全保证：

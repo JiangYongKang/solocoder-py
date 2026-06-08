@@ -148,7 +148,7 @@ class TestEndOfMonthDateHandling:
         assert sub.current_cycle_start == date(2024, 2, 29)
         assert sub.current_cycle_end == date(2025, 2, 28)
 
-    def test_renew_from_end_of_month_preserves_end_of_month(self):
+    def test_renew_from_leap_year_feb_29_preserves_day_29(self):
         plan = make_pro_monthly_plan()
         activated_at = datetime(2024, 1, 31, 10, 0, 0)
         sub = make_active_subscription(plan=plan, activated_at=activated_at)

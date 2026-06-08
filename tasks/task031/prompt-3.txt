@@ -1,0 +1,4 @@
+你修复的有界队列背压控制器还存在两个遗留问题，需要修正：
+1. README.md 中"水位线回调机制"章节的"clear() 触发"描述与实际代码行为不一致：文档写阻塞模式 dequeue 被 clear 唤醒后"可能重新阻塞"，但实际代码通过 _clear_epoch 检测到 clear 后直接 return None，消费者不会重新等待。文档描述需要修正为与代码实际行为一致。
+2. 测试 test_callback_can_safely_enqueue_dequeue_without_deadlock 中回调函数的验证字典名叫 enqueue_result，但回调内部执行的是 dequeue 操作，验证的也是 dequeue 是否成功。变量名与操作语义对不上，改为能反映实际操作的名字。
+3. 重新运行 poetry run pytest tests/backpressure/ -q，需要让所有测试通过。

@@ -18,9 +18,16 @@ class BulkheadFullError(BulkheadError):
 
 
 class BulkheadQueueTimeoutError(BulkheadError):
-    def __init__(self, task_id: str, group_name: str, message: str | None = None) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        group_name: str,
+        message: str | None = None,
+        queue_wait_time: float = 0.0,
+    ) -> None:
         self.task_id = task_id
         self.group_name = group_name
+        self.queue_wait_time = queue_wait_time
         if message is None:
             message = (
                 f"Bulkhead group '{group_name}' queue timeout, "

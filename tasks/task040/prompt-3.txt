@@ -1,0 +1,6 @@
+你修复的支付对账引擎还存在几个代码质量和覆盖范围的问题，需要修正：
+1. 浮点比较的修复引入了 _amounts_close 被用在了 _try_match_by_id 的 ID 精确匹配路径中，而提示词最初只要求修复 fallback 匹配中的浮点比较。原来 ID 匹配走精确相等判定 itxn.amount == ctxn.amount，现在变成了四舍五入后相等，改变了已有 ID 匹配路径的判定语义。需要把 _amounts_close 的使用范围收窄到仅 fallback 路径，保持 ID 路径原来的精确匹配语义。
+2. _amounts_close 函数名暗示存在一个容差比较，但它的实现是分别对两个金额做 round(x, 2) 后再比较差值是否 <= 1e-6。因为 round 到两位小数后的差值只可能是 0.01 的整数倍，1e-6 的 epsilon 实际上从不参与任何容差判定，函数本质上就是"四舍五入到两位小数后是否相等"。函数名和实现不匹配，应该改名为准确反映逻辑的名字。
+3. import_internal_transactions 和 import_channel_transactions 的去重逻辑只对有 txn_id 的记录生效，没有 txn_id 的记录每次导入都会作为新记录追加，即使内容完全重复。这导致导入阶段返回值 imported 中可能出现重复记录，调用方看到这个列表会以为导入了新数据。应该在导入阶段对无 txn_id 的记录也提供去重能力，保证 imported 列表的语义一致性。
+4. 测试类名 TestMatchedAmount口径 包含中文字符，虽然 Python 3 允许但不符合项目编码规范，且可能影响 pytest 的 -k 过滤等工具兼容性。改为纯 ASCII 的类名。
+5. 重新运行 poetry run pytest tests/reconciliation/ -q，需要让所有测试通过。

@@ -146,10 +146,7 @@ def _add_cycle(start_date: date, cycle_type: BillingCycleType) -> date:
     elif cycle_type == BillingCycleType.QUARTERLY:
         return _add_months_safe(start_date, 3)
     else:
-        try:
-            return start_date.replace(year=start_date.year + 1)
-        except ValueError:
-            return start_date.replace(year=start_date.year + 1, day=28)
+        return _add_months_safe(start_date, 12)
 
 
 def calculate_refund(

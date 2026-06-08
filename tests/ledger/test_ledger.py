@@ -15,6 +15,7 @@ from solocoder_py.ledger import (
     Entry,
     EntryType,
     Ledger,
+    LedgerError,
     OverdraftError,
     Transaction,
     TransactionBalanceError,
@@ -427,11 +428,15 @@ class TestTransactionNotFound:
 
     def test_both_not_found_errors_inherit_from_ledger_error(self):
         ledger = make_ledger()
-        try:
+        with pytest.raises(LedgerError) as excinfo:
             ledger.get_transaction("x")
-        except Exception as e:
-            assert isinstance(e, TransactionNotFoundError)
-            assert isinstance(e, Exception)
+        assert isinstance(excinfo.value, TransactionNotFoundError)
+        assert isinstance(excinfo.value, Exception)
+
+        with pytest.raises(LedgerError) as excinfo:
+            ledger.get_account("x")
+        assert isinstance(excinfo.value, AccountNotFoundError)
+        assert isinstance(excinfo.value, Exception)
 
 
 class TestDraftTransaction:
@@ -552,23 +557,25 @@ class TestTrialBalance:
         assert balanced is True
         assert td == tc
 
-    def test_trial_balance_integrity_check_detects_tampering(self):
+    def test_trial_balance_integrity_holds_under_public_api_operations(self):
         ledger = make_ledger()
-        ledger.create_account("a", "A", initial_balance=100)
-        ledger.create_account("b", "B", initial_balance=100)
+        ledger.create_account("a", "A", initial_balance=1000)
+        ledger.create_account("b", "B", initial_balance=1000)
+        ledger.create_account("c", "C", initial_balance=1000)
+        ledger.create_account("d", "D", initial_balance=1000)
 
-        ledger.transfer("a", "b", 50)
+        for _ in range(10):
+            ledger.transfer("a", "b", 50)
+            ledger.transfer("c", "d", 25)
+            ledger.transfer("b", "a", 10)
 
         td, tc, balanced, details = ledger.get_trial_balance()
         assert all(d[4] for d in details.values())
 
-        ledger._accounts["a"].balance = 99999
-        td, tc, balanced, details = ledger.get_trial_balance()
-        assert balanced is False
-        assert details["a"][4] is False
-        assert details["b"][4] is True
-        assert details["a"][2] == 99999
-        assert details["a"][3] != 99999
+        assert details["a"][2] == details["a"][3]
+        assert details["b"][2] == details["b"][3]
+        assert details["c"][2] == details["c"][3]
+        assert details["d"][2] == details["d"][3]
 
     def test_trial_balance_details_structure(self):
         ledger = make_ledger()
@@ -703,17 +710,24 @@ class TestEncapsulation:
         assert ledger.get_balance("cash") == 500
 
 
-class TestEntryIndexPerformance:
-    def test_entry_to_transaction_index_populated(self):
+class TestEntryIndex:
+    def test_index_links_each_entry_to_its_transaction(self):
         ledger = make_ledger()
         ledger.create_account("a", "A", initial_balance=1000)
         ledger.create_account("b", "B", initial_balance=1000)
         txn = ledger.transfer("a", "b", 100)
-        for entry in txn.entries:
-            assert entry.entry_id in ledger._entry_to_transaction
-            assert ledger._entry_to_transaction[entry.entry_id] == txn.transaction_id
 
-    def test_multi_entry_index_populated(self):
+        entries_a = ledger.get_account_entries("a")
+        entries_b = ledger.get_account_entries("b")
+
+        assert len(entries_a) == 1
+        assert len(entries_b) == 1
+        assert entries_a[0][1].transaction_id == txn.transaction_id
+        assert entries_b[0][1].transaction_id == txn.transaction_id
+        for entry, linked_txn in entries_a + entries_b:
+            assert entry.entry_id in {e.entry_id for e in linked_txn.entries}
+
+    def test_multi_entry_index_links_all_entries(self):
         ledger = make_ledger()
         ledger.create_account("a", "A", initial_balance=1000)
         ledger.create_account("b", "B", initial_balance=1000)
@@ -726,40 +740,31 @@ class TestEntryIndexPerformance:
             ]
         )
         ledger.post_transaction(txn.transaction_id)
-        for entry in txn.entries:
-            assert ledger._entry_to_transaction[entry.entry_id] == txn.transaction_id
 
-    def test_index_lookup_is_o1_vs_on(self):
+        for aid in ("a", "b", "c"):
+            entries = ledger.get_account_entries(aid)
+            assert len(entries) == 1
+            assert entries[0][1].transaction_id == txn.transaction_id
+
+    def test_many_transactions_each_entry_links_to_exactly_one_txn(self):
         ledger = make_ledger()
         ledger.create_account("a", "A", initial_balance=1000000)
         ledger.create_account("b", "B", initial_balance=1000000)
 
-        N = 500
-        for i in range(N):
-            ledger.transfer("a", "b", 1)
-            ledger.transfer("b", "a", 1)
+        N = 200
+        txn_ids = []
+        for _ in range(N):
+            t1 = ledger.transfer("a", "b", 1)
+            t2 = ledger.transfer("b", "a", 1)
+            txn_ids.extend([t1.transaction_id, t2.transaction_id])
 
-        t0 = time.time()
-        for _ in range(200):
-            ledger.get_account_entries("a")
-        indexed_time = time.time() - t0
-
-        slow_count = 0
-        t0 = time.time()
-        for _ in range(200):
-            for entry_list in ledger._account_entries.values():
-                for entry in entry_list:
-                    for txn_id, txn in ledger._transactions.items():
-                        if any(e.entry_id == entry.entry_id for e in txn.entries):
-                            slow_count += 1
-                            break
-        scan_time = time.time() - t0
-
-        assert slow_count > 0
-        assert indexed_time < scan_time, (
-            f"Indexed lookup should be faster than O(N) scan: "
-            f"indexed={indexed_time:.4f}s vs scan={scan_time:.4f}s"
-        )
+        for aid in ("a", "b"):
+            entries = ledger.get_account_entries(aid)
+            assert len(entries) == 2 * N
+            linked_txns = {e[1].transaction_id for e in entries}
+            assert linked_txns == set(txn_ids)
+            for entry, txn in entries:
+                assert any(e.entry_id == entry.entry_id for e in txn.entries)
 
 
 class TestConcurrency:

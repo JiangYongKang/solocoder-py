@@ -585,7 +585,7 @@ class TestDerivedRateVersion:
 class TestSameHopBestRateSelection:
     def test_two_hops_two_paths_picks_higher_product(self):
         fx = make_converter()
-        for c in ["S", "A", "B", "C", "T"]:
+        for c in ["S", "A", "B", "T"]:
             fx.set_precision(c, 4)
         fx.add_rate("S", "A", 2.0)
         fx.add_rate("A", "T", 2.0)
@@ -629,14 +629,16 @@ class TestSameHopBestRateSelection:
         for c in ["S", "A", "B", "T"]:
             fx.set_precision(c, 4)
         fx.add_rate("S", "A", 2.0)
-        fx.add_rate("T", "A", 0.4)
+        fx.add_rate("T", "A", 0.5)
         fx.add_rate("S", "B", 3.0)
-        fx.add_rate("T", "B", 0.6)
+        fx.add_rate("T", "B", 0.5)
         result = fx.convert(1, "S", "T")
         assert result.path.hops == 2
-        expected_a = 2.0 * (1.0 / 0.4)
-        expected_b = 3.0 * (1.0 / 0.6)
-        assert result.raw_amount == max(expected_a, expected_b)
+        expected_a = 2.0 * (1.0 / 0.5)
+        expected_b = 3.0 * (1.0 / 0.5)
+        assert expected_a != expected_b
+        assert result.raw_amount == expected_b
+        assert "B" in result.path.path
 
     def test_prefers_shortest_path_over_better_rate(self):
         fx = make_converter()
@@ -652,44 +654,51 @@ class TestSameHopBestRateSelection:
 
 class TestConfigurablePathExplosion:
     def test_custom_max_paths_explored_triggers_earlier(self):
-        fx = make_converter(max_paths_explored=5)
-        import string
-        currencies = list(string.ascii_uppercase[:10])
-        for c in currencies:
+        fx = make_converter(max_paths_explored=3)
+        for c in ["S", "A", "B", "C", "D", "E", "T"]:
             fx.set_precision(c, 4)
-        for i, c1 in enumerate(currencies[:5]):
-            for c2 in currencies[5:]:
-                try:
-                    fx.add_rate(c1, c2, 1.0 + 0.01 * (ord(c1) + ord(c2)))
-                except Exception:
-                    pass
-        try:
-            fx.convert(1, currencies[0], currencies[-1])
-        except (PathExplosionError, NoConversionPathError):
-            pass
+        fx.add_rate("S", "A", 1.0)
+        fx.add_rate("S", "B", 1.0)
+        fx.add_rate("S", "C", 1.0)
+        fx.add_rate("A", "D", 1.0)
+        fx.add_rate("B", "D", 1.0)
+        fx.add_rate("C", "D", 1.0)
+        fx.add_rate("A", "E", 1.0)
+        fx.add_rate("B", "E", 1.0)
+        fx.add_rate("D", "T", 1.0)
+        fx.add_rate("E", "T", 1.0)
+        with pytest.raises(PathExplosionError):
+            fx.convert(1, "S", "T")
 
     def test_larger_max_paths_explored_allows_more_exploration(self):
-        import string
-        currencies = list(string.ascii_uppercase[:8])
-        fx_small = make_converter(max_paths_explored=10)
+        currencies = ["S", "A", "B", "C", "D", "E", "T"]
+        fx_small = make_converter(max_paths_explored=3)
         fx_large = make_converter(max_paths_explored=10000)
         for c in currencies:
             fx_small.set_precision(c, 4)
             fx_large.set_precision(c, 4)
-        for i, c1 in enumerate(currencies):
-            for j, c2 in enumerate(currencies):
-                if i < j:
-                    rate = 1.0 + 0.01 * (i + j)
-                    fx_small.add_rate(c1, c2, rate)
-                    fx_large.add_rate(c1, c2, rate)
+        edges = [
+            ("S", "A"), ("S", "B"), ("S", "C"),
+            ("A", "D"), ("B", "D"), ("C", "D"),
+            ("A", "E"), ("B", "E"),
+            ("D", "T"), ("E", "T"),
+        ]
+        for src, tgt in edges:
+            fx_small.add_rate(src, tgt, 1.0)
+            fx_large.add_rate(src, tgt, 1.0)
         small_raised = False
         try:
-            fx_small.convert(1, currencies[0], currencies[-1])
+            fx_small.convert(1, "S", "T")
         except PathExplosionError:
             small_raised = True
         large_raised = False
+        result = None
         try:
-            fx_large.convert(1, currencies[0], currencies[-1])
+            result = fx_large.convert(1, "S", "T")
         except PathExplosionError:
             large_raised = True
-        assert small_raised or not large_raised
+        assert small_raised is True
+        assert large_raised is False
+        assert result is not None
+        assert result.raw_amount == 1.0
+        assert result.path.hops in (2, 3)

@@ -1,0 +1,7 @@
+你修复的计量计费域还存在几个代码质量和测试覆盖的问题，需要修复：
+1. _require_account_has_bills 方法名暗示校验"账户是否有账单"，但实际校验的是"账户是否在引擎中出现过（有用量或账单）"。方法名与实际语义不匹配，且 _known_accounts 作为一个只增不减的集合只能判断账户是否完全陌生，覆盖面的语义比方法名暗示的更窄。需要让方法名和校验逻辑描述清楚实际做了什么。
+2. _known_resources 集合与 _pricing_configs 的键集完全同步维护，是一个冗余状态。给定 resource_type 是否已注册可以直接通过 _pricing_configs 的键集来判断，不需要单独维护一份同步副本。多维护一份状态增加了未来状态不一致的风险。
+3. _calculate_line_item 中对 TierCalculationDetail 对象做了原地属性改写（td.tier_cost = rounded_cost、td.units_applied = rounded_units），会污染 models.py 中 pricing.calculate_cost() 返回的原始对象。如果将来有其他代码路径引用了同一个 detail 实例，就会读到被引擎内部改写过的值。需要避免原地修改入参返回的对象。
+4. 并发测试 test_concurrent_settle_and_report_consistent 只验证了无异常抛出，没有断言结算后的数据一致性——比如账单总金额是否正确、用量的 aggregated_usage 是否已归零、生成的账单数量是否与有用量的账户数一致。并发测试的覆盖深度需要进一步加强，不光检查"没报错"，还要验证"结果正确"。
+5. 更新 README.md，说明账户校验和资源校验的语义约定，以及计算过程中对 PricingDetail 的不可变性保证。
+6. 重新运行 poetry run pytest tests/billing/ -q，需要让所有测试通过。

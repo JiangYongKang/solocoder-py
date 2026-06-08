@@ -1,0 +1,8 @@
+产物不满意：
+1. group_bucket_start/end 只是按 priority 排序后分配的虚拟顺序偏移量（0-19, 20-39），与真实桶编号（如 0-19, 80-99）完全无关，没有满足提示词"准确记录实验在互斥组内的真实桶占用信息"的要求。这两个字段能推出的信息只有 end - start + 1 = traffic_percentage，与 traffic_percentage 完全冗余。
+2. group_bucket_start/end 在整个 manager 中仅被设置和清除，从未被任何分配或路由逻辑消费。_map_within_bucket_to_experiment 独立重新计算了相同的 priority 排序和 offset 逻辑，完全绕过了这两个字段，说明它们没有起到解决非连续桶元数据记录问题的实际作用。
+3. group_bucket_start/end 与 bucket_start/end 命名相似但语义完全不同：前者记录虚拟组内偏移，后者记录全局真实桶索引。这种表面一致实则语义分裂的命名会让后续维护者产生混淆，容易误用。
+过程不满意：
+1. 模型收到任务后第一条行为就是创建 TodoList，没有先阅读和分析代码理解非连续桶的根因，不符合"先分析问题再规划"的要求。
+2. STATUS/RUNNING 在桶分配之前的 bug 是通过测试失败后才发现并修复的，说明模型在编写 _recalc_group_experiment_bucket_ranges 时没有预见到 status 过滤对 recalc 的影响，初始实现欠缺边界考量。
+3. 思考过程结尾的总结大段使用英文自然语言，不符合中文输出的规范要求。

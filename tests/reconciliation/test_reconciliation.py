@@ -619,7 +619,7 @@ class TestFallbackStatusMismatch:
         assert "Fallback status mismatch" in disc.detail
 
 
-class TestMatchedAmount口径:
+class TestMatchedAmountBasis:
     def test_matched_amount_uses_channel_amount_after_write_off(self, lenient_engine, base_time):
         lenient_engine.import_internal_transactions([
             make_internal_record("T001", 100.0, base_time),

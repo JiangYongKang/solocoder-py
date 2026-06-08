@@ -587,12 +587,12 @@ class TestCallbackExceptionIsolation:
         assert good_results[0].is_high_watermark is False
 
     def test_callback_can_safely_enqueue_dequeue_without_deadlock(self, queue_with_watermarks: BoundedQueue):
-        enqueue_result = {"success": False}
+        dequeue_result = {"success": False}
 
         def callback_on_high(state):
             try:
                 queue_with_watermarks.dequeue(block=False)
-                enqueue_result["success"] = True
+                dequeue_result["success"] = True
             except Exception:
                 pass
 
@@ -601,7 +601,7 @@ class TestCallbackExceptionIsolation:
         for i in range(10):
             queue_with_watermarks.enqueue(i)
 
-        assert enqueue_result["success"] is True
+        assert dequeue_result["success"] is True
 
     def test_callback_exception_order_preserved(self, queue_with_watermarks: BoundedQueue):
         call_order = []

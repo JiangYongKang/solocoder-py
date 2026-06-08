@@ -105,7 +105,11 @@ class Ledger:
         with self._global_lock:
             if account_id not in self._accounts:
                 raise AccountNotFoundError(f"Account {account_id} not found")
-            return self._accounts[account_id].balance
+            account = self._accounts[account_id]
+
+        lock = self._get_or_create_account_lock(account_id)
+        with lock:
+            return account.balance
 
     def list_accounts(self) -> List[Account]:
         with self._global_lock:
@@ -118,9 +122,10 @@ class Ledger:
         end_time: Optional[datetime] = None,
         status: Optional[TransactionStatus] = None,
     ) -> List[Tuple[Entry, Transaction]]:
-        self.get_account(account_id)
-
         with self._global_lock:
+            if account_id not in self._accounts:
+                raise AccountNotFoundError(f"Account {account_id} not found")
+
             entries = [e.copy() for e in self._account_entries.get(account_id, [])]
             results: List[Tuple[Entry, Transaction]] = []
             for entry in entries:
@@ -313,46 +318,56 @@ class Ledger:
     ) -> Tuple[int, int, bool, Dict[str, Tuple[int, int, int, int, bool]]]:
         account_details: Dict[str, Tuple[int, int, int, int, bool]] = {}
 
+        account_ids = self._snapshot_account_ids()
         with self._global_lock:
             account_entries: Dict[str, List[Entry]] = {
                 aid: list(es) for aid, es in self._account_entries.items()
             }
             transactions = dict(self._transactions)
-            accounts = {aid: a.copy() for aid, a in self._accounts.items()}
+            initial_balances: Dict[str, int] = {
+                aid: self._accounts[aid].initial_balance for aid in account_ids
+            }
 
         total_debit_balances = 0
         total_credit_balances = 0
 
-        for account_id, account in accounts.items():
-            total_debits = 0
-            total_credits = 0
-            for entry in account_entries.get(account_id, []):
-                txn_id = self._entry_to_transaction.get(entry.entry_id)
-                if txn_id is None:
+        with self._lock_accounts(account_ids):
+            for account_id in account_ids:
+                account = self._accounts.get(account_id)
+                if account is None:
                     continue
-                txn = transactions.get(txn_id)
-                if txn is None or not txn.is_posted:
-                    continue
-                if entry.entry_type == EntryType.DEBIT:
-                    total_debits += entry.amount
-                else:
-                    total_credits += entry.amount
 
-            expected_balance = account.initial_balance + total_debits - total_credits
-            integrity_ok = expected_balance == account.balance
+                total_debits = 0
+                total_credits = 0
+                for entry in account_entries.get(account_id, []):
+                    txn_id = self._entry_to_transaction.get(entry.entry_id)
+                    if txn_id is None:
+                        continue
+                    txn = transactions.get(txn_id)
+                    if txn is None or not txn.is_posted:
+                        continue
+                    if entry.entry_type == EntryType.DEBIT:
+                        total_debits += entry.amount
+                    else:
+                        total_credits += entry.amount
 
-            account_details[account_id] = (
-                total_debits,
-                total_credits,
-                account.balance,
-                expected_balance,
-                integrity_ok,
-            )
+                expected_balance = (
+                    initial_balances[account_id] + total_debits - total_credits
+                )
+                integrity_ok = expected_balance == account.balance
 
-            if account.balance > 0:
-                total_debit_balances += account.balance
-            elif account.balance < 0:
-                total_credit_balances += abs(account.balance)
+                account_details[account_id] = (
+                    total_debits,
+                    total_credits,
+                    account.balance,
+                    expected_balance,
+                    integrity_ok,
+                )
+
+                if account.balance > 0:
+                    total_debit_balances += account.balance
+                elif account.balance < 0:
+                    total_credit_balances += abs(account.balance)
 
         balanced = total_debit_balances == total_credit_balances and all(
             d[4] for d in account_details.values()

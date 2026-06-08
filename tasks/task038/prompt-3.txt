@@ -1,0 +1,4 @@
+你修复的订阅生命周期域还存在两个细节问题，需要修正：
+1. _add_cycle 函数中月付和季付分支统一使用了 _add_months_safe 处理月末回退，但年付分支仍然使用 try/except ValueError 后回退到 day=28 的旧方案。虽然对于年付目前唯一触发 ValueError 的只有 2 月 29 日，结果也对，但同一函数内出现两套不同的月末处理策略不利于代码维护。需要统一为同一套月末处理方式。
+2. 新增测试 test_renew_from_end_of_month_preserves_end_of_month 的测试名称暗示验证"月末续费保持月末"，但实际验证的是 2 月 29 日续费到 3 月 29 日（两个日期都是 29 号，属于日相符而非月末保持的场景）。测试名称有误导性，需要改为准确描述实际覆盖场景的名称。
+3. 重新运行 poetry run pytest tests/subscription/ -q，需要让所有测试通过。

@@ -1,0 +1,7 @@
+产物不满意：
+1. _dedup 方法（第183-189行）手工内联构造了与 _content_key 完全相同的去重元组（amount、txn_time、status、side、order_id），既然已经提取出 _content_key 静态方法就应该直接复用，当前两份逻辑分叉维护容易不一致。
+2. _content_key 和 _dedup 中使用 txn.txn_time.replace(microsecond=0) 将时间截断到秒级，同一秒内金额、状态、方向、订单号完全相同但实际独立的两笔交易会被误判为重复而丢弃，导入阶段存在数据丢失风险。
+3. _try_match_by_id 中匹配成功时将 diff_amount 从 itxn.amount - ctxn.amount 改为硬编码的 0.0，虽然等于条件成立时结果相同，但模型未确认原计算意图是否还有其他用途，属于超过提示词范围的未授权改动。
+过程不满意：
+1. 模型收到提示词后立即说"先创建任务计划"然后创建 TodoList，并没有逐条分析 5 个问题的根因与修改策略，违反了"先分析问题再规划"的流程要求。
+2. 模型对 engine.py 执行了 4 次独立的 edit_file_search_replace 依次修补不同区域，而非一次性读完整文件后规划所有改动再批量提交，过程碎片化。_dedup 未复用 _content_key 也说明在分步修改时缺乏整体的代码一致性意识。

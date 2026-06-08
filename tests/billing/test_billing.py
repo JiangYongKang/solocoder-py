@@ -759,6 +759,9 @@ class TestConcurrency:
         for i in range(50):
             engine.report_usage(ACC, RES, 1.0, reported_at=report_time)
 
+        reported_counts_lock = threading.Lock()
+        reported_successfully = [0]
+
         def reporter():
             try:
                 for _ in range(50):
@@ -766,6 +769,8 @@ class TestConcurrency:
                         engine.report_usage(
                             ACC, RES, 1.0, reported_at=report_time
                         )
+                        with reported_counts_lock:
+                            reported_successfully[0] += 1
                     except (PeriodSettledError, BillingError):
                         break
             except Exception as e:
@@ -787,3 +792,54 @@ class TestConcurrency:
         t2.join()
 
         assert len(errors) == 0
+
+        assert period.is_settled, "Period should be settled after concurrent settle attempt"
+        assert engine.get_current_usage(ACC, RES) == 0.0, "Current usage should be 0 after period settled"
+
+        bills = engine.get_bills(ACC)
+        assert len(bills) == 1, f"Should have exactly 1 bill, got {len(bills)}"
+
+        expected_base = 50
+        total_reported = expected_base + reported_successfully[0]
+        bill = bills[0]
+        assert bill.account_id == ACC
+        assert len(bill.line_items) == 1
+        assert bill.line_items[0].resource_type == RES
+        assert bill.line_items[0].total_units == pytest.approx(float(total_reported))
+        assert bill.total_amount == pytest.approx(float(total_reported))
+
+
+class TestCalculationImmutability:
+    def test_tier_calculation_details_not_mutated_by_engine(self):
+        from .conftest import DEFAULT_EFFECTIVE_FROM
+        from solocoder_py.billing import TieredPricing
+
+        engine = BillingEngine()
+        pricing = TieredPricing(
+            resource_type=RES,
+            tiers=make_simple_tier(1.5),
+            effective_from=DEFAULT_EFFECTIVE_FROM,
+        )
+        engine._pricing_configs[RES] = [(DEFAULT_EFFECTIVE_FROM, pricing)]
+        _, period = open_standard_period(engine)
+
+        _, original_details = pricing.calculate_cost(100)
+        original_costs = [d.tier_cost for d in original_details]
+        original_units = [d.units_applied for d in original_details]
+
+        engine.report_usage(ACC, RES, 100, reported_at=in_period(period, 1))
+        bills = engine.settle_period()
+
+        _, fresh_details = pricing.calculate_cost(100)
+        fresh_costs = [d.tier_cost for d in fresh_details]
+        fresh_units = [d.units_applied for d in fresh_details]
+
+        assert fresh_costs == original_costs, "Pricing.calculate_cost original results should not be mutated"
+        assert fresh_units == original_units, "Pricing.calculate_cost original units should not be mutated"
+
+        bill = bills[0]
+        line = bill.line_items[0]
+        for split in line.proportional_splits:
+            for td in split.tier_details:
+                assert td.tier_cost == pytest.approx(150.0)
+                assert td.units_applied == pytest.approx(100.0)

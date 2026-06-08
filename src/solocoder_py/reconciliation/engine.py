@@ -79,8 +79,10 @@ class ReconciliationEngine:
         self._fallback_time_window = fallback_time_window
         self._internal_txns: Dict[str, Transaction] = {}
         self._internal_by_txn_id: Dict[str, str] = {}
+        self._internal_by_content: Dict[Tuple, str] = {}
         self._channel_txns: Dict[str, Transaction] = {}
         self._channel_by_txn_id: Dict[str, str] = {}
+        self._channel_by_content: Dict[Tuple, str] = {}
         self._reports: Dict[str, ReconciliationReport] = {}
         self._reports_by_time: List[Tuple[datetime, ReconciliationReport]] = []
         self._lock = threading.RLock()
@@ -89,17 +91,34 @@ class ReconciliationEngine:
     def _make_internal_key() -> str:
         return f"__txn_{uuid.uuid4().hex}"
 
+    @staticmethod
+    def _content_key(txn: Transaction) -> Tuple:
+        return (
+            round(txn.amount, 6),
+            txn.txn_time.replace(microsecond=0),
+            txn.status.value,
+            txn.side.value,
+            txn.order_id or "",
+        )
+
     def import_internal_transactions(self, records: List[Dict]) -> List[Transaction]:
         with self._lock:
             imported = []
             for rec in records:
                 txn = normalize_internal_record(rec)
-                if txn.has_txn_id and txn.txn_id in self._internal_by_txn_id:
-                    continue
+                if txn.has_txn_id:
+                    if txn.txn_id in self._internal_by_txn_id:
+                        continue
+                else:
+                    ck = self._content_key(txn)
+                    if ck in self._internal_by_content:
+                        continue
                 key = self._make_internal_key()
                 self._internal_txns[key] = txn
                 if txn.has_txn_id:
                     self._internal_by_txn_id[txn.txn_id] = key
+                else:
+                    self._internal_by_content[self._content_key(txn)] = key
                 imported.append(txn)
             return imported
 
@@ -108,12 +127,19 @@ class ReconciliationEngine:
             imported = []
             for rec in records:
                 txn = normalize_channel_record(rec)
-                if txn.has_txn_id and txn.txn_id in self._channel_by_txn_id:
-                    continue
+                if txn.has_txn_id:
+                    if txn.txn_id in self._channel_by_txn_id:
+                        continue
+                else:
+                    ck = self._content_key(txn)
+                    if ck in self._channel_by_content:
+                        continue
                 key = self._make_internal_key()
                 self._channel_txns[key] = txn
                 if txn.has_txn_id:
                     self._channel_by_txn_id[txn.txn_id] = key
+                else:
+                    self._channel_by_content[self._content_key(txn)] = key
                 imported.append(txn)
             return imported
 
@@ -139,26 +165,38 @@ class ReconciliationEngine:
         with self._lock:
             self._internal_txns.clear()
             self._internal_by_txn_id.clear()
+            self._internal_by_content.clear()
             self._channel_txns.clear()
             self._channel_by_txn_id.clear()
+            self._channel_by_content.clear()
 
     @staticmethod
     def _dedup(txns: List[Transaction]) -> Dict[str, Transaction]:
         seen: Dict[str, Transaction] = {}
+        seen_content: set[Tuple] = set()
         no_id_counter = 0
         for txn in txns:
             if txn.has_txn_id:
                 if txn.txn_id not in seen:
                     seen[txn.txn_id] = txn
             else:
-                key = f"__no_id_{no_id_counter}"
-                no_id_counter += 1
-                seen[key] = txn
+                ck = (
+                    round(txn.amount, 6),
+                    txn.txn_time.replace(microsecond=0),
+                    txn.status.value,
+                    txn.side.value,
+                    txn.order_id or "",
+                )
+                if ck not in seen_content:
+                    seen_content.add(ck)
+                    key = f"__no_id_{no_id_counter}"
+                    no_id_counter += 1
+                    seen[key] = txn
         return seen
 
     @staticmethod
-    def _amounts_close(a: float, b: float, epsilon: float = 1e-6) -> bool:
-        return abs(round(a, 2) - round(b, 2)) <= epsilon
+    def _amounts_equal_rounded(a: float, b: float) -> bool:
+        return round(a, 2) == round(b, 2)
 
     def _try_match_by_id(
         self,
@@ -209,12 +247,12 @@ class ReconciliationEngine:
                 channel_matched.add(c_key)
                 continue
 
-            if self._amounts_close(itxn.amount, ctxn.amount):
+            if itxn.amount == ctxn.amount:
                 matched_pairs.append(MatchedPair(
                     internal_txn=itxn,
                     channel_txn=ctxn,
                     match_type=MatchType.EXACT,
-                    diff_amount=itxn.amount - ctxn.amount,
+                    diff_amount=0.0,
                 ))
                 internal_matched.add(i_key)
                 channel_matched.add(c_key)
@@ -287,7 +325,7 @@ class ReconciliationEngine:
                 if time_diff > self._fallback_time_window.total_seconds():
                     continue
 
-                amounts_match_rounded = self._amounts_close(itxn.amount, ctxn.amount)
+                amounts_match_rounded = self._amounts_equal_rounded(itxn.amount, ctxn.amount)
                 amounts_in_tolerance = self._tolerance.is_within_tolerance(itxn.amount, ctxn.amount)
 
                 if itxn.status == ctxn.status:

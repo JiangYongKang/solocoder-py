@@ -115,8 +115,7 @@ class BulkheadExecutor:
     def _execute_task(self, group_name: str, task: _TaskWrapper) -> TaskResult:
         state = self._get_group_state(group_name)
         acquired = False
-        queue_start: Optional[float] = None
-        rejected_result: Optional[TaskResult] = None
+        queue_wait_time: float = 0.0
 
         with state.condition:
             if state.current_concurrency >= state.config.max_concurrency:
@@ -127,87 +126,28 @@ class BulkheadExecutor:
                         status=TaskStatus.REJECTED,
                         exception=BulkheadFullError(task.task_id, group_name),
                     )
-                else:
-                    if (
-                        state.config.max_queue_size > 0
-                        and len(state.queue) >= state.config.max_queue_size
-                    ):
-                        return TaskResult(
-                            task_id=task.task_id,
-                            group_name=group_name,
-                            status=TaskStatus.REJECTED,
-                            exception=BulkheadFullError(
-                                task.task_id,
-                                group_name,
-                                f"Bulkhead group '{group_name}' queue is full, "
-                                f"task '{task.task_id}' rejected",
-                            ),
-                        )
-
-                    queue_start = self._clock.now()
-                    deadline: Optional[float] = None
-                    if state.config.queue_timeout > 0:
-                        deadline = task.submitted_at + state.config.queue_timeout
-
-                    state.queue.append(task)
-
-                    while True:
-                        if state.current_concurrency < state.config.max_concurrency:
-                            if task in state.queue:
-                                state.queue.remove(task)
-                            break
-
-                        wait_timeout: Optional[float] = None
-                        if deadline is not None:
-                            wait_timeout = deadline - self._clock.now()
-                            if wait_timeout <= 0:
-                                if task in state.queue:
-                                    state.queue.remove(task)
-                                queue_wait = self._clock.now() - queue_start
-                                rejected_result = TaskResult(
-                                    task_id=task.task_id,
-                                    group_name=group_name,
-                                    status=TaskStatus.QUEUE_TIMEOUT,
-                                    exception=BulkheadQueueTimeoutError(
-                                        task.task_id, group_name
-                                    ),
-                                    queue_wait_time=queue_wait,
-                                )
-                                break
-
-                        state.condition.wait(timeout=wait_timeout)
-
-                        if (
-                            deadline is not None
-                            and self._clock.now() >= deadline
-                            and rejected_result is None
-                        ):
-                            if task in state.queue:
-                                state.queue.remove(task)
-                            queue_wait = self._clock.now() - queue_start
-                            rejected_result = TaskResult(
-                                task_id=task.task_id,
-                                group_name=group_name,
-                                status=TaskStatus.QUEUE_TIMEOUT,
-                                exception=BulkheadQueueTimeoutError(
-                                    task.task_id, group_name
-                                ),
-                                queue_wait_time=queue_wait,
-                            )
-                            break
-
-                    if rejected_result is not None:
-                        return rejected_result
+                try:
+                    queue_wait_time = self._wait_for_slot(state, task)
+                except BulkheadQueueTimeoutError as e:
+                    return TaskResult(
+                        task_id=task.task_id,
+                        group_name=group_name,
+                        status=TaskStatus.QUEUE_TIMEOUT,
+                        exception=e,
+                        queue_wait_time=e.queue_wait_time,
+                    )
+                except BulkheadFullError as e:
+                    return TaskResult(
+                        task_id=task.task_id,
+                        group_name=group_name,
+                        status=TaskStatus.REJECTED,
+                        exception=e,
+                    )
 
             state.current_concurrency += 1
             acquired = True
 
         try:
-            if queue_start is not None:
-                queue_wait = self._clock.now() - queue_start
-            else:
-                queue_wait = 0.0
-
             exec_start = self._clock.now()
             try:
                 result = task.func(*task.args, **task.kwargs)
@@ -220,7 +160,7 @@ class BulkheadExecutor:
                     status=TaskStatus.SUCCESS,
                     result=result,
                     execution_time=exec_time,
-                    queue_wait_time=queue_wait,
+                    queue_wait_time=queue_wait_time,
                 )
             except Exception as e:
                 exec_time = self._clock.now() - exec_start
@@ -232,7 +172,7 @@ class BulkheadExecutor:
                     status=TaskStatus.FAILED,
                     exception=e,
                     execution_time=exec_time,
-                    queue_wait_time=queue_wait,
+                    queue_wait_time=queue_wait_time,
                 )
         finally:
             if acquired:
@@ -240,6 +180,53 @@ class BulkheadExecutor:
                     state.current_concurrency -= 1
                     if state.queue:
                         state.condition.notify_all()
+
+    def _wait_for_slot(self, state: _GroupState, entry: _QueueEntry) -> float:
+        assert state.config.full_strategy == FullStrategy.QUEUE
+
+        if state.config.max_queue_size > 0 and len(state.queue) >= state.config.max_queue_size:
+            raise BulkheadFullError(
+                entry.task_id,
+                state.config.name,
+                f"Bulkhead group '{state.config.name}' queue is full, "
+                f"task '{entry.task_id}' rejected",
+            )
+
+        queue_start = self._clock.now()
+        deadline: Optional[float] = None
+        if state.config.queue_timeout > 0:
+            deadline = entry.submitted_at + state.config.queue_timeout
+
+        state.queue.append(entry)
+
+        try:
+            while True:
+                if state.current_concurrency < state.config.max_concurrency:
+                    state.queue.remove(entry)
+                    return self._clock.now() - queue_start
+
+                wait_timeout: Optional[float] = None
+                if deadline is not None:
+                    wait_timeout = deadline - self._clock.now()
+                    if wait_timeout <= 0:
+                        state.queue.remove(entry)
+                        wait = self._clock.now() - queue_start
+                        raise BulkheadQueueTimeoutError(
+                            entry.task_id, state.config.name, queue_wait_time=wait
+                        )
+
+                state.condition.wait(timeout=wait_timeout)
+
+                if deadline is not None and self._clock.now() >= deadline:
+                    state.queue.remove(entry)
+                    wait = self._clock.now() - queue_start
+                    raise BulkheadQueueTimeoutError(
+                        entry.task_id, state.config.name, queue_wait_time=wait
+                    )
+        except BaseException:
+            if entry in state.queue:
+                state.queue.remove(entry)
+            raise
 
     def _get_group_state(self, group_name: str) -> _GroupState:
         with self._lock:
@@ -259,52 +246,14 @@ class BulkheadExecutor:
 
         state = self._get_group_state(group_name)
         acquired = False
-        waiter: Optional[_AcquireWaiter] = None
         submitted_at = self._clock.now()
 
         with state.condition:
             if state.current_concurrency >= state.config.max_concurrency:
                 if state.config.full_strategy == FullStrategy.REJECT:
                     raise BulkheadFullError(task_id, group_name)
-                else:
-                    if (
-                        state.config.max_queue_size > 0
-                        and len(state.queue) >= state.config.max_queue_size
-                    ):
-                        raise BulkheadFullError(
-                            task_id,
-                            group_name,
-                            f"Bulkhead group '{group_name}' queue is full, "
-                            f"task '{task_id}' rejected",
-                        )
-
-                    deadline: Optional[float] = None
-                    if state.config.queue_timeout > 0:
-                        deadline = submitted_at + state.config.queue_timeout
-
-                    waiter = _AcquireWaiter(task_id=task_id, submitted_at=submitted_at)
-                    state.queue.append(waiter)
-
-                    while True:
-                        if state.current_concurrency < state.config.max_concurrency:
-                            if waiter in state.queue:
-                                state.queue.remove(waiter)
-                            break
-
-                        wait_timeout: Optional[float] = None
-                        if deadline is not None:
-                            wait_timeout = deadline - self._clock.now()
-                            if wait_timeout <= 0:
-                                if waiter in state.queue:
-                                    state.queue.remove(waiter)
-                                raise BulkheadQueueTimeoutError(task_id, group_name)
-
-                        state.condition.wait(timeout=wait_timeout)
-
-                        if deadline is not None and self._clock.now() >= deadline:
-                            if waiter in state.queue:
-                                state.queue.remove(waiter)
-                            raise BulkheadQueueTimeoutError(task_id, group_name)
+                waiter = _AcquireWaiter(task_id=task_id, submitted_at=submitted_at)
+                self._wait_for_slot(state, waiter)
 
             state.current_concurrency += 1
             acquired = True

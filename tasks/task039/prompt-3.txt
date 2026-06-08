@@ -1,0 +1,9 @@
+你修复的双分录记账账本还存在几个并发安全和代码质量的问题，需要修复：
+1. get_balance 现在只在全局锁下读取 account.balance，但 post_transaction 修改余额时只持有账户锁不持有全局锁，两者没有互斥保护。这意味着 get_balance 可能在并发过账过程中读到部分分录已应用但交易尚未标记 POSTED 的中间态余额。需要对 get_balance 和 post_transaction 的锁进行协调，确保查询余额时看到的是已过账交易的完整结果。
+2. get_account_entries 方法先调用 self.get_account(account_id) 获取账户并要求锁，然后立即释放，再重新获取全局锁做分录查询。get_account 返回的副本在 get_account_entries 中完全没被使用，只是作为副作用校验账户存在。需要改为直接在校验层完成存在性检查，避免多余的全局锁获取和对象分配。
+3. get_trial_balance 在全局锁下对 _accounts 做快照后就释放锁，然后基于快照计算。但 post_transaction 修改余额时不持有全局锁，get_trial_balance 与过账操作没有互斥，可能在并发过账时捕获到部分分录已应用但交易尚未标记 POSTED 的中间状态。需要对试算平衡表的快照获取和过账操作建立互斥关系。
+4. 封装保护测试 TestEncapsulation 中多个用例直接通过 ledger._accounts["a"].balance = 99999 的方式篡改内部状态来验证封装的正确性，性能测试直接遍历 ledger._account_entries 等私有字段。这些测试大量依赖内部实现细节，应该仅通过公共 API 来构造测试场景和验证行为。
+5. 性能对比测试 test_index_lookup_is_o1_vs_on 使用 time.time() 做 wall-clock 时间比较，受 CPU 负载和 GC 等外部因素影响大，在 CI 环境下可能出现假失败。需要改为不依赖 wall-clock 时间的性能对比方式，比如通过比较操作次数来验证索引查找的 O(1) vs O(N) 差异。
+6. test_both_not_found_errors_inherit_from_ledger_error 测试名称声称验证"继承自 LedgerError"，但实际只做了 isinstance(e, TransactionNotFoundError) 和 isinstance(e, Exception) 断言，并没有真正检验 isinstance(e, LedgerError)。需要补上缺失的断言，或者修改测试名称以反映实际覆盖范围。
+7. 更新 README.md，说明余额查询的并发一致性保证策略。
+8. 重新运行 poetry run pytest tests/ledger/ -q，需要让所有测试通过。
