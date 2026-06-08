@@ -18,9 +18,9 @@
 
 | 类名 | 职责 |
 |------|------|
-| `Clock` | 抽象时钟接口，定义 `now()` 和 `sleep()` 方法 |
-| `SystemClock` | 基于 `time.monotonic()` 的实时光钟，用于生产环境 |
-| `ManualClock` | 手动可控时钟，支持 `advance()` 推进时间，用于单元测试 |
+| `Clock` | 抽象时钟基类，定义三个接口：`now()` 返回当前时间戳；`sleep(seconds)` 按 Clock 语义等待指定时长（含入参校验）；`yield_cpu()` 挂出极短真实时间防止忙轮询（默认空实现，子类按需覆盖） |
+| `SystemClock` | 生产环境实时光钟，基于 `time.monotonic()`。`sleep()` 真实阻塞等待，`yield_cpu()` 默认空操作（`sleep()` 已自然让出 CPU） |
+| `ManualClock` | 测试用手动可控时钟。`advance(seconds)` 手动推进逻辑时间，`set(time)` 设置逻辑时间，`sleep()` 仅推进逻辑时间不阻塞真实时间，`yield_cpu()` 执行 1 毫秒真实时间 `time.sleep` 防止后台线程忙轮询；`sleep_history` 记录所有 sleep 调用的时长用于断言 |
 
 ### enums.py
 
@@ -146,15 +146,15 @@ _start_auto_election()
         │
         ├─► clock.sleep(auto_election_interval)  遵循 Clock 抽象等待间隔
         │
-        ├─► [仅 ManualClock] time.sleep(1ms)  防止 ManualClock 下忙轮询
+        ├─► clock.yield_cpu()  遵循 Clock 抽象让出 CPU（防忙轮询）
         │
         └── 循环，直到 stop_auto_election() 被调用
 ```
 
 后台线程特点：
-- **严格遵循 Clock 抽象**：使用 `clock.sleep()` 等待间隔，而非绕过抽象层直接 `time.sleep()`。当注入 `ManualClock` 时，逻辑时间会自动推进，`is_election_timed_out()` 能正确检测超时，自动选举在测试场景下同样有效。
-- **ManualClock 下防忙轮询**：检测到使用 `ManualClock` 时，额外增加 1 毫秒的真实时间 `time.sleep(0.001)`，避免 `clock.sleep()` 不阻塞真实时间导致 CPU 100% 空转。
-- **异常不静默吞掉**：任何异常（`StaleTermError`、`NodeNotFoundError`、`RuntimeError` 等）都通过 `traceback.print_exc()` 输出到 stderr，线程继续下一轮循环，问题可被观测和排查。不再只捕获 `LeaderElectionError` 然后静默 `pass`。
+- **严格遵循 Clock 抽象，不绕过接口**：等待间隔用 `clock.sleep()`、CPU 让渡用 `clock.yield_cpu()`，集群代码中没有 `isinstance` 判断具体时钟类型，也没有直接 `time.sleep()` 调用。所有真实时间相关的决策完全封装在 Clock 实现内部。
+- **`yield_cpu()` 语义**：`Clock` 基类提供默认空实现。`SystemClock` 继承空实现（`sleep()` 已自然阻塞真实时间）。`ManualClock` 覆盖为 1 毫秒真实时间 `time.sleep`，在不影响逻辑时间推进速率的前提下防止 `sleep()` 不阻塞真实时间导致的 CPU 100% 空转。
+- **异常不静默吞掉**：`check_and_run_elections()`、`clock.sleep()`、`clock.yield_cpu()` 三处的所有异常都通过 `traceback.print_exc()` 输出到 stderr，线程继续下一轮循环，问题可被观测和排查。
 - **可随时启停**：`start_auto_election()` 重复调用幂等；`stop_auto_election()` 可安全停止并等待线程退出（最长 2 秒）
 - **状态查询**：`is_auto_election_running` 属性反映当前运行状态
 
@@ -173,7 +173,7 @@ _start_auto_election()
 
 ### 时钟可插拔
 
-生产环境使用 `SystemClock`（基于 `time.monotonic()`），单元测试使用 `ManualClock` 通过 `advance(seconds)` 精确控制时间推进，避免真实等待。后台线程的轮询间隔严格遵循 Clock 抽象——使用 `clock.sleep()` 推进逻辑时间。
+生产环境使用 `SystemClock`（基于 `time.monotonic()`），单元测试使用 `ManualClock` 通过 `advance(seconds)` 精确控制时间推进，避免真实等待。后台线程与 Clock 抽象严格配合——通过 `clock.sleep()` 推进逻辑时间间隔，通过 `clock.yield_cpu()` 做 CPU 让渡节流。集群代码没有对具体时钟类型的 `isinstance` 判断，也不直接调用 `time.sleep`，所有真实时间相关的行为都由 Clock 实现自行决定。
 
 ### ManualClock 注入场景下的自动选举行为约定
 
@@ -183,9 +183,10 @@ _start_auto_election()
 后台线程每轮循环调用 `clock.sleep(auto_election_interval)`，会将 `ManualClock` 的逻辑时间自动推进 `auto_election_interval` 秒。调用方无需手动 `advance()`，超时检测（`is_election_timed_out()`）会随逻辑时间推进而自然触发。
 
 #### 真实时间节流防空转
-由于 `ManualClock._do_sleep()` 不阻塞真实时间，后台线程会额外执行 1 毫秒的 `time.sleep(0.001)` 作为真实时间节流。这保证了：
+`ManualClock.yield_cpu()` 覆盖了基类空实现，内部执行 1 毫秒的真实时间 `time.sleep`。由于 `ManualClock._do_sleep()` 只推进逻辑时间不阻塞真实时间，`yield_cpu()` 提供了必要的真实时间节流：
 - 逻辑时间以约 1000 倍速推进（每真实毫秒推进 `auto_election_interval` 逻辑秒），自动选举仍然很快完成
 - CPU 不会 100% 空转
+- 节流逻辑完全封装在 `ManualClock` 内部，集群代码不做任何具体时钟类型判断，不直接调用 `time.sleep`
 
 #### 与手动 advance() 的交互
 - `ManualClock.advance()` 和后台线程的 `clock.sleep()` 都会推进逻辑时间，两者是叠加关系

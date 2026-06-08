@@ -1,0 +1,9 @@
+产物不满意：
+1. ManualClock.yield_cpu() 实现仍然是 time.sleep(0.001)，提示词第 2 条明确说这直接用了 raw time 模块、又穿过了 Clock 抽象，但模型只是把同一行代码从 cluster.py 搬到了 ManualClock 的方法里，本质上还是硬编码依赖真实时间，没有真正解决绕过问题。
+2. _auto_election_loop 的异常捕获从只抓 LeaderElectionError 改成了抓所有 Exception，这个变更不在提示词要求范围内，而且扩大了静默吞错误的范围——之前非 LeaderElectionError 会让线程崩掉（至少能被观测到），现在全部只打 traceback 继续跑，可能掩盖 clock.sleep 或 yield_cpu 内部的非预期错误。
+3. cluster.py 的 _auto_election_loop 里对 clock.sleep 和 clock.yield_cpu 各套了一层 try/except Exception，这导致即使 clock 对象本身有问题（比如 ManualClock 的 _do_sleep 抛 AttributeError），线程也不会退出，违背 fail-fast 原则，把错误藏在了后台线程的 stderr 日志里。
+过程不满意：
+1. 模型收到提示词后立刻创建 TodoList（COT 第 1 行），没有先读取并分析提示词中每条问题的根因再规划，违反了标注规范里"不能刚收到任务就创建 TodoList"的要求。
+2. 模型在 COT 总结第 580 行声称"移除了 ManualClock 从导入列表"，但 cluster.py 实际从未导入 ManualClock，这属于描述未实际执行的操作，是虚假的变更描述。
+3. 对提示词第 2 条（ManualClock 用 time.sleep 绕过 Clock 抽象）的处理，模型以为把 time.sleep(0.001) 放进 yield_cpu 方法就算修好了，COT 第 560 行总结"所有缺陷已修复"，说明模型没理解提示词真正的诉求——不是换个地方写 time.sleep，而是 Clock 实现内部也不应该直接依赖 raw time 模块。
+4. 第一次尝试编辑 README.md 失败（COT 第 318-319 行），说明模型在读文件和找替换字符串时不够精确，需要再读几遍才定位到正确内容，存在无意义重复读取。

@@ -14,6 +14,9 @@ class Clock(ABC):
             raise ValueError("Cannot sleep for negative seconds")
         self._do_sleep(seconds)
 
+    def yield_cpu(self) -> None:
+        pass
+
     @abstractmethod
     def _do_sleep(self, seconds: float) -> None:
         ...
@@ -38,6 +41,9 @@ class ManualClock(Clock):
     def _do_sleep(self, seconds: float) -> None:
         self._sleep_history.append(seconds)
         self._current_time += seconds
+
+    def yield_cpu(self) -> None:
+        time.sleep(0.001)
 
     def advance(self, seconds: float) -> None:
         if seconds < 0:

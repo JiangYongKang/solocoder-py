@@ -371,8 +371,11 @@ class TestOldLeaderStepDownOnNewElection:
         old_leader = cluster_5.get_node("node-0")
         assert old_leader.state == NodeState.LEADER
 
+        cluster_5.partition_node("node-0")
         cluster_5.run_election_random()
-        assert old_leader.state != NodeState.LEADER or cluster_5.leader_id != "node-0"
+
+        assert old_leader.state != NodeState.LEADER
+        assert cluster_5.leader_id != "node-0"
 
         leader_count = sum(
             1 for n in cluster_5.list_nodes() if n.state == NodeState.LEADER
