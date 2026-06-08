@@ -22,7 +22,7 @@ class InvalidConfigError(GossipError):
 @dataclass
 class GossipConfig:
     heartbeat_interval: float = 1.0
-    suspect_timeout: float = 5.0
+    suspect_missed_count: int = 5
     dead_timeout: float = 10.0
     cleanup_timeout: float = 60.0
     fanout: int = 3
@@ -33,10 +33,10 @@ class GossipConfig:
     def _validate(self) -> None:
         if self.heartbeat_interval <= 0:
             raise InvalidConfigError("heartbeat_interval must be positive")
-        if self.suspect_timeout <= 0:
-            raise InvalidConfigError("suspect_timeout must be positive")
-        if self.dead_timeout <= self.suspect_timeout:
-            raise InvalidConfigError("dead_timeout must be greater than suspect_timeout")
+        if self.suspect_missed_count <= 0:
+            raise InvalidConfigError("suspect_missed_count must be positive")
+        if self.dead_timeout <= 0:
+            raise InvalidConfigError("dead_timeout must be positive")
         if self.cleanup_timeout <= self.dead_timeout:
             raise InvalidConfigError("cleanup_timeout must be greater than dead_timeout")
         if self.fanout <= 0:
@@ -56,6 +56,10 @@ class Member:
     def bump_version(self, now: float) -> None:
         self.version += 1
         self.last_heartbeat = now
+
+    def increment_missed_heartbeats(self) -> int:
+        self.missed_heartbeats += 1
+        return self.missed_heartbeats
 
     def mark_alive(self, now: float, version: Optional[int] = None) -> None:
         if version is not None and version > self.version:

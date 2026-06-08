@@ -5,8 +5,14 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from .clock import Clock, SystemClock
 from .enums import NodeState
-from .exceptions import AlreadyVotedError, LeaderElectionError, NodeNotFoundError
+from .exceptions import (
+    AlreadyVotedError,
+    LeaderElectionError,
+    NodeNotFoundError,
+    StaleTermError,
+)
 from .models import (
     ClusterStatus,
     ElectionResult,
@@ -22,6 +28,8 @@ from .node import RaftNode
 @dataclass
 class LeaderElectionCluster:
     node_count: int
+    clock: Clock = field(default_factory=SystemClock)
+    election_timeout_seconds: float = 5.0
     _nodes: Dict[str, RaftNode] = field(default_factory=dict)
     _current_term: int = 0
     _leader_id: Optional[str] = None
@@ -32,9 +40,15 @@ class LeaderElectionCluster:
     def __post_init__(self) -> None:
         if self.node_count < 1:
             raise ValueError("node_count must be at least 1")
+        if self.election_timeout_seconds <= 0:
+            raise ValueError("election_timeout_seconds must be positive")
         for i in range(self.node_count):
             node_id = f"node-{i}"
-            self._nodes[node_id] = RaftNode(node_id=node_id)
+            self._nodes[node_id] = RaftNode(
+                node_id=node_id,
+                clock=self.clock,
+                election_timeout_seconds=self.election_timeout_seconds,
+            )
 
     @property
     def majority_count(self) -> int:
@@ -81,6 +95,11 @@ class LeaderElectionCluster:
         if node.current_term > self._current_term:
             self._current_term = node.current_term
 
+    def _step_down_all_other_leaders(self, new_leader_id: str) -> None:
+        for node in self._nodes.values():
+            if node.node_id != new_leader_id and node.state == NodeState.LEADER:
+                node.step_down()
+
     def _collect_votes(
         self, candidate: RaftNode, vote_request: VoteRequest
     ) -> ElectionResult:
@@ -100,7 +119,8 @@ class LeaderElectionCluster:
                 if response.vote_granted:
                     if candidate.node_id not in votes_received:
                         votes_received[candidate.node_id] = []
-                    votes_received[candidate.node_id].append(node.node_id)
+                    if node.node_id not in votes_received[candidate.node_id]:
+                        votes_received[candidate.node_id].append(node.node_id)
 
                 voter_records[node.node_id] = node.vote_record
             except AlreadyVotedError:
@@ -120,8 +140,31 @@ class LeaderElectionCluster:
 
         return result
 
+    def _broadcast_heartbeat_from_leader(self, leader: RaftNode) -> None:
+        heartbeat = leader.send_heartbeat()
+        for node in self.get_reachable_nodes(leader.node_id):
+            try:
+                node.receive_heartbeat(heartbeat)
+            except StaleTermError:
+                node_term = node.current_term
+                if node_term > leader.current_term:
+                    leader._update_term_if_newer(node_term)
+                    if leader.state != NodeState.FOLLOWER:
+                        leader.step_down()
+                    self._leader_id = None
+                    raise
+
+    def _clear_old_leader(self) -> None:
+        if self._leader_id is not None:
+            old_leader = self._nodes.get(self._leader_id)
+            if old_leader is not None and old_leader.state == NodeState.LEADER:
+                old_leader.step_down()
+        self._leader_id = None
+
     def run_election(self, candidate_node_id: str) -> ElectionResult:
         with self._lock:
+            self._clear_old_leader()
+
             candidate = self.get_node(candidate_node_id)
             vote_request = candidate.start_election()
             self._synch_term_from_node(candidate)
@@ -132,6 +175,11 @@ class LeaderElectionCluster:
                 candidate.become_leader()
                 self._leader_id = candidate.node_id
                 self._current_term = candidate.current_term
+                self._step_down_all_other_leaders(candidate.node_id)
+                try:
+                    self._broadcast_heartbeat_from_leader(candidate)
+                except StaleTermError:
+                    pass
             else:
                 candidate.step_down()
 
@@ -140,6 +188,8 @@ class LeaderElectionCluster:
 
     def run_election_random(self) -> ElectionResult:
         with self._lock:
+            self._clear_old_leader()
+
             eligible = [
                 n
                 for n in self._nodes.values()
@@ -165,6 +215,46 @@ class LeaderElectionCluster:
                 candidate.become_leader()
                 self._leader_id = candidate.node_id
                 self._current_term = candidate.current_term
+                self._step_down_all_other_leaders(candidate.node_id)
+                try:
+                    self._broadcast_heartbeat_from_leader(candidate)
+                except StaleTermError:
+                    pass
+            else:
+                candidate.step_down()
+
+            self._last_election = result
+            return result
+
+    def check_and_run_elections(self) -> Optional[ElectionResult]:
+        with self._lock:
+            timed_out = [
+                n
+                for n in self._nodes.values()
+                if n.is_election_timed_out()
+                and n.node_id not in self._partitioned_nodes
+                and n.state != NodeState.LEADER
+            ]
+            if not timed_out:
+                return None
+
+            candidate = random.choice(timed_out)
+            self._clear_old_leader()
+
+            vote_request = candidate.start_election()
+            self._synch_term_from_node(candidate)
+
+            result = self._collect_votes(candidate, vote_request)
+
+            if result.is_successful:
+                candidate.become_leader()
+                self._leader_id = candidate.node_id
+                self._current_term = candidate.current_term
+                self._step_down_all_other_leaders(candidate.node_id)
+                try:
+                    self._broadcast_heartbeat_from_leader(candidate)
+                except StaleTermError:
+                    pass
             else:
                 candidate.step_down()
 
@@ -178,6 +268,7 @@ class LeaderElectionCluster:
 
             leader = self.get_node(self._leader_id)
             if leader.state != NodeState.LEADER:
+                self._leader_id = None
                 raise LeaderElectionError(f"Node {self._leader_id} is not leader")
 
             heartbeat = leader.send_heartbeat()
@@ -186,8 +277,14 @@ class LeaderElectionCluster:
             for node in self.get_reachable_nodes(leader.node_id):
                 try:
                     node.receive_heartbeat(heartbeat)
-                except Exception:
-                    continue
+                except StaleTermError:
+                    node_term = node.current_term
+                    if node_term > leader.current_term:
+                        leader._update_term_if_newer(node_term)
+                        if leader.state != NodeState.FOLLOWER:
+                            leader.step_down()
+                        self._leader_id = None
+                        raise
 
             return heartbeats
 
@@ -223,6 +320,7 @@ class LeaderElectionCluster:
             node._state = NodeState.CANDIDATE
             node._voted_for = node.node_id
             node._voted_term = node._current_term
+            node._record_heartbeat()
             self._synch_term_from_node(node)
 
             for other in self.list_nodes():
@@ -232,6 +330,7 @@ class LeaderElectionCluster:
                     other._voted_for = node.node_id
                     other._voted_term = node.current_term
                     other._leader_id = node.node_id
+                    other._record_heartbeat()
 
             node.become_leader()
             self._leader_id = node.node_id

@@ -52,8 +52,8 @@ class TestSnapshotModel:
         assert snap.active_transactions == (1, 2, 3)
 
     def test_snapshot_invalid_version(self):
-        with pytest.raises(ValueError, match="snapshot_version must be positive"):
-            Snapshot(snapshot_version=0)
+        with pytest.raises(ValueError, match="snapshot_version cannot be negative"):
+            Snapshot(snapshot_version=-1)
 
     def test_snapshot_is_visible_committed_version(self):
         snap = Snapshot(snapshot_version=10, active_transactions=())
@@ -88,8 +88,8 @@ class TestTransactionModel:
             Transaction(transaction_id=0, start_version=1)
 
     def test_transaction_invalid_start_version(self):
-        with pytest.raises(ValueError, match="start_version must be positive"):
-            Transaction(transaction_id=1, start_version=0)
+        with pytest.raises(ValueError, match="start_version cannot be negative"):
+            Transaction(transaction_id=1, start_version=-1)
 
     def test_transaction_mark_committed(self):
         txn = Transaction(transaction_id=1, start_version=1)
@@ -669,3 +669,267 @@ class TestClearAndReset:
         assert store.count_active_transactions() == 0
         with pytest.raises(KeyNotFoundError):
             store.read("key1")
+
+
+class TestVersionContinuity:
+    def test_commit_versions_are_contiguous_no_gaps(self):
+        store = make_store()
+        commit_versions = []
+        for i in range(20):
+            txn = store.begin_transaction()
+            store.write(txn, f"key-{i % 3}", f"v{i}")
+            cv = store.commit(txn)
+            commit_versions.append(cv)
+
+        for i in range(1, len(commit_versions)):
+            assert commit_versions[i] == commit_versions[i - 1] + 1
+
+    def test_snapshot_version_equals_latest_committed(self):
+        store = make_store()
+        snap0 = store.create_snapshot()
+        assert snap0.snapshot_version == 0
+
+        txn1 = store.begin_transaction()
+        store.write(txn1, "key1", "v1")
+        cv1 = store.commit(txn1)
+
+        snap1 = store.create_snapshot()
+        assert snap1.snapshot_version == cv1
+
+        txn2 = store.begin_transaction()
+        store.write(txn2, "key1", "v2")
+        cv2 = store.commit(txn2)
+
+        snap2 = store.create_snapshot()
+        assert snap2.snapshot_version == cv2
+        assert cv2 == cv1 + 1
+
+    def test_snapshot_does_not_include_uncommitted_versions(self):
+        store = make_store()
+
+        txn1 = store.begin_transaction()
+        store.write(txn1, "key1", "committed")
+        cv1 = store.commit(txn1)
+
+        txn2 = store.begin_transaction()
+        store.write(txn2, "key1", "uncommitted")
+
+        snap = store.create_snapshot()
+        assert snap.snapshot_version == cv1
+        assert store.read("key1", snap) == "committed"
+
+        store.rollback(txn2)
+
+    def test_start_version_equals_committed_version(self):
+        store = make_store()
+
+        txn0 = store.begin_transaction()
+        assert txn0.start_version == 0
+        store.write(txn0, "key1", "v0")
+        cv0 = store.commit(txn0)
+
+        txn1 = store.begin_transaction()
+        assert txn1.start_version == cv0
+        store.write(txn1, "key1", "v1")
+        cv1 = store.commit(txn1)
+
+        txn2 = store.begin_transaction()
+        assert txn2.start_version == cv1
+
+
+class TestConcurrency:
+    def test_concurrent_writes_different_keys(self):
+        import threading
+
+        store = make_store()
+
+        txn_initial = store.begin_transaction()
+        store.write(txn_initial, "counter-a", 0)
+        store.write(txn_initial, "counter-b", 0)
+        store.commit(txn_initial)
+
+        results = {"success": 0, "conflict": 0}
+        lock = threading.Lock()
+
+        def writer(key, iterations):
+            for _ in range(iterations):
+                txn = store.begin_transaction()
+                val = store.transaction_read(txn, key)
+                store.write(txn, key, val + 1)
+                try:
+                    store.commit(txn)
+                    with lock:
+                        results["success"] += 1
+                except WriteWriteConflictError:
+                    store.rollback(txn)
+                    with lock:
+                        results["conflict"] += 1
+
+        t1 = threading.Thread(target=writer, args=("counter-a", 20))
+        t2 = threading.Thread(target=writer, args=("counter-b", 20))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert t1.is_alive() is False
+        assert t2.is_alive() is False
+        assert store.read("counter-a") + store.read("counter-b") == 40
+        assert results["success"] + results["conflict"] == 40
+
+    def test_concurrent_writes_same_key_trigger_conflicts(self):
+        import threading
+
+        store = make_store()
+
+        txn_initial = store.begin_transaction()
+        store.write(txn_initial, "counter", 0)
+        store.commit(txn_initial)
+
+        results = {"success": 0, "conflict": 0}
+        lock = threading.Lock()
+
+        def writer(iterations):
+            for _ in range(iterations):
+                txn = store.begin_transaction()
+                val = store.transaction_read(txn, "counter")
+                store.write(txn, "counter", val + 1)
+                try:
+                    store.commit(txn)
+                    with lock:
+                        results["success"] += 1
+                except WriteWriteConflictError:
+                    store.rollback(txn)
+                    with lock:
+                        results["conflict"] += 1
+
+        threads = [threading.Thread(target=writer, args=(15,)) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+            assert t.is_alive() is False
+
+        assert results["success"] + results["conflict"] == 60
+        assert results["conflict"] > 0 or store.read("counter") == 60
+
+    def test_concurrent_snapshot_reads_are_isolated(self):
+        import threading
+        import time
+
+        store = make_store()
+
+        txn_initial = store.begin_transaction()
+        store.write(txn_initial, "key1", 0)
+        store.commit(txn_initial)
+
+        snap = store.create_snapshot()
+        snapshot_values = []
+        read_errors = []
+
+        def snapshot_reader(snapshot, count):
+            try:
+                for _ in range(count):
+                    val = store.read("key1", snapshot)
+                    snapshot_values.append(val)
+                    time.sleep(0.001)
+            except Exception as e:
+                read_errors.append(e)
+
+        def writer(count):
+            for _ in range(count):
+                txn = store.begin_transaction()
+                val = store.transaction_read(txn, "key1")
+                store.write(txn, "key1", val + 1)
+                try:
+                    store.commit(txn)
+                except WriteWriteConflictError:
+                    store.rollback(txn)
+
+        reader = threading.Thread(target=snapshot_reader, args=(snap, 30))
+        writer_thread = threading.Thread(target=writer, args=(30,))
+
+        reader.start()
+        writer_thread.start()
+        reader.join(timeout=10)
+        writer_thread.join(timeout=10)
+
+        assert reader.is_alive() is False
+        assert writer_thread.is_alive() is False
+        assert len(read_errors) == 0
+        assert all(v == 0 for v in snapshot_values)
+
+        store.release_snapshot(snap)
+
+    def test_concurrent_mixed_operations(self):
+        import threading
+        import time
+
+        store = make_store()
+
+        for i in range(3):
+            txn = store.begin_transaction()
+            store.write(txn, f"key-{i}", i)
+            store.commit(txn)
+
+        errors = []
+        completed = {"count": 0}
+        lock = threading.Lock()
+
+        def op_read():
+            try:
+                txn = store.begin_transaction()
+                for i in range(3):
+                    store.transaction_read(txn, f"key-{i}")
+                store.rollback(txn)
+            except Exception as e:
+                errors.append(e)
+            finally:
+                with lock:
+                    completed["count"] += 1
+
+        def op_write():
+            try:
+                txn = store.begin_transaction()
+                for i in range(3):
+                    val = store.transaction_read(txn, f"key-{i}")
+                    store.write(txn, f"key-{i}", val + 10)
+                store.commit(txn)
+            except WriteWriteConflictError:
+                store.rollback(txn)
+            except Exception as e:
+                errors.append(e)
+            finally:
+                with lock:
+                    completed["count"] += 1
+
+        def op_snapshot():
+            try:
+                snap = store.create_snapshot()
+                for i in range(3):
+                    try:
+                        store.read(f"key-{i}", snap)
+                    except KeyNotFoundError:
+                        pass
+                time.sleep(0.002)
+                store.release_snapshot(snap)
+            except Exception as e:
+                errors.append(e)
+            finally:
+                with lock:
+                    completed["count"] += 1
+
+        threads = []
+        for _ in range(5):
+            threads.append(threading.Thread(target=op_read))
+            threads.append(threading.Thread(target=op_write))
+            threads.append(threading.Thread(target=op_snapshot))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+            assert t.is_alive() is False
+
+        assert len(errors) == 0, f"Errors: {errors}"
+        assert completed["count"] == 15

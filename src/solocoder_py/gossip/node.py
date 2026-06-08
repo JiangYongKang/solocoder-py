@@ -103,6 +103,18 @@ class GossipNode:
 
     def receive_heartbeat(self, message: HeartbeatMessage) -> None:
         with self._lock:
+            if message.sender_id not in message.members:
+                now = self._clock.now()
+                message.members[message.sender_id] = Member(
+                    node_id=message.sender_id,
+                    state=MemberState.ALIVE,
+                    incarnation=0,
+                    version=1,
+                    last_heartbeat=now,
+                    state_changed_at=now,
+                    missed_heartbeats=0,
+                )
+
             before_states: Dict[str, MemberState] = {}
             new_member_ids: set[str] = set()
             for node_id in message.members:
@@ -123,21 +135,6 @@ class GossipNode:
                 current = self._membership.get_member(node_id)
                 if current and current.state != before_state:
                     self._notify_listeners(node_id, before_state, current.state)
-
-            if message.sender_id not in self._membership.get_all_members():
-                now = self._clock.now()
-                self._membership.add_or_update_member(
-                    Member(
-                        node_id=message.sender_id,
-                        state=MemberState.ALIVE,
-                        incarnation=0,
-                        version=1,
-                        last_heartbeat=now,
-                        state_changed_at=now,
-                        missed_heartbeats=0,
-                    )
-                )
-                self._notify_listeners(message.sender_id, None, MemberState.ALIVE)
 
     def check_failures(self) -> Dict[str, MemberState]:
         with self._lock:

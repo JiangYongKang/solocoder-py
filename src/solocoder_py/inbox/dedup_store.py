@@ -94,6 +94,30 @@ class InboxDedupStore:
         self._evict_by_time()
         self._evict_by_count()
 
+    def _count_valid_records(self) -> int:
+        return len(self._valid_records_list())
+
+    def _valid_records_list(self) -> list[InboxMessageRecord]:
+        result: list[InboxMessageRecord] = []
+        now = self._clock.now()
+        time_cutoff = (
+            now - self.max_time_seconds if self.max_time_seconds is not None else None
+        )
+        count_limit = self.max_count
+
+        records_list = list(self._records.items())
+        if count_limit is not None and len(records_list) > count_limit:
+            records_list = records_list[len(records_list) - count_limit:]
+
+        for msg_id, record in records_list:
+            if time_cutoff is not None and record.received_at <= time_cutoff:
+                continue
+            if record.is_expired(self.ttl_seconds, self._clock):
+                continue
+            result.append(record.snapshot())
+
+        return result
+
     def check_duplicate(self, message_id: str) -> DedupResult:
         if not message_id:
             raise ValueError("message_id cannot be empty")
@@ -133,10 +157,16 @@ class InboxDedupStore:
         if not message_id:
             raise ValueError("message_id cannot be empty")
         with self._lock:
-            self._maybe_trigger_cleanup()
-            self._slide_window()
             record = self._records.get(message_id)
             if record is None:
+                return False
+            now = self._clock.now()
+            time_cutoff = (
+                now - self.max_time_seconds
+                if self.max_time_seconds is not None
+                else None
+            )
+            if time_cutoff is not None and record.received_at <= time_cutoff:
                 return False
             if record.is_expired(self.ttl_seconds, self._clock):
                 del self._records[message_id]
@@ -147,10 +177,16 @@ class InboxDedupStore:
         if not message_id:
             raise ValueError("message_id cannot be empty")
         with self._lock:
-            self._maybe_trigger_cleanup()
-            self._slide_window()
             record = self._records.get(message_id)
             if record is None:
+                return None
+            now = self._clock.now()
+            time_cutoff = (
+                now - self.max_time_seconds
+                if self.max_time_seconds is not None
+                else None
+            )
+            if time_cutoff is not None and record.received_at <= time_cutoff:
                 return None
             if record.is_expired(self.ttl_seconds, self._clock):
                 del self._records[message_id]
@@ -159,15 +195,11 @@ class InboxDedupStore:
 
     def window_count(self) -> int:
         with self._lock:
-            self._maybe_trigger_cleanup()
-            self._slide_window()
-            return len(self._records)
+            return self._count_valid_records()
 
     def get_stats(self) -> DedupStats:
         with self._lock:
-            self._maybe_trigger_cleanup()
-            self._slide_window()
-            window_size = len(self._records)
+            window_size = self._count_valid_records()
             total_received = self._total_received
             total_duplicates = self._total_duplicates
             hit_rate = (
@@ -204,6 +236,4 @@ class InboxDedupStore:
 
     def list_records(self) -> list[InboxMessageRecord]:
         with self._lock:
-            self._maybe_trigger_cleanup()
-            self._slide_window()
-            return [record.snapshot() for record in self._records.values()]
+            return self._valid_records_list()

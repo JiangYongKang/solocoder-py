@@ -16,13 +16,19 @@ class VectorClock:
         self._clocks: dict[str, int] = {}
         if initial:
             for node_id, count in initial.items():
+                self._validate_node_id(node_id)
                 if count < 0:
                     raise ValueError(f"clock count must be non-negative, got {count} for node '{node_id}'")
-                self._clocks[node_id] = count
+                if count > 0:
+                    self._clocks[node_id] = count
 
-    def tick(self, node_id: str) -> None:
+    @staticmethod
+    def _validate_node_id(node_id: str) -> None:
         if not node_id:
             raise ValueError("node_id must not be empty")
+
+    def tick(self, node_id: str) -> None:
+        self._validate_node_id(node_id)
         self._clocks[node_id] = self._clocks.get(node_id, 0) + 1
 
     def get(self, node_id: str) -> int:

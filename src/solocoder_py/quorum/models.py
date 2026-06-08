@@ -61,10 +61,11 @@ class WriteResult:
     version: int
     successful_replicas: list[str]
     failed_replicas: list[str]
+    required_w: int
 
     @property
     def success(self) -> bool:
-        return len(self.successful_replicas) > 0
+        return len(self.successful_replicas) >= self.required_w
 
 
 @dataclass
@@ -74,10 +75,11 @@ class ReadResult:
     version: int
     successful_replicas: list[str]
     failed_replicas: list[str]
+    required_r: int
     repaired_replicas: list[str] = field(default_factory=list)
     conflict_detected: bool = False
     winning_value: Optional[StoredValue] = None
 
     @property
     def success(self) -> bool:
-        return len(self.successful_replicas) > 0
+        return len(self.successful_replicas) >= self.required_r

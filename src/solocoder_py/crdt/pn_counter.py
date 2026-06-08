@@ -18,6 +18,14 @@ class PNCounter:
     def replica_id(self) -> str:
         return self._replica_id
 
+    @classmethod
+    def from_state(cls, state: PNCounterState, replica_id: Optional[str] = None) -> "PNCounter":
+        obj = cls(replica_id=replica_id)
+        with obj._lock:
+            obj._positive = dict(state.positive)
+            obj._negative = dict(state.negative)
+        return obj
+
     def increment(self, delta: int = 1) -> None:
         if delta < 0:
             raise ValueError("delta must be non-negative for increment; use decrement for negative deltas")
@@ -49,7 +57,7 @@ class PNCounter:
     def merge(self, other: "PNCounter") -> None:
         if not isinstance(other, PNCounter):
             raise TypeError("can only merge with another PNCounter")
-        with self._lock:
+        with self._lock, other._lock:
             other_state = other.get_state()
             for rid, val in other_state.positive.items():
                 self._positive[rid] = max(self._positive.get(rid, 0), val)
@@ -59,9 +67,9 @@ class PNCounter:
     def diff(self, other: "PNCounter") -> PNCounterDiff:
         if not isinstance(other, PNCounter):
             raise TypeError("can only compute diff with another PNCounter")
-        with self._lock:
+        with self._lock, other._lock:
             self_state = self.get_state()
-        other_state = other.get_state()
+            other_state = other.get_state()
 
         added_positive: dict[str, int] = {}
         added_negative: dict[str, int] = {}
@@ -90,9 +98,9 @@ class PNCounter:
     def is_ge(self, other: "PNCounter") -> bool:
         if not isinstance(other, PNCounter):
             raise TypeError("can only compare with another PNCounter")
-        with self._lock:
+        with self._lock, other._lock:
             self_state = self.get_state()
-        other_state = other.get_state()
+            other_state = other.get_state()
 
         for rid, val in other_state.positive.items():
             if self_state.positive.get(rid, 0) < val:

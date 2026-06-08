@@ -344,3 +344,165 @@ class TestRandomElection:
         result = cluster_5.run_election_random()
         assert result.is_successful is True
         assert result.leader_id in {"node-0", "node-1", "node-2"}
+
+
+class TestOldLeaderStepDownOnNewElection:
+    def test_new_election_steps_down_existing_leader(self, cluster_5):
+        result1 = cluster_5.run_election("node-0")
+        assert result1.is_successful is True
+        assert cluster_5.leader_id == "node-0"
+        old_leader = cluster_5.get_node("node-0")
+        assert old_leader.state == NodeState.LEADER
+
+        result2 = cluster_5.run_election("node-1")
+        assert result2.is_successful is True
+        assert cluster_5.leader_id == "node-1"
+        assert old_leader.state != NodeState.LEADER
+        new_leader = cluster_5.get_node("node-1")
+        assert new_leader.state == NodeState.LEADER
+
+        leader_count = sum(
+            1 for n in cluster_5.list_nodes() if n.state == NodeState.LEADER
+        )
+        assert leader_count == 1
+
+    def test_random_election_steps_down_existing_leader(self, cluster_5):
+        cluster_5.run_election("node-0")
+        old_leader = cluster_5.get_node("node-0")
+        assert old_leader.state == NodeState.LEADER
+
+        cluster_5.run_election_random()
+        assert old_leader.state != NodeState.LEADER or cluster_5.leader_id != "node-0"
+
+        leader_count = sum(
+            1 for n in cluster_5.list_nodes() if n.state == NodeState.LEADER
+        )
+        assert leader_count <= 1
+
+
+class TestVoteCountDeduplication:
+    def test_duplicate_same_candidate_request_not_double_counted(self, cluster_5):
+        from solocoder_py.leader_election import VoteRequest
+
+        candidate = cluster_5.get_node("node-0")
+        vote_request = candidate.start_election()
+        voter = cluster_5.get_node("node-1")
+
+        resp1 = voter.handle_vote_request(vote_request)
+        assert resp1.vote_granted is True
+
+        resp2 = voter.handle_vote_request(vote_request)
+        assert resp2.vote_granted is False
+
+    def test_cluster_election_no_duplicate_votes(self, cluster_5):
+        result = cluster_5.run_election("node-0")
+        votes = result.votes_received.get("node-0", [])
+        assert len(votes) == cluster_5.node_count
+        assert len(set(votes)) == len(votes)
+
+
+class TestHeartbeatStaleTermStepsDown:
+    def test_leader_steps_down_on_stale_term_heartbeat(self, cluster_5):
+        cluster_5.run_election("node-0")
+        assert cluster_5.leader_id == "node-0"
+        old_leader = cluster_5.get_node("node-0")
+
+        cluster_5.partition_node("node-0")
+        cluster_5._leader_id = None
+
+        cluster_5.run_election("node-1")
+        assert cluster_5.leader_id == "node-1"
+        assert cluster_5.current_term == 2
+
+        cluster_5.heal_partition("node-0")
+
+        new_leader = cluster_5.get_node("node-1")
+        hb = new_leader.send_heartbeat()
+        old_leader.receive_heartbeat(hb)
+        assert old_leader.state == NodeState.FOLLOWER
+        assert old_leader.current_term == 2
+        assert old_leader.leader_id == "node-1"
+
+    def test_cluster_heartbeat_detects_stale_term_and_steps_down(self, cluster_5):
+        cluster_5.force_new_leader("node-1")
+        assert cluster_5.current_term == 1
+
+        stale_leader = cluster_5.get_node("node-0")
+        stale_leader._state = NodeState.LEADER
+        stale_leader._current_term = 1
+        stale_leader._leader_id = "node-0"
+        stale_leader._voted_for = "node-0"
+        stale_leader._voted_term = 1
+
+        for n in cluster_5.list_nodes():
+            if n.node_id not in ("node-0", "node-1"):
+                n._current_term = 2
+
+        cluster_5._leader_id = "node-0"
+
+        with pytest.raises(StaleTermError):
+            cluster_5.leader_send_heartbeat()
+
+        assert stale_leader.state == NodeState.FOLLOWER
+        assert cluster_5.leader_id is None
+
+
+class TestElectionTimeoutAutoTrigger:
+    def test_no_auto_election_before_timeout(self, cluster_5_manual, manual_clock):
+        result = cluster_5_manual.check_and_run_elections()
+        assert result is None
+        manual_clock.advance(1.0)
+        result = cluster_5_manual.check_and_run_elections()
+        assert result is None
+
+    def test_auto_election_triggers_after_timeout(self, cluster_5_manual, manual_clock):
+        manual_clock.advance(3.0)
+        result = cluster_5_manual.check_and_run_elections()
+        assert result is not None
+        assert result.is_successful is True
+        assert cluster_5_manual.leader_id is not None
+
+    def test_heartbeat_prevents_auto_election(self, cluster_5_manual, manual_clock):
+        cluster_5_manual.run_election("node-0")
+        assert cluster_5_manual.leader_id == "node-0"
+
+        for _ in range(10):
+            manual_clock.advance(1.0)
+            cluster_5_manual.leader_send_heartbeat()
+            result = cluster_5_manual.check_and_run_elections()
+            assert result is None
+
+        assert cluster_5_manual.leader_id == "node-0"
+
+    def test_partitioned_nodes_not_considered_for_timeout(self, cluster_5_manual, manual_clock):
+        cluster_5_manual.partition_node("node-0")
+        cluster_5_manual.partition_node("node-1")
+        cluster_5_manual.partition_node("node-2")
+        cluster_5_manual.partition_node("node-3")
+        cluster_5_manual.partition_node("node-4")
+        manual_clock.advance(10.0)
+        result = cluster_5_manual.check_and_run_elections()
+        assert result is None
+
+    def test_auto_election_after_leader_partitioned(
+        self, cluster_5_manual, manual_clock
+    ):
+        cluster_5_manual.run_election("node-0")
+        cluster_5_manual.partition_node("node-0")
+        cluster_5_manual._leader_id = None
+
+        manual_clock.advance(3.0)
+        result = cluster_5_manual.check_and_run_elections()
+        assert result is not None
+        assert result.is_successful is True
+        assert cluster_5_manual.leader_id in {"node-1", "node-2", "node-3", "node-4"}
+
+
+class TestClusterConfigurationValidation:
+    def test_negative_election_timeout_rejected(self, make_cluster):
+        with pytest.raises(ValueError):
+            make_cluster(5, election_timeout_seconds=-1)
+
+    def test_zero_election_timeout_rejected(self, make_cluster):
+        with pytest.raises(ValueError):
+            make_cluster(5, election_timeout_seconds=0)

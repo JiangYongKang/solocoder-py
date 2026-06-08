@@ -1,11 +1,14 @@
 from .exceptions import (
     ShardRouterError,
     SlotNotAssignedError,
+    SlotNotRoutedError,
     SlotRangeInvalidError,
     SlotAlreadyAssignedError,
     SlotMigrationInProgressError,
     SlotNotMigratingError,
     NodeNotFoundError,
+    NodeNotEmptyError,
+    NodeHasMigrationsError,
     RedirectRequiredError,
 )
 from .models import (
@@ -24,11 +27,14 @@ from .router import DEFAULT_SLOT_COUNT, ShardRouter
 __all__ = [
     "ShardRouterError",
     "SlotNotAssignedError",
+    "SlotNotRoutedError",
     "SlotRangeInvalidError",
     "SlotAlreadyAssignedError",
     "SlotMigrationInProgressError",
     "SlotNotMigratingError",
     "NodeNotFoundError",
+    "NodeNotEmptyError",
+    "NodeHasMigrationsError",
     "RedirectRequiredError",
     "ShardNode",
     "SlotRange",

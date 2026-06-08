@@ -200,26 +200,27 @@ class TestMembershipViewMergeHeartbeat:
 
 
 class TestMembershipViewFailureDetection:
-    def test_alive_to_suspect_after_timeout(self):
+    def test_alive_to_suspect_after_missed_heartbeats(self):
         clock = ManualClock()
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0)
+        cfg = make_config(suspect_missed_count=3, dead_timeout=10.0)
         view = MembershipView("n1", cfg, clock)
         now = clock.now()
         view.add_or_update_member(Member("n2", state=MemberState.ALIVE, version=1, last_heartbeat=now, state_changed_at=now))
 
-        clock.advance(4.9)
-        transitions = view.check_failures()
-        assert "n2" not in transitions
-        assert view.get_member("n2").state == MemberState.ALIVE
+        for _ in range(2):
+            transitions = view.check_failures()
+            assert "n2" not in transitions
+            assert view.get_member("n2").state == MemberState.ALIVE
+        assert view.get_member("n2").missed_heartbeats == 2
 
-        clock.advance(0.2)
         transitions = view.check_failures()
         assert transitions["n2"] == MemberState.SUSPECT
         assert view.get_member("n2").state == MemberState.SUSPECT
+        assert view.get_member("n2").missed_heartbeats == 0
 
     def test_suspect_to_dead_after_timeout(self):
         clock = ManualClock()
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0)
+        cfg = make_config(suspect_missed_count=3, dead_timeout=5.0)
         view = MembershipView("n1", cfg, clock)
         now = clock.now()
         suspect_member = Member("n2", state=MemberState.SUSPECT, version=2, last_heartbeat=now, state_changed_at=now)
@@ -237,26 +238,32 @@ class TestMembershipViewFailureDetection:
 
     def test_self_never_marked_suspect(self):
         clock = ManualClock()
-        cfg = make_config(suspect_timeout=1.0, dead_timeout=2.0)
+        cfg = make_config(suspect_missed_count=1, dead_timeout=2.0)
         view = MembershipView("n1", cfg, clock)
 
-        clock.advance(100.0)
-        transitions = view.check_failures()
+        for _ in range(100):
+            transitions = view.check_failures()
         assert "n1" not in transitions
         assert view.get_member("n1").state == MemberState.ALIVE
 
-    def test_heartbeat_received_resets_timeout(self):
+    def test_heartbeat_received_resets_missed_count(self):
         clock = ManualClock()
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0)
+        cfg = make_config(suspect_missed_count=3, dead_timeout=10.0)
         view = MembershipView("n1", cfg, clock)
         now = clock.now()
         view.add_or_update_member(Member("n2", state=MemberState.ALIVE, version=1, last_heartbeat=now, state_changed_at=now))
 
-        clock.advance(4.0)
+        view.check_failures()
+        view.check_failures()
+        assert view.get_member("n2").missed_heartbeats == 2
+
+        clock.advance(1.0)
         now2 = clock.now()
         view.add_or_update_member(Member("n2", state=MemberState.ALIVE, version=2, last_heartbeat=now2, state_changed_at=now2))
+        assert view.get_member("n2").missed_heartbeats == 0
 
-        clock.advance(4.0)
+        view.check_failures()
+        assert view.get_member("n2").missed_heartbeats == 1
         transitions = view.check_failures()
         assert "n2" not in transitions
 
@@ -264,7 +271,7 @@ class TestMembershipViewFailureDetection:
 class TestMembershipViewCleanup:
     def test_dead_nodes_cleaned_up_after_timeout(self):
         clock = ManualClock()
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0, cleanup_timeout=60.0)
+        cfg = make_config(suspect_missed_count=5, dead_timeout=10.0, cleanup_timeout=60.0)
         view = MembershipView("n1", cfg, clock)
         now = clock.now()
         view.add_or_update_member(Member("n2", state=MemberState.DEAD, version=3, last_heartbeat=now, state_changed_at=now))
@@ -281,7 +288,7 @@ class TestMembershipViewCleanup:
 
     def test_self_never_cleaned_up(self):
         clock = ManualClock()
-        cfg = make_config(suspect_timeout=1.0, dead_timeout=2.0, cleanup_timeout=3.0)
+        cfg = make_config(suspect_missed_count=1, dead_timeout=2.0, cleanup_timeout=3.0)
         view = MembershipView("n1", cfg, clock)
 
         clock.advance(100.0)
@@ -291,7 +298,7 @@ class TestMembershipViewCleanup:
 
     def test_alive_and_suspect_not_cleaned(self):
         clock = ManualClock()
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0, cleanup_timeout=60.0)
+        cfg = make_config(suspect_missed_count=5, dead_timeout=10.0, cleanup_timeout=60.0)
         view = MembershipView("n1", cfg, clock)
         now = clock.now()
         view.add_or_update_member(Member("n2", state=MemberState.ALIVE, version=1, last_heartbeat=now, state_changed_at=now))

@@ -106,6 +106,29 @@ class TestORSetState:
         )
         assert state.value() == {"a"}
 
+    def test_from_state_restores_set(self):
+        original = ORSet(replica_id="node1")
+        original.add("apple")
+        original.add("banana")
+        original.remove("banana")
+        state = original.get_state()
+        restored = ORSet.from_state(state, replica_id="restored")
+        assert restored.replica_id == "restored"
+        assert restored.value() == {"apple"}
+        assert "banana" not in restored
+        restored_state = restored.get_state()
+        assert restored_state.elements["apple"].tags == state.elements["apple"].tags
+        assert restored_state.elements["banana"].tombstones == state.elements["banana"].tombstones
+
+    def test_from_state_is_independent_copy(self):
+        original = ORSet(replica_id="node1")
+        original.add("x")
+        state = original.get_state()
+        restored = ORSet.from_state(state, replica_id="node1")
+        original.add("y")
+        assert original.value() == {"x", "y"}
+        assert restored.value() == {"x"}
+
 
 class TestORSetMerge:
     def test_merge_two_sets(self):

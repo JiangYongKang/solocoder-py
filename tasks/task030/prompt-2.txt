@@ -1,0 +1,5 @@
+shard_router 包里有几处可以改进的地方，在现有代码上改一改。
+1. remove_node 对"节点仍有已分配槽"和"节点有正在进行中的迁移"两种校验场景直接抛出 ValueError，而模块其他异常路径都用了自定义异常类（NodeNotFoundError、SlotMigrationInProgressError 等），API 风格不一致。应该统一用自定义异常，让调用方能按类型统一处理。
+2. route_from_node 内部直接调用 get_route，当 key 映射到未分配槽时透传 SlotNotAssignedError。调用方的本意是"这个 key 在不在于我给的这个节点"，槽未分配和槽已迁移到其他节点是两种完全不同的情况，混用同一个异常让调用方难以区分。route_from_node 应该把未分配槽转换成一个更合适的错误。
+3. 修完跑 poetry run pytest tests/shard_router/ -q，确保全过。
+4. README 同步更新，说明各方法的异常约定。

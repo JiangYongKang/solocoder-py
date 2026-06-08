@@ -8,6 +8,7 @@ from solocoder_py.wal import (
     EmptyWalError,
     InvalidTruncateLsnError,
     LogEntry,
+    LsnGapError,
     LsnNotFoundError,
     TruncatedLsnError,
     WalError,
@@ -42,6 +43,7 @@ class TestExceptionsHierarchy:
     def test_all_exceptions_inherit_from_base(self):
         assert issubclass(EmptyWalError, WalError)
         assert issubclass(InvalidTruncateLsnError, WalError)
+        assert issubclass(LsnGapError, WalError)
         assert issubclass(LsnNotFoundError, WalError)
         assert issubclass(TruncatedLsnError, WalError)
 
@@ -259,6 +261,73 @@ class TestReplay:
 
         replayed = list(wal.replay(from_lsn=5))
         assert [e.lsn for e in replayed] == [5, 6, 7]
+
+    def test_replay_is_lazy_generator(self, wal: WriteAheadLog):
+        for i in range(5):
+            wal.append(f"entry-{i}")
+
+        it = wal.replay()
+        import types
+
+        assert isinstance(it, types.GeneratorType)
+
+        first = next(it)
+        assert first.lsn == 0
+        assert first.data == "entry-0"
+
+        second = next(it)
+        assert second.lsn == 1
+        assert second.data == "entry-1"
+
+        rest = list(it)
+        assert [e.lsn for e in rest] == [2, 3, 4]
+
+    def test_replay_does_not_materialize_all_entries_upfront(self, wal: WriteAheadLog):
+        for i in range(3):
+            wal.append(f"e{i}")
+
+        it = wal.replay()
+
+        first = next(it)
+        assert first.lsn == 0
+
+        wal._entries[999] = LogEntry(lsn=999, data="injected")
+        del wal._entries[1]
+
+        with pytest.raises(LsnGapError) as exc:
+            next(it)
+        assert exc.value.expected_lsn == 1
+
+    def test_replay_lsn_gap_raises(self, wal: WriteAheadLog):
+        for i in range(5):
+            wal.append(f"e{i}")
+
+        del wal._entries[2]
+
+        it = wal.replay()
+        assert next(it).lsn == 0
+        assert next(it).lsn == 1
+
+        with pytest.raises(LsnGapError) as exc:
+            next(it)
+        assert exc.value.expected_lsn == 2
+        assert exc.value.min_readable_lsn == 0
+        assert exc.value.max_lsn == 4
+
+    def test_replay_concurrent_truncate_during_iteration_raises(self, wal: WriteAheadLog):
+        for i in range(5):
+            wal.append(f"e{i}")
+
+        it = wal.replay()
+        assert next(it).lsn == 0
+        assert next(it).lsn == 1
+
+        wal.truncate(2)
+
+        with pytest.raises(TruncatedLsnError) as exc:
+            next(it)
+        assert exc.value.lsn == 2
+        assert exc.value.min_readable_lsn == 3
 
 
 class TestEdgeCases:

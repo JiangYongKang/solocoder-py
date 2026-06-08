@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .exceptions import ReplicaUnreachableError
+from .exceptions import ReplicaInjectedFailureError, ReplicaUnreachableError
 from .models import ReplicaStats, ReplicaStatus, StoredValue
 
 
@@ -56,38 +56,34 @@ class Replica:
             time.sleep(self._artificial_latency_ms / 1000.0)
 
     def read(self, key: str) -> Optional[StoredValue]:
-        self._check_reachable()
         self._total_reads += 1
+        self._check_reachable()
+        self._sleep_latency()
+        if self._fail_reads:
+            raise ReplicaInjectedFailureError(self.id, "read")
         start = time.monotonic()
-        try:
-            self._sleep_latency()
-            if self._fail_reads:
-                raise ReplicaUnreachableError(self.id)
-            value = self._store.get(key)
-            self._successful_reads += 1
-            return value
-        finally:
-            elapsed_ms = (time.monotonic() - start) * 1000.0
-            self._read_latencies_ms.append(elapsed_ms)
+        value = self._store.get(key)
+        elapsed_ms = (time.monotonic() - start) * 1000.0
+        self._read_latencies_ms.append(elapsed_ms)
+        self._successful_reads += 1
+        return value
 
     def write(self, key: str, value: Any, version: int) -> bool:
-        self._check_reachable()
         self._total_writes += 1
+        self._check_reachable()
+        self._sleep_latency()
+        if self._fail_writes:
+            raise ReplicaInjectedFailureError(self.id, "write")
         start = time.monotonic()
-        try:
-            self._sleep_latency()
-            if self._fail_writes:
-                return False
-            existing = self._store.get(key)
-            if existing is not None and version < existing.version:
-                return False
-            timestamp = time.time()
-            self._store[key] = StoredValue(value=value, version=version, timestamp=timestamp)
-            self._successful_writes += 1
-            return True
-        finally:
-            elapsed_ms = (time.monotonic() - start) * 1000.0
-            self._write_latencies_ms.append(elapsed_ms)
+        existing = self._store.get(key)
+        if existing is not None and version < existing.version:
+            return False
+        timestamp = time.time()
+        self._store[key] = StoredValue(value=value, version=version, timestamp=timestamp)
+        elapsed_ms = (time.monotonic() - start) * 1000.0
+        self._write_latencies_ms.append(elapsed_ms)
+        self._successful_writes += 1
+        return True
 
     def get_all_data(self) -> dict[str, StoredValue]:
         return dict(self._store)

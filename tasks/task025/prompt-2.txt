@@ -1,0 +1,5 @@
+vector_clock 包里有几处可以改进的地方，在现有代码上改一改。
+1. __hash__ 与 __eq__ 不一致：__eq__ 采用隐含零值语义，把 {"a":1} 和 {"a":1,"b":0} 视为相等时钟，但 __hash__ 基于内部实际存储的 items 计算，两者哈希不同。这违反了 Python 里"相等对象必须具有相同哈希值"的约定，会导致相等时钟在 set/dict 里出现奇怪行为。
+2. 构造函数允许 VectorClock({"": 3}) 正常创建，但 tick("") 却抛出 ValueError，同一个类对空字符串节点 ID 的校验策略不一致。
+3. 修完跑 poetry run pytest tests/vector_clock/ -q，确保全过。
+4. README 同步更新，说明一下比较时的隐含零值约定和节点 ID 的校验规则。

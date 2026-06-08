@@ -1,6 +1,7 @@
 from .exceptions import (
     EmptyWalError,
     InvalidTruncateLsnError,
+    LsnGapError,
     LsnNotFoundError,
     TruncatedLsnError,
     WalError,
@@ -11,6 +12,7 @@ from .wal import WriteAheadLog
 __all__ = [
     "EmptyWalError",
     "InvalidTruncateLsnError",
+    "LsnGapError",
     "LsnNotFoundError",
     "TruncatedLsnError",
     "WalError",

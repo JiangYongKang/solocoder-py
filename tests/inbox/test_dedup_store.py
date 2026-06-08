@@ -525,26 +525,40 @@ class TestConcurrency:
     def test_concurrent_reads_and_writes(self):
         store = make_store(max_count=1000)
         errors = {}
+        writer_count = 3
+        msgs_per_writer = 20
+
+        all_message_ids = [
+            f"writer-{w}-msg-{i}"
+            for w in range(writer_count)
+            for i in range(msgs_per_writer)
+        ]
 
         def writer(writer_id):
             try:
-                for i in range(20):
+                for i in range(msgs_per_writer):
                     store.check_duplicate(f"writer-{writer_id}-msg-{i}")
             except Exception as e:
                 errors[f"writer-{writer_id}"] = e
 
         def reader(reader_id):
             try:
-                for _ in range(50):
+                for loop in range(50):
                     store.window_count()
                     store.get_stats()
-                    store.contains(f"writer-0-msg-0")
+                    store.list_records()
+                    msg_idx = (reader_id * 10 + loop) % len(all_message_ids)
+                    target_id = all_message_ids[msg_idx]
+                    store.contains(target_id)
+                    store.get_record(target_id)
+                    other_idx = (loop * 7) % len(all_message_ids)
+                    store.contains(all_message_ids[other_idx])
                     sleep(0.001)
             except Exception as e:
                 errors[f"reader-{reader_id}"] = e
 
         threads = []
-        for i in range(3):
+        for i in range(writer_count):
             threads.append(threading.Thread(target=writer, args=(i,)))
         for i in range(2):
             threads.append(threading.Thread(target=reader, args=(i,)))
@@ -554,6 +568,8 @@ class TestConcurrency:
             t.join(timeout=30)
 
         assert len(errors) == 0, f"Errors: {errors}"
+        stats = store.get_stats()
+        assert stats.total_received >= writer_count * msgs_per_writer
 
 
 class TestManagementOperations:

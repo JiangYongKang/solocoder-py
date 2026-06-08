@@ -27,6 +27,7 @@ class MVCCStore:
     _transactions: Dict[int, Transaction] = field(default_factory=dict)
     _active_snapshots: Dict[int, Snapshot] = field(default_factory=dict)
     _next_version: int = 1
+    _committed_version: int = 0
     _next_transaction_id: int = 1
     _lock: threading.RLock = field(default_factory=threading.RLock)
     _reclaimed_versions: Set[int] = field(default_factory=set)
@@ -51,7 +52,7 @@ class MVCCStore:
     def begin_transaction(self) -> Transaction:
         with self._lock:
             txn_id = self._allocate_transaction_id()
-            start_version = self._allocate_version()
+            start_version = self._committed_version
             txn = Transaction(
                 transaction_id=txn_id,
                 start_version=start_version,
@@ -61,9 +62,7 @@ class MVCCStore:
 
     def create_snapshot(self) -> Snapshot:
         with self._lock:
-            snapshot_version = self._next_version - 1
-            if snapshot_version <= 0:
-                snapshot_version = self._allocate_version()
+            snapshot_version = self._committed_version
             active = tuple(sorted(self._get_active_transaction_ids()))
             snapshot = Snapshot(
                 snapshot_version=snapshot_version,
@@ -104,7 +103,7 @@ class MVCCStore:
                 raise VersionReclaimedError(
                     f"Snapshot version {snapshot.snapshot_version} has been reclaimed"
                 )
-            if snapshot.snapshot_version >= self._next_version:
+            if snapshot.snapshot_version > self._committed_version:
                 raise SnapshotInvalidError(
                     f"Snapshot version {snapshot.snapshot_version} is invalid"
                 )
@@ -230,6 +229,9 @@ class MVCCStore:
                     self._data[key] = []
                 self._data[key].append(version)
 
+            if commit_version > self._committed_version:
+                self._committed_version = commit_version
+
             return commit_version
 
     def rollback(self, transaction: Transaction) -> None:
@@ -278,7 +280,7 @@ class MVCCStore:
             elif min_txn_start is not None:
                 safe_version = min_txn_start
             else:
-                safe_version = self._next_version
+                safe_version = self._committed_version + 1
 
             reclaimed_count = 0
 
@@ -360,6 +362,7 @@ class MVCCStore:
             self._active_snapshots.clear()
             self._reclaimed_versions.clear()
             self._next_version = 1
+            self._committed_version = 0
             self._next_transaction_id = 1
 
 

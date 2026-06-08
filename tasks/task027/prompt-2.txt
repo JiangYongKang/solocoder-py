@@ -1,0 +1,5 @@
+gossip 包里有几处需要改一下，在现有代码上改。
+1. 提示词要求"连续多次未收到某节点心跳时标记为可疑"，即 ALIVE→SUSPECT 应该基于心跳缺失次数的计数检测。但当前实现用的是绝对时间比较（time_since_heartbeat >= suspect_timeout），和要求的机制不符。Member 里的 missed_heartbeats 字段从未递增也从未用于判断，成了死代码。改成按连续缺失心跳次数来判定可疑。
+2. receive_heartbeat 里 merge_heartbeat 之后又单独检查 sender_id 是否存在并补充添加。这个回退添加路径和心跳消息里正常携带 sender_id 的路径之间，版本号起点不一致（回退固定 version=1，而消息内可能更高）。两条路径的版本号逻辑需要对齐。
+3. 修完跑 poetry run pytest tests/gossip/ -q，确保全过。
+4. README 同步更新，说清楚状态转移的检测机制和新节点注册时的版本号约定。

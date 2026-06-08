@@ -62,7 +62,7 @@ class SkipList:
                     current.forward[i].score < score
                     or (
                         current.forward[i].score == score
-                        and getattr(current.forward[i], "_insert_seq", 0) < insert_seq
+                        and current.forward[i].insert_seq < insert_seq
                     )
                 ):
                     rank[i] += current.span[i]
@@ -75,8 +75,8 @@ class SkipList:
                 level=level,
                 forward=[None] * level,
                 span=[0] * level,
+                insert_seq=insert_seq,
             )
-            new_node._insert_seq = insert_seq
 
             for i in range(level):
                 new_node.forward[i] = update[i].forward[i]
@@ -139,19 +139,21 @@ class SkipList:
                 raise InvalidRangeError("min_score cannot be greater than max_score")
 
             results: list[RangeQueryResult] = []
-            current = self._header.forward[0]
+
+            current = self._header
+            if min_score is not None:
+                for i in range(self._max_level - 1, -1, -1):
+                    while current.forward[i] is not None and current.forward[i].score < min_score:
+                        current = current.forward[i]
+                current = current.forward[0]
+
+                if not min_inclusive:
+                    while current is not None and current.score <= min_score:
+                        current = current.forward[0]
+            else:
+                current = self._header.forward[0]
 
             while current is not None:
-                if min_score is not None:
-                    if min_inclusive:
-                        if current.score < min_score:
-                            current = current.forward[0]
-                            continue
-                    else:
-                        if current.score <= min_score:
-                            current = current.forward[0]
-                            continue
-
                 if max_score is not None:
                     if max_inclusive:
                         if current.score > max_score:
@@ -176,6 +178,15 @@ class SkipList:
                 while current.forward[i] is not None and current.forward[i].score < score:
                     rank += current.span[i]
                     current = current.forward[i]
+
+            found = False
+            check = current.forward[0]
+            while check is not None and check.score == score:
+                found = True
+                break
+
+            if not found:
+                raise ScoreNotFoundError(f"Score {score} not found in skip list")
 
             return rank
 

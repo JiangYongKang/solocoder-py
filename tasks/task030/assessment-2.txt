@@ -1,0 +1,4 @@
+产物不满意：
+1. route_from_node 捕获 SlotNotAssignedError 后 raise SlotNotRoutedError(str(e))，异常类型换了但消息内容没变，仍然透传 "slot {N} for key '{K}' is not assigned"。SlotNotRoutedError 语义是"这个 key 在当前节点路由不到"，而消息却说"槽未分配"，异常类型和消息含义不一致，调用方看到这个异常却读到一条描述不同情况的错误文本，容易误判。
+过程不满意：
+1. 模型刚收到任务就直接创建了 7 项 TodoList，没有先读代码和 repo 状态做具体分析，属于"先列计划再看代码"的模式，计划与实际问题的对应关系不够清晰。

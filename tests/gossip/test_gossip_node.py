@@ -105,7 +105,7 @@ class TestHeartbeatPropagation:
 
 class TestStateTransitions:
     def test_alive_to_suspect_to_dead(self, clock):
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0)
+        cfg = make_config(suspect_missed_count=3, dead_timeout=5.0)
         n1 = make_node("n1", clock, config=cfg)
         n2 = make_node("n2", clock, config=cfg)
         n1.connect(n2)
@@ -113,12 +113,11 @@ class TestStateTransitions:
         clock.advance(0.5)
         n1.seed_member("n2")
 
-        clock.advance(4.9)
-        transitions = n1.check_failures()
-        assert "n2" not in transitions
+        for _ in range(2):
+            transitions = n1.check_failures()
+            assert "n2" not in transitions
         assert n1.membership.get_member("n2").state == MemberState.ALIVE
 
-        clock.advance(0.2)
         transitions = n1.check_failures()
         assert transitions["n2"] == MemberState.SUSPECT
 
@@ -132,7 +131,7 @@ class TestStateTransitions:
         assert n1.membership.get_member("n2").state == MemberState.DEAD
 
     def test_heartbeat_recovery_from_suspect(self, clock):
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0, fanout=1)
+        cfg = make_config(suspect_missed_count=3, dead_timeout=5.0, fanout=1)
         n1 = make_node("n1", clock, config=cfg, seed=1)
         n2 = make_node("n2", clock, config=cfg, seed=2)
         n1.connect(n2)
@@ -141,8 +140,8 @@ class TestStateTransitions:
         n1.seed_member("n2")
         n2.seed_member("n1")
 
-        clock.advance(5.1)
-        n1.check_failures()
+        for _ in range(3):
+            n1.check_failures()
         assert n1.membership.get_member("n2").state == MemberState.SUSPECT
 
         clock.advance(0.1)
@@ -150,7 +149,7 @@ class TestStateTransitions:
         assert n1.membership.get_member("n2").state == MemberState.ALIVE
 
     def test_higher_version_alive_overrides_dead(self, clock):
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0, fanout=1)
+        cfg = make_config(suspect_missed_count=3, dead_timeout=5.0, fanout=1)
         n1 = make_node("n1", clock, config=cfg, seed=1)
         n2 = make_node("n2", clock, config=cfg, seed=2)
         n1.connect(n2)
@@ -159,8 +158,8 @@ class TestStateTransitions:
         n1.seed_member("n2")
         n2.seed_member("n1")
 
-        clock.advance(5.1)
-        n1.check_failures()
+        for _ in range(3):
+            n1.check_failures()
         clock.advance(5.1)
         n1.check_failures()
         assert n1.membership.get_member("n2").state == MemberState.DEAD
@@ -253,14 +252,14 @@ class TestConcurrentViewMerging:
 
 class TestDeadNodeCleanup:
     def test_dead_nodes_cleaned_after_timeout(self, clock):
-        cfg = make_config(suspect_timeout=1.0, dead_timeout=2.0, cleanup_timeout=5.0)
+        cfg = make_config(suspect_missed_count=2, dead_timeout=1.0, cleanup_timeout=5.0)
         node = make_node("n1", clock, config=cfg)
 
         clock.advance(0.5)
         node.seed_member("n2")
 
-        clock.advance(1.1)
-        node.check_failures()
+        for _ in range(2):
+            node.check_failures()
         clock.advance(1.1)
         node.check_failures()
         assert node.membership.get_member("n2").state == MemberState.DEAD
@@ -276,7 +275,7 @@ class TestDeadNodeCleanup:
         assert node.membership.get_member("n2") is None
 
     def test_cleaned_node_rejoins_with_new_version(self, clock):
-        cfg = make_config(suspect_timeout=1.0, dead_timeout=2.0, cleanup_timeout=5.0, fanout=1)
+        cfg = make_config(suspect_missed_count=2, dead_timeout=1.0, cleanup_timeout=5.0, fanout=1)
         n1 = make_node("n1", clock, config=cfg, seed=1)
         n2 = make_node("n2", clock, config=cfg, seed=2)
         n1.connect(n2)
@@ -285,8 +284,8 @@ class TestDeadNodeCleanup:
         n1.seed_member("n2")
         n2.seed_member("n1")
 
-        clock.advance(1.1)
-        n1.check_failures()
+        for _ in range(2):
+            n1.check_failures()
         clock.advance(1.1)
         n1.check_failures()
         clock.advance(5.1)
@@ -305,11 +304,11 @@ class TestDeadNodeCleanup:
 
 class TestSingleNodeCluster:
     def test_single_node_cluster_stability(self, clock):
-        cfg = make_config(suspect_timeout=1.0, dead_timeout=2.0, cleanup_timeout=5.0)
+        cfg = make_config(suspect_missed_count=1, dead_timeout=2.0, cleanup_timeout=5.0)
         node = make_node("n1", clock, config=cfg)
 
-        clock.advance(1000.0)
-        transitions = node.check_failures()
+        for _ in range(1000):
+            transitions = node.check_failures()
         assert transitions == {}
         removed = node.cleanup_dead_nodes()
         assert removed == []
@@ -324,7 +323,7 @@ class TestSingleNodeCluster:
 
 class TestAllNodesDead:
     def test_all_peers_marked_dead(self, clock):
-        cfg = make_config(suspect_timeout=1.0, dead_timeout=2.0)
+        cfg = make_config(suspect_missed_count=2, dead_timeout=1.0)
         nodes = [make_node(f"n{i}", clock, config=cfg) for i in range(4)]
         connect_nodes(*nodes)
 
@@ -334,10 +333,9 @@ class TestAllNodesDead:
                 if i != j:
                     node.seed_member(other.node_id)
 
-        clock.advance(1.1)
-        for node in nodes:
-            node.check_failures()
-
+        for _ in range(2):
+            for node in nodes:
+                node.check_failures()
         clock.advance(1.1)
         for node in nodes:
             node.check_failures()
@@ -352,7 +350,7 @@ class TestAllNodesDead:
 
 class TestStateListener:
     def test_listener_notified_on_state_change(self, clock):
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0)
+        cfg = make_config(suspect_missed_count=3, dead_timeout=5.0)
         node = make_node("n1", clock, config=cfg)
 
         changes = []
@@ -365,8 +363,8 @@ class TestStateListener:
         clock.advance(0.5)
         node.seed_member("n2")
 
-        clock.advance(5.1)
-        node.check_failures()
+        for _ in range(3):
+            node.check_failures()
 
         assert ("n2", MemberState.ALIVE, MemberState.SUSPECT) in changes
 
@@ -399,7 +397,7 @@ class TestStateListener:
 
 class TestMemberQueries:
     def test_query_online_suspect_dead(self, clock):
-        cfg = make_config(suspect_timeout=5.0, dead_timeout=10.0)
+        cfg = make_config(suspect_missed_count=3, dead_timeout=5.0)
         node = make_node("n1", clock, config=cfg)
 
         clock.advance(0.5)
@@ -407,9 +405,9 @@ class TestMemberQueries:
         node.seed_member("n3")
         node.seed_member("n4")
 
-        clock.advance(3.0)
+        node.check_failures()
         node.mark_node_alive("n3")
-        clock.advance(2.1)
+        node.check_failures()
         node.check_failures()
 
         clock.advance(5.1)
@@ -450,14 +448,14 @@ class TestMemberQueries:
 
 class TestMarkNodeAlive:
     def test_mark_dead_node_alive(self, clock):
-        cfg = make_config(suspect_timeout=1.0, dead_timeout=2.0)
+        cfg = make_config(suspect_missed_count=2, dead_timeout=1.0)
         node = make_node("n1", clock, config=cfg)
 
         clock.advance(0.5)
         node.seed_member("n2")
 
-        clock.advance(1.1)
-        node.check_failures()
+        for _ in range(2):
+            node.check_failures()
         clock.advance(1.1)
         node.check_failures()
         assert node.membership.get_member("n2").state == MemberState.DEAD

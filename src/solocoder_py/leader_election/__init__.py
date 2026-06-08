@@ -1,3 +1,4 @@
+from .clock import Clock, ManualClock, SystemClock
 from .enums import NodeState
 from .exceptions import (
     AlreadyVotedError,
@@ -19,6 +20,9 @@ from .node import RaftNode
 from .cluster import LeaderElectionCluster
 
 __all__ = [
+    "Clock",
+    "ManualClock",
+    "SystemClock",
     "NodeState",
     "AlreadyVotedError",
     "LeaderElectionError",

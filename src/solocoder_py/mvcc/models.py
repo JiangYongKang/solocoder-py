@@ -34,10 +34,12 @@ class Snapshot:
     active_transactions: Tuple[int, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        if self.snapshot_version <= 0:
-            raise ValueError("snapshot_version must be positive")
+        if self.snapshot_version < 0:
+            raise ValueError("snapshot_version cannot be negative")
 
     def is_visible(self, version: Version) -> bool:
+        if self.snapshot_version == 0:
+            return False
         if version.transaction_id in self.active_transactions:
             return False
         return version.version <= self.snapshot_version
@@ -54,8 +56,8 @@ class Transaction:
     def __post_init__(self) -> None:
         if self.transaction_id <= 0:
             raise ValueError("transaction_id must be positive")
-        if self.start_version <= 0:
-            raise ValueError("start_version must be positive")
+        if self.start_version < 0:
+            raise ValueError("start_version cannot be negative")
 
     @property
     def is_active(self) -> bool:

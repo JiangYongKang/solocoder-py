@@ -1,0 +1,10 @@
+产物不满意：
+1. contains() 和 get_record() 虽然移除了 _slide_window() 和 _maybe_trigger_cleanup() 的大规模副作用，但 TTL 过期时仍然偷偷执行 del self._records[message_id] 修改了内部存储状态。提示词说查询应该是只读操作、不能偷偷修改内部状态，模型在 README 里标注为"微量副作用"但没有彻底消除，与提示词要求的只读语义不一致。
+2. 并发测试 test_concurrent_reads_and_writes 虽然扩展了多 key 覆盖，但 reader 线程对所有查询方法的调用都丢弃了返回值，只检查了不抛异常。提示词第 2 条要求验证"多 key 场景下的并发查询一致性"，当前测试只验证了写入侧的 total_received 计数，没有验证在并发写入场景下 contains() 返回 True 的消息 get_record() 也能查到、window_count() 和实际有效记录数一致等查询结果语义的正确性。
+3. window_count()、get_stats()、list_records() 改为纯只读后通过 _valid_records_list() 做逻辑过滤（时间截断 + 数量截断 + TTL 过滤），不再依赖实际淘汰，但没有任何测试用例验证这个逻辑过滤的结果和通过 check_duplicate 触发真实淘汰后的状态一致。比如在 count 窗口 max_count=3 但 OrderedDict 里有 5 条记录时，_valid_records_list() 只取后 3 条，但没有测试交叉验证 contains() 和 window_count() 在这个场景下返回的结果是否自洽。
+过程不满意：
+1. COT 第 1 行模型收到提示词后直接建 TodoList 开始读文件，没有先分析两个问题（查询副作用和并发测试不足）的具体影响范围和修改方案，跳过了问题分析直接动手改。
+2. COT 第 50-132 行显示模型分 4 次逐步编辑 dedup_store.py，中间穿插"让我简化一下这两个辅助方法的实现，逻辑更清晰"（第 59 行）这样的即时反思，说明没有预先规划好所有改动，是边写边调的模式。
+3. COT 第 167 行模型在修改测试前又重新读取了 test_dedup_store.py，而这个文件在第 24-29 行已经读过一次，属于无意义的重复读取。
+4. COT 第 206 行和 342 行的 pytest 命令末尾都带有 undefined 参数，说明工具调用参数传入错误或模板未正确填充，虽然测试最终通过了但命令本身不规范。
+5. COT 第 181 行"让我先跑一下测试看看有没有问题"说明测试被当作"看有没有炸"而非"验证改动是否正确"，缺乏以测试为约束的修改思路。

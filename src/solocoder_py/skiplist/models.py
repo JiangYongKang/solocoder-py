@@ -11,6 +11,7 @@ class SkipListNode:
     level: int
     forward: list[Optional["SkipListNode"]]
     span: list[int]
+    insert_seq: int = 0
 
 
 @dataclass

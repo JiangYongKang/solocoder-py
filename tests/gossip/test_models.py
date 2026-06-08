@@ -24,7 +24,7 @@ class TestGossipConfigValidation:
     def test_default_config_valid(self):
         cfg = GossipConfig()
         assert cfg.heartbeat_interval == 1.0
-        assert cfg.suspect_timeout == 5.0
+        assert cfg.suspect_missed_count == 5
         assert cfg.dead_timeout == 10.0
         assert cfg.cleanup_timeout == 60.0
         assert cfg.fanout == 3
@@ -35,15 +35,17 @@ class TestGossipConfigValidation:
         with pytest.raises(InvalidConfigError):
             make_config(heartbeat_interval=-1)
 
-    def test_rejects_non_positive_suspect_timeout(self):
+    def test_rejects_non_positive_suspect_missed_count(self):
         with pytest.raises(InvalidConfigError):
-            make_config(suspect_timeout=0)
+            make_config(suspect_missed_count=0)
+        with pytest.raises(InvalidConfigError):
+            make_config(suspect_missed_count=-1)
 
-    def test_rejects_dead_timeout_not_greater_than_suspect(self):
+    def test_rejects_non_positive_dead_timeout(self):
         with pytest.raises(InvalidConfigError):
-            make_config(suspect_timeout=5.0, dead_timeout=5.0)
+            make_config(dead_timeout=0)
         with pytest.raises(InvalidConfigError):
-            make_config(suspect_timeout=5.0, dead_timeout=3.0)
+            make_config(dead_timeout=-1)
 
     def test_rejects_cleanup_timeout_not_greater_than_dead(self):
         with pytest.raises(InvalidConfigError):
@@ -135,6 +137,26 @@ class TestMemberStateTransitions:
         m.bump_version(clock.now())
         assert m.version == 6
         assert m.last_heartbeat == 100.0
+
+    def test_increment_missed_heartbeats(self):
+        m = Member(node_id="n1", state=MemberState.ALIVE)
+        assert m.missed_heartbeats == 0
+        assert m.increment_missed_heartbeats() == 1
+        assert m.missed_heartbeats == 1
+        assert m.increment_missed_heartbeats() == 2
+        assert m.missed_heartbeats == 2
+
+    def test_mark_alive_resets_missed_heartbeats(self):
+        clock = ManualClock()
+        m = Member(node_id="n1", state=MemberState.ALIVE, missed_heartbeats=3, last_heartbeat=clock.now(), state_changed_at=clock.now())
+        m.mark_alive(clock.now())
+        assert m.missed_heartbeats == 0
+
+    def test_mark_suspect_resets_missed_heartbeats(self):
+        clock = ManualClock()
+        m = Member(node_id="n1", state=MemberState.ALIVE, missed_heartbeats=5, last_heartbeat=clock.now(), state_changed_at=clock.now())
+        m.mark_suspect(clock.now())
+        assert m.missed_heartbeats == 0
 
 
 class TestMemberComparison:

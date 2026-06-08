@@ -5,6 +5,8 @@ import pytest
 from solocoder_py.shard_router import (
     DEFAULT_SLOT_COUNT,
     MigrationProgress,
+    NodeHasMigrationsError,
+    NodeNotEmptyError,
     NodeNotFoundError,
     RedirectRequiredError,
     RouteResult,
@@ -16,6 +18,7 @@ from solocoder_py.shard_router import (
     SlotMigrationInProgressError,
     SlotNotAssignedError,
     SlotNotMigratingError,
+    SlotNotRoutedError,
     SlotRange,
     SlotRangeInvalidError,
     WriteResult,
@@ -112,8 +115,19 @@ class TestNodeManagement:
         router = ShardRouter()
         router.add_node("node-a")
         router.assign_slot_range("node-a", 0, 100)
-        with pytest.raises(ValueError, match="still has assigned slots"):
+        with pytest.raises(NodeNotEmptyError, match="still has assigned slots"):
             router.remove_node("node-a")
+
+    def test_remove_node_with_ongoing_migration_raises(self):
+        router = ShardRouter()
+        router.add_node("source")
+        router.add_node("target")
+        router.assign_slot_range("source", 0, 100)
+        router.start_migration(50, "target")
+        with pytest.raises(NodeNotEmptyError, match="still has assigned slots"):
+            router.remove_node("source")
+        with pytest.raises(NodeHasMigrationsError, match="has ongoing migrations"):
+            router.remove_node("target")
 
 
 class TestSlotAssignment:
@@ -396,6 +410,31 @@ class TestRedirectAfterMigration:
         result = router.get_route("some-key")
         routed = router.route_from_node("some-key", result.node_id)
         assert routed.node_id == result.node_id
+
+    def test_route_from_node_unassigned_slot_raises_slot_not_routed(self):
+        router = ShardRouter()
+        router.add_node("node-a")
+        with pytest.raises(SlotNotRoutedError):
+            router.route_from_node("any-key", "node-a")
+
+    def test_route_from_node_unassigned_slot_is_not_slot_not_assigned(self):
+        router = ShardRouter()
+        router.add_node("node-a")
+        with pytest.raises(SlotNotRoutedError):
+            router.route_from_node("any-key", "node-a")
+        with pytest.raises(SlotNotAssignedError):
+            router.get_route("any-key")
+
+    def test_slot_not_routed_distinct_from_redirect(self):
+        router = ShardRouter()
+        router.add_node("node-a")
+        router.add_node("node-b")
+        with pytest.raises(SlotNotRoutedError):
+            router.route_from_node("unassigned-key", "node-a")
+        router.assign_slot_range("node-b", 0, 16383)
+        result = router.get_route("any-key")
+        with pytest.raises(RedirectRequiredError):
+            router.route_from_node("any-key", "node-a")
 
 
 class TestRoutingQueries:

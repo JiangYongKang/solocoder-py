@@ -1,0 +1,6 @@
+skiplist 包里有几处需要改一下，在现有代码上改。
+1. range_query 方法从 level 0 链头开始逐节点遍历，完全没有利用跳表的高层索引来快速定位到 min_score 附近，导致范围查询退化为 O(n) 而不是 O(log n + k)。跳表建了多层索引但在范围查询里一根筋走底层，跳表最重要的加速能力没体现出来。
+2. _insert_seq 通过 new_node._insert_seq = insert_seq 作为动态属性挂在 SkipListNode dataclass 上。SkipListNode 是 dataclass，动态属性不在字段定义中，不参与 __repr__、__eq__ 等自动生成的方法，调试和序列化时容易遗漏。同分值排序的标记应该纳入 dataclass 字段定义。
+3. ScoreNotFoundError 异常类定义了且导出了，但代码里从没抛出过——delete() 不存在分值只返回 False，get_rank() 对不存在的分值静默返回排名值。调用方无法区分"分值存在排第 N"和"分值本就不存在但应排第 N"两种情况。查询不存在分值时应该给出明确错误。
+4. 修完跑 poetry run pytest tests/skiplist/ -q，确保全过。
+5. README 同步更新，说明范围查询的索引利用方式和异常语义。

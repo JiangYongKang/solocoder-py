@@ -1,0 +1,7 @@
+crdt 包里有几处需要改一下，在现有代码上改。
+1. ORSet.is_ge 判断 other 有而 self 没有的元素时，检查的是 info.tags 非空而不是活标签（tags - tombstones）。当一个元素的所有标签都已在 tombstone 中时，虽然元素实际已不存在，但 is_ge 仍返回 False，比较语义有 bug。
+2. PNCounter 缺少从状态快照恢复对象的工厂方法，测试代码在多处被迫直接写私有属性 _positive 和 _negative 来复制状态，破坏了封装。需要加一个合理的状态恢复方式，让调用方（包括测试）不用掏对象内部。
+3. PNCounter.diff 和 ORSet.diff 在获取 self_state 后释放锁，再去获取 other_state，这时候 other 可能在并发中被修改，导致 diff 结果不一致。整个过程应该在一个锁保护的原子区间内完成。
+4. ORSet 内部用 tuple[set[str], set[str]] 存，get_state 导出又转成 ORSetElement，内外数据类型不一致，merge 方法里两种表示混用，理解和维护成本高。应该统一内部表示和外部接口的数据类型。
+5. 修完跑 poetry run pytest tests/crdt/ -q，确保全过。
+6. README 同步更新，补充状态恢复方式、diff 语义方向和并发安全的说明。

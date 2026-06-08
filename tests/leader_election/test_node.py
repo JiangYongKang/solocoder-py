@@ -91,7 +91,7 @@ class TestRaftNodeVoteRequestHandling:
         node._voted_term = 1
         request = VoteRequest(term=1, candidate_id="node-0")
         response = node.handle_vote_request(request)
-        assert response.vote_granted is True
+        assert response.vote_granted is False
         assert node.voted_for == "node-0"
 
 
@@ -172,3 +172,87 @@ class TestRaftNodeStepDown:
         node.step_down()
         assert node.state == NodeState.FOLLOWER
         assert node.leader_id is None
+
+
+class TestRaftNodeElectionTimeout:
+    def test_node_initial_not_timed_out(self):
+        from solocoder_py.leader_election import ManualClock
+
+        clock = ManualClock()
+        node = RaftNode(node_id="node-0", clock=clock, election_timeout_seconds=2.0)
+        assert node.is_election_timed_out() is False
+
+    def test_node_times_out_after_interval(self):
+        from solocoder_py.leader_election import ManualClock
+
+        clock = ManualClock()
+        node = RaftNode(node_id="node-0", clock=clock, election_timeout_seconds=2.0)
+        clock.advance(1.0)
+        assert node.is_election_timed_out() is False
+        clock.advance(1.0)
+        assert node.is_election_timed_out() is True
+        clock.advance(5.0)
+        assert node.is_election_timed_out() is True
+
+    def test_leader_never_times_out(self):
+        from solocoder_py.leader_election import ManualClock
+
+        clock = ManualClock()
+        node = RaftNode(node_id="node-0", clock=clock, election_timeout_seconds=2.0)
+        node.start_election()
+        node.become_leader()
+        assert node.state == NodeState.LEADER
+        clock.advance(100.0)
+        assert node.is_election_timed_out() is False
+
+    def test_receive_heartbeat_resets_timeout(self):
+        from solocoder_py.leader_election import ManualClock, Heartbeat
+
+        clock = ManualClock()
+        node = RaftNode(node_id="node-0", clock=clock, election_timeout_seconds=2.0)
+        clock.advance(1.5)
+        assert node.is_election_timed_out() is False
+        hb = Heartbeat(term=1, leader_id="node-1")
+        node.receive_heartbeat(hb)
+        clock.advance(1.0)
+        assert node.is_election_timed_out() is False
+        clock.advance(1.0)
+        assert node.is_election_timed_out() is True
+
+    def test_start_election_resets_timeout(self):
+        from solocoder_py.leader_election import ManualClock
+
+        clock = ManualClock()
+        node = RaftNode(node_id="node-0", clock=clock, election_timeout_seconds=2.0)
+        clock.advance(1.9)
+        assert node.is_election_timed_out() is False
+        node.start_election()
+        clock.advance(1.9)
+        assert node.is_election_timed_out() is False
+
+    def test_become_leader_resets_timeout(self):
+        from solocoder_py.leader_election import ManualClock
+
+        clock = ManualClock()
+        node = RaftNode(node_id="node-0", clock=clock, election_timeout_seconds=2.0)
+        node.start_election()
+        clock.advance(1.9)
+        node.become_leader()
+        assert node.state == NodeState.LEADER
+        clock.advance(100.0)
+        assert node.is_election_timed_out() is False
+
+    def test_step_down_resets_timeout(self):
+        from solocoder_py.leader_election import ManualClock
+
+        clock = ManualClock()
+        node = RaftNode(node_id="node-0", clock=clock, election_timeout_seconds=2.0)
+        node.start_election()
+        node.become_leader()
+        clock.advance(1.0)
+        node.step_down()
+        assert node.state == NodeState.FOLLOWER
+        clock.advance(1.0)
+        assert node.is_election_timed_out() is False
+        clock.advance(1.0)
+        assert node.is_election_timed_out() is True

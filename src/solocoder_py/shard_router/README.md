@@ -16,25 +16,27 @@
 ### `ShardRouter`
 分片路由器的主类，维护节点、槽分配与迁移状态的内存数据结构，线程安全（使用 `RLock`）。
 
-**主要方法：**
+**主要方法及异常约定：**
 
-| 方法 | 说明 |
-| --- | --- |
-| `add_node(node_id, host, port)` | 注册分片节点 |
-| `remove_node(node_id)` | 移除分片节点（需先解除槽分配并完成迁移） |
-| `assign_slot_range(node_id, start, end)` | 将连续槽区间分配给指定节点 |
-| `unassign_slot_range(start, end)` | 取消连续槽区间的分配 |
-| `start_migration(slot, target_node_id)` | 启动指定槽向目标节点的迁移 |
-| `complete_migration(slot)` | 完成指定槽的迁移，更新路由表 |
-| `get_route(key)` | 按 key 查询路由结果，包含迁移状态信息 |
-| `prepare_write(key)` | 按 key 获取写操作目标节点，迁移中返回双写节点 |
-| `route_from_node(key, source_node_id)` | 从指定节点路由，若槽已迁移则抛出 `RedirectRequiredError` |
-| `get_slot_owner(slot)` | 查询指定槽的当前所有者节点 |
-| `get_node_slots(node_id)` | 获取指定节点负责的槽范围列表（已合并连续区间） |
-| `get_migrating_slots()` | 获取所有正在迁移中的槽信息 |
-| `get_migration_progress()` | 获取整体迁移进度统计 |
-| `get_all_assignments()` | 获取所有节点的槽分配情况 |
-| `get_snapshot()` | 获取路由器完整状态快照 |
+| 方法 | 说明 | 可能抛出的异常 |
+| --- | --- | --- |
+| `add_node(node_id, host, port)` | 注册分片节点 | `ValueError`（空 `node_id`，参数校验） |
+| `remove_node(node_id)` | 移除分片节点 | `NodeNotFoundError`、`NodeNotEmptyError`（节点仍有已分配槽）、`NodeHasMigrationsError`（节点参与正在进行中的迁移） |
+| `assign_slot_range(node_id, start, end)` | 将连续槽区间分配给指定节点 | `SlotRangeInvalidError`、`NodeNotFoundError`、`SlotMigrationInProgressError`、`SlotAlreadyAssignedError` |
+| `unassign_slot_range(start, end)` | 取消连续槽区间的分配 | `SlotRangeInvalidError`、`SlotMigrationInProgressError` |
+| `start_migration(slot, target_node_id)` | 启动指定槽向目标节点的迁移 | `SlotRangeInvalidError`、`SlotNotAssignedError`、`SlotMigrationInProgressError`、`NodeNotFoundError`、`ValueError`（源节点与目标节点相同，参数校验） |
+| `complete_migration(slot)` | 完成指定槽的迁移，更新路由表 | `SlotRangeInvalidError`、`SlotNotMigratingError` |
+| `get_route(key)` | 按 key 查询路由结果，包含迁移状态信息 | `SlotNotAssignedError`（槽未分配给任何节点） |
+| `prepare_write(key)` | 按 key 获取写操作目标节点，迁移中返回双写节点 | `SlotNotAssignedError`（槽未分配给任何节点） |
+| `route_from_node(key, source_node_id)` | 从指定节点路由 | `SlotNotRoutedError`（key 映射的槽未分配，调用方语境下的"该 key 不在此节点"）、`RedirectRequiredError`（key 的槽已迁移到其他节点，含 `slot` 和 `target_node_id`） |
+| `get_slot_owner(slot)` | 查询指定槽的当前所有者节点 | `SlotRangeInvalidError` |
+| `get_node_slots(node_id)` | 获取指定节点负责的槽范围列表 | `NodeNotFoundError` |
+| `get_migrating_slots()` | 获取所有正在迁移中的槽信息 | — |
+| `get_migration_progress()` | 获取整体迁移进度统计 | — |
+| `get_all_assignments()` | 获取所有节点的槽分配情况 | — |
+| `get_snapshot()` | 获取路由器完整状态快照 | — |
+
+> **异常设计原则**：所有业务领域错误均继承自 `ShardRouterError`，便于统一捕获。仅纯参数校验（如空字符串、非法参数组合）使用内置 `ValueError`。
 
 **静态方法：**
 - `key_to_slot(key, total_slots=16384)`：计算 key 对应的槽号，支持 `{hash_tag}` 语法
@@ -54,15 +56,21 @@
 
 ## 异常类 (`exceptions.py`)
 
+所有业务异常均继承自 `ShardRouterError`，便于调用方统一捕获处理。仅纯参数校验（如空字符串、非法参数组合）使用内置 `ValueError`。
+
 | 异常 | 触发场景 |
 | --- | --- |
-| `SlotNotAssignedError` | 路由时槽未分配给任何节点 |
-| `SlotRangeInvalidError` | 槽号或槽区间超出有效范围 |
+| `ShardRouterError` | 所有业务异常的基类 |
+| `SlotNotAssignedError` | `get_route` / `prepare_write` 时槽未分配给任何节点 |
+| `SlotNotRoutedError` | `route_from_node` 时 key 映射的槽未分配（区别于"槽已迁移到其他节点"） |
+| `SlotRangeInvalidError` | 槽号或槽区间超出有效范围 `[0, total_slots)` |
 | `SlotAlreadyAssignedError` | 分配槽时槽已被其他节点占用 |
 | `SlotMigrationInProgressError` | 操作槽时该槽正在迁移中 |
 | `SlotNotMigratingError` | 完成迁移时槽并未处于迁移状态 |
 | `NodeNotFoundError` | 操作不存在的节点 |
-| `RedirectRequiredError` | 请求到达旧节点但槽已迁移，含 `slot` 和 `target_node_id` 属性 |
+| `NodeNotEmptyError` | 删除节点时节点仍有已分配的槽，需先解除分配 |
+| `NodeHasMigrationsError` | 删除节点时节点参与正在进行中的迁移，需先完成迁移 |
+| `RedirectRequiredError` | `route_from_node` 时 key 的槽已迁移到其他节点，含 `slot` 和 `target_node_id` 属性 |
 
 ## 哈希槽路由流程
 
@@ -108,7 +116,7 @@
 - **读请求 (`get_route`)**：仍路由到源节点，同时标记 `migrating=True`，调用方可决定是否向目标节点兜底读
 - **写请求 (`prepare_write`)**：返回 `WriteStatus.DUAL`，调用方需同时写入源节点和目标节点
 - **完成迁移**：`complete_migration` 原子性地将槽的所有权切换到目标节点
-- **旧节点请求**：迁移完成后，使用 `route_from_node` 从旧节点访问会抛出 `RedirectRequiredError`，调用方应重新路由到目标节点
+- **旧节点请求 (`route_from_node`)**：迁移完成后，从旧节点访问会抛出 `RedirectRequiredError`（含目标节点信息），调用方可重新路由；若 key 映射的槽根本未分配，则抛出 `SlotNotRoutedError`，与重定向场景明确区分
 
 ## 使用示例
 

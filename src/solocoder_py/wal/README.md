@@ -20,6 +20,7 @@
 | `WalError` | WAL 模块异常基类 |
 | `TruncatedLsnError` | 尝试读取或重放已被截断的 LSN，携带请求 LSN 和当前最小可读 LSN |
 | `InvalidTruncateLsnError` | 截断 LSN 不合法（小于最小可读 LSN 或大于最大 LSN），携带完整上下文 |
+| `LsnGapError` | 重放过程中检测到 LSN 不连续（预期条目缺失），携带期望 LSN 和范围 |
 | `LsnNotFoundError` | 请求的 LSN 超出当前最大 LSN，携带有效范围 |
 | `EmptyWalError` | 日志为空时进行不允许的操作（如读取、截断） |
 
@@ -89,21 +90,31 @@ LogEntry
   ▼
 WriteAheadLog.replay(from_lsn)
   │
-  │ ① 获取锁
-  │ ② 若 WAL 为空 → 返回空迭代器
+  │ ① 获取锁，仅做参数校验与边界记录
+  │ ② 若 WAL 为空 → 返回空生成器
   │ ③ 确定起始 LSN：from_lsn 或 min_readable_lsn
   │ ④ 若起始 LSN < min_readable_lsn → TruncatedLsnError
-  │ ⑤ 若起始 LSN > max_lsn → 返回空迭代器
-  │ ⑥ 从起始 LSN 开始按顺序收集 self._entries 中的条目
-  │    （遇到不存在的 LSN 即停止，保证不跳过重放）
-  │ ⑦ 释放锁
+  │ ⑤ 若起始 LSN > max_lsn → 返回空生成器
+  │ ⑥ 记录 start / end(max_lsn) / min_readable_lsn
+  │ ⑦ 释放锁，返回惰性生成器
   ▼
-Iterator[LogEntry]  —— 按追加顺序排列
+Generator[LogEntry]  —— 按追加顺序、按需逐条产出
+    │
+    │ 每次 next()：
+    │   a. 获取锁
+    │   b. 若当前 LSN < min_readable_lsn → TruncatedLsnError
+    │      （迭代过程中被并发截断）
+    │   c. 若当前 LSN 不在 _entries 中 → LsnGapError
+    │      （检测到 LSN 不连续，拒绝静默丢数据）
+    │   d. yield 该条目，释放锁
+    ▼
 ```
 
 **重放语义**：
-- 重放顺序与追加顺序严格一致
-- 重放结果是迭代器的快照，后续对 WAL 的修改不影响已返回的迭代器
+- **惰性生成器**：`replay()` 返回 Python `generator`，仅在调用方迭代时才逐条从存储中读取条目，不会一次性把整个 WAL 物化进内存，适用于大规模日志重放。
+- **顺序保证**：产出顺序与追加顺序严格一致（按 LSN 单调递增）。
+- **LSN 连续性校验（Fail-Fast）**：正常操作下 WAL 的可读区间 LSN 必然连续；一旦生成器在迭代中发现某条预期 LSN 缺失，立即抛出 `LsnGapError`，绝不静默跳过或提前停止，避免数据丢失不被察觉。
+- **迭代期并发安全**：若在迭代过程中其他线程调用了 `truncate()` 回收了当前正要产出的 LSN，则该次 `next()` 会抛出 `TruncatedLsnError`，保证读取不到已回收的条目。
 
 ### 截断流程
 

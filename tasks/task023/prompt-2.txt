@@ -1,0 +1,7 @@
+mvcc 包里有几处可以改进的地方，在现有代码上改一改。
+1. 代码加了 threading.RLock 且 README 声称线程安全，但所有测试都是单线程的，没有并发读写测试来验证锁是否正确使用。需要补充并发场景的测试，验证多事务同时读写时的一致性和隔离性。
+2. begin_transaction 每次分配 start_version，commit 又单独分配 commit_version，导致全局版本号序列有空缺。用户通过 read_version 指定版本号时可能正好落在一个事务的 start_version 上而报 VersionNotFoundError，但 README 和代码注释都没解释这种版本号消耗机制，用户会困惑为什么一个"看起来存在"的版本它报不存在。
+3. create_snapshot 把 _next_version - 1 作为快照版本号，但 _next_version 的增长包含了 begin_transaction 中未提交事务占用的版本号，导致快照可能落在未提交事务的版本上，而不是"当时已提交的最大版本"，与提示词要求有偏差。快照版本应该取当前已提交的最大版本号。
+4. 改完之后补充并发场景的单元测试，测试代码放在 tests/mvcc/ 下。
+5. 修完跑 poetry run pytest tests/mvcc/ -q，确保全过。
+6. README 同步更新，说清楚版本号消耗机制、快照版本选取规则和并发安全保证。

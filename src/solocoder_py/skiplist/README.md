@@ -5,10 +5,10 @@
 
 ## 模块功能
 
-- **有序插入**：节点按分值（score）升序排列，相同分值节点按插入顺序排列
+- **有序插入**：节点按分值（score）升序排列，相同分值节点按插入顺序排列（插入序号纳入节点字段）
 - **随机层高**：节点层高通过概率算法随机生成，保证查询效率的对数复杂度
-- **范围查询**：支持开闭区间的范围查询，按分值升序返回结果
-- **排名查询**：支持查询指定分值的排名，以及按排名获取节点
+- **范围查询**：支持开闭区间的范围查询，利用高层索引快速定位起点，时间复杂度 O(log n + k)
+- **排名查询**：支持查询指定分值的排名，以及按排名获取节点；分值不存在时抛出明确异常
 - **并发安全**：使用可重入锁保护共享状态，支持多线程安全的插入与删除
 - **节点删除**：支持按分值删除节点，删除后查询结果实时更新
 - **空表检测**：提供空表查询属性，明确标记跳表是否为空
@@ -43,6 +43,7 @@
 - `level`：节点层数
 - `forward`：各层的前驱指针列表
 - `span`：各层跨越的节点数（用于排名计算）
+- `insert_seq`：插入序号，用于相同分值节点的插入顺序排序
 
 ### RangeQueryResult
 
@@ -81,20 +82,22 @@
 - `min_score` / `max_score` 为 `None` 表示对应方向无限制
 - `min_inclusive` / `max_inclusive` 控制区间是否包含端点
 - 结果按分值升序返回
+- **索引利用**：当指定 `min_score` 时，从最高层开始利用高层索引快速定位到 `min_score` 附近，再沿底层链表遍历，复杂度 O(log n + k)，其中 k 为结果集大小。未指定 `min_score` 时直接从底层链头开始遍历。
 
 #### 排名查询规则
 - `get_rank(score)` 返回严格小于该分值的节点数量（从 0 开始）
+- `get_rank(score)` 若查询的分值不存在，抛出 `ScoreNotFoundError` 异常
 - `get_by_rank(rank)` 的 rank 从 1 开始计数
 
 ## 异常类
 
-| 异常类 | 说明 |
-|--------|------|
-| `SkipListError` | 跳表操作的基类异常 |
-| `EmptySkipListError` | 对空表执行查询操作时抛出 |
-| `ScoreNotFoundError` | 查询的分值不存在时抛出 |
-| `InvalidRankError` | 查询排名超出有效范围时抛出 |
-| `InvalidRangeError` | 范围查询参数非法时抛出 |
+| 异常类 | 说明 | 触发场景 |
+|--------|------|----------|
+| `SkipListError` | 跳表操作的基类异常 | — |
+| `EmptySkipListError` | 对空表执行查询操作时抛出 | 空表调用 `get_rank`、`get_by_rank` |
+| `ScoreNotFoundError` | 查询的分值不存在时抛出 | `get_rank(score)` 查询的 score 不在跳表中 |
+| `InvalidRankError` | 查询排名超出有效范围时抛出 | `get_by_rank(rank)` 的 rank < 1 或 > size |
+| `InvalidRangeError` | 范围查询参数非法时抛出 | `min_score > max_score` |
 
 ## 使用示例
 
@@ -133,6 +136,13 @@ print(sl.get_rank(2.0))  # 1 (只有 1.0 < 2.0)
 # 按排名查询
 result = sl.get_by_rank(1)
 print(result.score, result.value)  # 1.0 a
+
+# 查询不存在的分值会抛出异常
+from solocoder_py.skiplist import ScoreNotFoundError
+try:
+    sl.get_rank(999.0)
+except ScoreNotFoundError as e:
+    print(e)  # Score 999.0 not found in skip list
 
 # 删除节点
 sl.delete(2.0)

@@ -1,0 +1,6 @@
+quorum 包里有几处需要改一下，在现有代码上改。
+1. Replica.read() 故障注入和真实不可达共用 ReplicaUnreachableError 异常。协调器在 write/read 中捕获时无法区分是人工注入的故障还是真正的网络分区，导致错误分类和统计信息不够精确。故障注入和真实离线应该用不同的异常类型或标记。
+2. WriteResult.success 和 ReadResult.success 只判断 successful_replicas > 0，不校验是否达到 W 和 R 阈值。虽然 write/read 方法本身在不足时抛异常，但返回值对象的 success 属性自带语义，只要有一个成功就返回 True，调用方如果只检查 success 可能误判操作已满足法定人数。
+3. 副本读写延迟统计在 finally 块里不加区分地记录，包含了失败请求和人工注入延迟的时间。失败的读写操作不应该计入性能统计，否则 avg_read_latency_ms 和 avg_write_latency_ms 会混入无意义的失败延迟，指标不可用。
+4. 修完跑 poetry run pytest tests/quorum/ -q，确保全过。
+5. README 同步更新，说明异常类型区分策略、success 属性的语义和延迟统计的计入规则。

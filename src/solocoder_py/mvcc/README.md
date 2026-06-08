@@ -41,6 +41,41 @@
 |------|------|
 | `MVCCStore` | MVCC 存储引擎，线程安全，维护多版本数据、事务表、活跃快照；提供事务开始/提交/回滚、读写、快照创建/释放、版本查询、垃圾回收等核心操作 |
 
+## 版本号机制
+
+### 版本号分配与消耗
+
+本模块使用三种独立递增的计数器：
+
+| 计数器 | 用途 | 分配时机 | 用户可见 |
+|--------|------|----------|----------|
+| `_next_version` | 数据版本号全局计数器 | 仅在事务 `commit()` 成功时分配，每个提交生成一个新的连续版本号 | **是**：`read_version()`、`Snapshot.snapshot_version`、`Version.version` 均使用此版本号 |
+| `_next_transaction_id` | 事务 ID 全局计数器 | `begin_transaction()` 时分配，用于唯一标识事务 | 否：仅内部用于追踪事务状态 |
+| `_committed_version` | 已提交的最大版本号 | `commit()` 成功后更新，始终等于最新成功提交的版本号 | 间接可见：`create_snapshot()` 快照版本等于此值 |
+
+### 版本号连续性保证
+
+**版本号没有空洞**：数据版本号只在事务成功提交时分配，每次提交严格 +1，因此版本号序列是严格连续的（1, 2, 3, ...）。用户通过 `read_version(key, N)` 读取时，任何正整数 N 要么是真实存在的已提交版本，要么报 `VersionNotFoundError`，不会遇到"看起来存在但实际不存在"的空洞版本号。
+
+### start_version 的含义
+
+事务 `Transaction.start_version` **不占用**任何真实数据版本号。它的值等于事务开始时的 `_committed_version`：
+
+- `start_version = 0`：事务开始时尚未有任何已提交的数据（空库）。
+- `start_version = N`：事务能看到截至版本 N 的所有已提交数据。
+
+`start_version` 仅用于快照隔离判断（写写冲突检测、可见性判断），不是用户可通过 `read_version()` 读取的真实版本。
+
+## 快照版本选取规则
+
+`create_snapshot()` 返回的快照版本号**严格等于当前已提交的最大版本号**（`_committed_version`），确保：
+
+1. 快照仅包含创建时刻之前已成功提交的所有数据。
+2. 快照不会落在未提交事务占用的"占位"版本上（因为不存在占位版本）。
+3. 快照版本本身一定是一个真实的、已提交的、可通过 `read_version()` 访问的版本号。
+
+快照创建时还会记录当时的活跃事务 ID 列表（`active_transactions`），用于排除那些在快照创建时已经开始但尚未提交的事务所做的写入。
+
 ## MVCC 可见性规则
 
 ### 版本可见性判断
@@ -106,7 +141,7 @@ safe_version = min(
     min(所有活跃快照的 snapshot_version),
     min(所有活跃事务的 start_version)
 )
-如果没有活跃快照和活跃事务，则 safe_version = next_version（即所有版本均可回收）
+如果没有活跃快照和活跃事务，则 safe_version = committed_version + 1（即所有已提交版本均可回收）
 ```
 
 所有版本号 `< safe_version` 的旧版本**可能**可以被回收。
@@ -242,6 +277,35 @@ print(store.read_version("key", cv1))  # v1
 store.release_snapshot(snap)
 store.collect_garbage()  # 现在旧版本可以被回收
 ```
+
+## 并发安全保证
+
+### 线程安全机制
+
+`MVCCStore` 的所有公共 API 均由 `threading.RLock`（可重入互斥锁）保护，确保多线程环境下的正确性：
+
+- **锁范围**：每次 `begin_transaction`、`commit`、`rollback`、`read`、`write`、`create_snapshot`、`collect_garbage` 等公共操作都会先获取锁，执行完毕后释放。
+- **可重入性**：使用 `RLock` 而非普通 `Lock`，允许在持有锁的方法内部递归调用其他加锁方法（如 `commit` 内部调用 `_check_write_conflicts`）。
+- **原子性**：`commit()` 的冲突检测、版本号分配、写入物化是一个原子操作，不会出现部分提交。
+- **快照一致性**：`create_snapshot()` 原子地获取当前已提交版本和活跃事务列表，确保快照是自洽的。
+
+### 并发场景下的隔离性
+
+在多线程并发访问时，MVCC 快照隔离保证：
+
+1. **读写不阻塞**：读操作（快照读）与写操作互不干扰，读不会等待写，写也不会等待读。
+2. **写写冲突检测**：两个线程同时修改同一 key 时，后提交者会因冲突被回滚，不会出现丢失更新。
+3. **快照读隔离**：一个线程持有的快照不会看到其他线程在快照创建后提交的数据。
+4. **GC 安全**：活跃快照和活跃事务会保护其需要的旧版本不被 GC 回收。
+
+### 并发测试覆盖
+
+测试文件 `tests/mvcc/test_mvcc_store.py` 中 `TestConcurrency` 类包含以下并发测试场景：
+
+- `test_concurrent_writes_different_keys`：多线程写不同 key，验证无冲突时全部成功。
+- `test_concurrent_writes_same_key_trigger_conflicts`：多线程竞争写同一 key，验证写写冲突正确触发。
+- `test_concurrent_snapshot_reads_are_isolated`：快照读线程与写线程并发，验证快照值不变。
+- `test_concurrent_mixed_operations`：读、写、快照创建/释放 15 个线程混合操作，验证无异常。
 
 ## 运行测试
 

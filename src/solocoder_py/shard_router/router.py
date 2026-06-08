@@ -4,12 +4,15 @@ import threading
 from typing import Optional
 
 from .exceptions import (
+    NodeHasMigrationsError,
+    NodeNotEmptyError,
     NodeNotFoundError,
     RedirectRequiredError,
     SlotAlreadyAssignedError,
     SlotMigrationInProgressError,
     SlotNotAssignedError,
     SlotNotMigratingError,
+    SlotNotRoutedError,
     SlotRangeInvalidError,
 )
 from .models import (
@@ -81,11 +84,15 @@ class ShardRouter:
                 raise NodeNotFoundError(f"node '{node_id}' not found")
             slots = self._node_to_slots.get(node_id, set())
             if slots:
-                raise ValueError(f"node '{node_id}' still has assigned slots, unassign them first")
+                raise NodeNotEmptyError(
+                    f"node '{node_id}' still has assigned slots, unassign them first"
+                )
             migrating = [s for s, info in self._migrating_slots.items()
                          if info.source_node_id == node_id or info.target_node_id == node_id]
             if migrating:
-                raise ValueError(f"node '{node_id}' has ongoing migrations, complete them first")
+                raise NodeHasMigrationsError(
+                    f"node '{node_id}' has ongoing migrations, complete them first"
+                )
             self._nodes.pop(node_id, None)
             self._node_to_slots.pop(node_id, None)
 
@@ -197,7 +204,10 @@ class ShardRouter:
             )
 
     def route_from_node(self, key: str, source_node_id: str) -> RouteResult:
-        route = self.get_route(key)
+        try:
+            route = self.get_route(key)
+        except SlotNotAssignedError as e:
+            raise SlotNotRoutedError(str(e)) from e
         if route.node_id != source_node_id:
             raise RedirectRequiredError(slot=route.slot, target_node_id=route.node_id)
         return route

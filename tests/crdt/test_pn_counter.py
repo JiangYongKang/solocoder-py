@@ -108,6 +108,27 @@ class TestPNCounterState:
         )
         assert state.value() == 5
 
+    def test_from_state_restores_counter(self):
+        original = PNCounter(replica_id="node1")
+        original.increment(10)
+        original.decrement(3)
+        state = original.get_state()
+        restored = PNCounter.from_state(state, replica_id="restored")
+        assert restored.value() == 7
+        assert restored.replica_id == "restored"
+        restored_state = restored.get_state()
+        assert restored_state.positive == state.positive
+        assert restored_state.negative == state.negative
+
+    def test_from_state_is_independent_copy(self):
+        original = PNCounter(replica_id="node1")
+        original.increment(5)
+        state = original.get_state()
+        restored = PNCounter.from_state(state, replica_id="node1")
+        original.increment(3)
+        assert original.value() == 8
+        assert restored.value() == 5
+
 
 class TestPNCounterMerge:
     def test_merge_two_counters(self):
@@ -130,12 +151,9 @@ class TestPNCounterMerge:
         c2_snapshot = c2.get_state()
 
         c1.merge(c2)
-        c2_from_snapshot = PNCounter(replica_id="node2")
-        c2_from_snapshot._positive = dict(c2_snapshot.positive)
-        c2_from_snapshot._negative = dict(c2_snapshot.negative)
-        c1_from_snapshot = PNCounter(replica_id="node1")
-        c1_from_snapshot._positive = dict(c1_snapshot.positive)
-        c1_from_snapshot._negative = dict(c1_snapshot.negative)
+
+        c2_from_snapshot = PNCounter.from_state(c2_snapshot, replica_id="node2")
+        c1_from_snapshot = PNCounter.from_state(c1_snapshot, replica_id="node1")
         c2_from_snapshot.merge(c1_from_snapshot)
 
         assert c1.value() == c2_from_snapshot.value()
@@ -149,25 +167,29 @@ class TestPNCounterMerge:
         c2.increment(3)
         c3.increment(4)
 
-        c1_copy = PNCounter(replica_id="a")
-        c1_copy._positive = dict(c1._positive)
-        c1_copy._negative = dict(c1._negative)
-        c2_copy = PNCounter(replica_id="b")
-        c2_copy._positive = dict(c2._positive)
-        c2_copy._negative = dict(c2._negative)
-        c3_copy = PNCounter(replica_id="c")
-        c3_copy._positive = dict(c3._positive)
-        c3_copy._negative = dict(c3._negative)
+        c1_state = c1.get_state()
+        c2_state = c2.get_state()
+        c3_state = c3.get_state()
+
+        c1_copy = PNCounter.from_state(c1_state, replica_id="a")
+        c2_copy = PNCounter.from_state(c2_state, replica_id="b")
+        c3_copy = PNCounter.from_state(c3_state, replica_id="c")
 
         temp1 = PNCounter(replica_id="temp1")
-        temp1.merge(c1)
-        temp1.merge(c2)
-        temp1.merge(c3)
+        t1_c1 = PNCounter.from_state(c1_state)
+        t1_c2 = PNCounter.from_state(c2_state)
+        t1_c3 = PNCounter.from_state(c3_state)
+        temp1.merge(t1_c1)
+        temp1.merge(t1_c2)
+        temp1.merge(t1_c3)
 
         temp2 = PNCounter(replica_id="temp2")
-        temp2.merge(c2_copy)
-        temp2.merge(c3_copy)
-        temp2.merge(c1_copy)
+        t2_c2 = PNCounter.from_state(c2_state)
+        t2_c3 = PNCounter.from_state(c3_state)
+        t2_c1 = PNCounter.from_state(c1_state)
+        temp2.merge(t2_c2)
+        temp2.merge(t2_c3)
+        temp2.merge(t2_c1)
 
         assert temp1.value() == temp2.value() == 9
 
@@ -264,8 +286,8 @@ class TestPNCounterDiff:
         c1 = PNCounter(replica_id="a")
         c2 = PNCounter(replica_id="a")
         c1.increment(5)
-        c2._positive = dict(c1._positive)
-        c2._negative = dict(c1._negative)
+        c1_state = c1.get_state()
+        c2 = PNCounter.from_state(c1_state, replica_id="a")
         c1.increment(3)
         diff = c1.diff(c2)
         assert "a" in diff.increased_positive

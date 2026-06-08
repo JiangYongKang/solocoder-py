@@ -2,6 +2,7 @@ from .exceptions import (
     QuorumWriteError,
     QuorumReadError,
     ReplicaUnreachableError,
+    ReplicaInjectedFailureError,
     VersionConflictError,
     InvalidQuorumConfigError,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "QuorumWriteError",
     "QuorumReadError",
     "ReplicaUnreachableError",
+    "ReplicaInjectedFailureError",
     "VersionConflictError",
     "InvalidQuorumConfigError",
     "StoredValue",

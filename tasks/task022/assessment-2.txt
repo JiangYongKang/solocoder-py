@@ -1,0 +1,7 @@
+产物不满意：
+1. replay() 在空 WAL 和 from_lsn 超出 max_lsn 两个边界分支返回 iter(())（tuple 迭代器），而正常路径返回生成器对象，返回类型不一致。test_replay_is_lazy_generator 用 isinstance(it, types.GeneratorType) 验证惰性语义，空 WAL 场景下这个检查会失败，虽然该测试用例没覆盖这个路径，但 API 契约不够统一。
+2. test_replay_does_not_materialize_all_entries_upfront 测试中向 _entries 注入了 LSN 999，但该 LSN 超出 replay() 调用时捕获的 end 范围（max_lsn=2），永远不会被迭代访问到，注入操作对验证惰性语义没有实际作用，属于无效的测试噪音。真正起验证作用的是删除 LSN 1 触发 LsnGapError。
+3. README 重放语义写"replay() 返回 Python generator"，但实际上空 WAL 和 from_lsn 超出 max_lsn 时返回的不是生成器而是 tuple 迭代器，文档描述与代码实现不完全一致。
+过程不满意：
+1. COT 第 32 行模型读完文件后立即写"先规划任务"并创建 TodoList，没有先分析 replay 方法现有的 for 循环收集-物化问题和惰性化改造方案。按照标注规范，应先分析问题再做规划，而不是读完文件就规划。
+2. COT 第 292 行运行测试命令 poetry run pytest tests/wal/ -q undefined 末尾携带了 undefined，疑似命令行参数模板未正确拼接，虽然测试最终通过但命令生成存在缺陷。

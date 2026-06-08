@@ -14,14 +14,14 @@ from solocoder_py.gossip import (
 def make_config(
     *,
     heartbeat_interval: float = 1.0,
-    suspect_timeout: float = 5.0,
+    suspect_missed_count: int = 5,
     dead_timeout: float = 10.0,
     cleanup_timeout: float = 60.0,
     fanout: int = 3,
 ) -> GossipConfig:
     return GossipConfig(
         heartbeat_interval=heartbeat_interval,
-        suspect_timeout=suspect_timeout,
+        suspect_missed_count=suspect_missed_count,
         dead_timeout=dead_timeout,
         cleanup_timeout=cleanup_timeout,
         fanout=fanout,

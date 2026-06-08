@@ -1,0 +1,5 @@
+inbox 包里有几处可以改进的地方，在现有代码上改一改。
+1. window_count() 和 get_stats() 这两个查询方法内部调用了 _slide_window() 和 _maybe_trigger_cleanup()，导致查询操作附带淘汰记录和清理的副作用。查询应该是只读操作，不能偷偷修改内部状态。
+2. 并发测试 test_concurrent_reads_and_writes 里的读者线程只固定查 writer-0-msg-0 这一个 ID，没有验证多 key 场景下的并发查询一致性。
+3. 修完跑 poetry run pytest tests/inbox/ -q，确保全过。
+4. README 同步更新，把查询方法的只读语义说清楚。

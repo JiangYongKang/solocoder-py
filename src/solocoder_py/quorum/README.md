@@ -19,8 +19,8 @@
 | `ReplicaStatus` | 枚举类型，定义副本两种状态：ONLINE（在线）、UNREACHABLE（不可达） |
 | `StoredValue` | 存储值模型，封装实际值（value）、版本号（version）和写入时间戳（timestamp） |
 | `ReplicaStats` | 副本统计信息，包含副本 ID、状态、存储 key 数量、读写总次数与成功次数、读写延迟样本列表，以及读写成功率、平均延迟等计算属性 |
-| `WriteResult` | 写入结果，包含 key、写入值、版本号、成功/失败副本 ID 列表 |
-| `ReadResult` | 读取结果，包含 key、读取到的值、版本号、成功/失败副本 ID 列表、修复的副本 ID 列表、是否检测到冲突、冲突裁决的获胜值 |
+| `WriteResult` | 写入结果，包含 key、写入值、版本号、成功/失败副本 ID 列表、`required_w`（写入法定人数阈值）；`success` 属性需满足 `successful_replicas >= required_w` |
+| `ReadResult` | 读取结果，包含 key、读取到的值、版本号、成功/失败副本 ID 列表、`required_r`（读取法定人数阈值）、修复的副本 ID 列表、是否检测到冲突、冲突裁决的获胜值；`success` 属性需满足 `successful_replicas >= required_r` |
 
 ### exceptions.py
 
@@ -30,7 +30,8 @@
 | `InvalidQuorumConfigError` | 非法法定人数配置异常（N/W/R 参数不满足约束） |
 | `QuorumWriteError` | 法定人数写入失败异常（成功副本数 < W） |
 | `QuorumReadError` | 法定人数读取失败异常（响应副本数 < R） |
-| `ReplicaUnreachableError` | 副本不可达异常 |
+| `ReplicaUnreachableError` | 副本真实不可达异常（由 `mark_unreachable()` 标记的离线/网络分区） |
+| `ReplicaInjectedFailureError` | 副本人工注入故障异常（由 `set_fail_reads()` / `set_fail_writes()` 触发，携带 `operation` 字段标明是 read 还是 write 操作）。与 `ReplicaUnreachableError` 区分，便于精确统计故障类型 |
 | `VersionConflictError` | 版本冲突异常（可通过 resolve_conflict 的 raise_on_conflict 参数触发） |
 
 ### replica.py
@@ -308,6 +309,86 @@ for stats in coord.get_all_replica_stats():
 all_data = coord.get_all_data_across_replicas()
 for rid, data in all_data.items():
     print(f"{rid}: { {k: (v.value, v.version) for k, v in data.items()} }")
+```
+
+## 异常类型区分策略
+
+为了精确区分副本故障的来源，模块定义了两种不同的异常类型，调用方可以分别捕获以做不同处理（统计告警、故障恢复等）：
+
+| 异常类型 | 触发条件 | 场景说明 |
+|----------|----------|----------|
+| `ReplicaUnreachableError` | 副本状态为 `UNREACHABLE` | 真实的网络分区、节点宕机；由 `mark_unreachable()` 显式标记 |
+| `ReplicaInjectedFailureError` | 调用 `set_fail_reads(True)` 或 `set_fail_writes(True)` | 测试/演练时的人工故障注入；异常携带 `replica_id` 和 `operation`（`"read"` / `"write"`）字段 |
+
+**协调器行为**：`QuorumCoordinator` 在执行读写时会同时捕获这两种异常，统一将该副本计入 `failed_replicas`，不做进一步区分。若调用方需要分别统计两种故障，可直接调用 `Replica.read()` / `Replica.write()` 并分别捕获异常。
+
+```python
+from solocoder_py.quorum import Replica, ReplicaUnreachableError, ReplicaInjectedFailureError
+
+r = Replica(id="r1")
+
+try:
+    r.read("k")
+except ReplicaUnreachableError:
+    print("真实节点不可达")
+except ReplicaInjectedFailureError as e:
+    print(f"人工注入 {e.operation} 故障")
+```
+
+## 操作结果 success 属性语义
+
+`WriteResult` 和 `ReadResult` 均带有布尔属性 `success`，用于表明该操作是否满足法定人数要求：
+
+| 结果类型 | success 判断条件 | 说明 |
+|----------|------------------|------|
+| `WriteResult` | `len(successful_replicas) >= required_w` | `required_w` 即协调器配置的 `w` |
+| `ReadResult` | `len(successful_replicas) >= required_r` | `required_r` 即协调器配置的 `r` |
+
+**设计要点**：
+- `success` 语义严格对齐法定人数阈值，而非"有任意一个成功"。避免调用方仅检查 `success` 就误以为达到了一致性保证。
+- 当协调器的 `write()` / `read()` 方法正常返回时，`success` 恒为 `True`——因为方法本身在不满足法定人数时会抛出 `QuorumWriteError` / `QuorumReadError`。
+- `required_w` / `required_r` 字段随结果对象一并返回，便于调用方在日志、监控中记录实际阈值配置。
+
+```python
+result = coord.write("k", "v")
+assert result.required_w == coord.w
+assert result.success is True        # 方法不抛异常时一定为 True
+assert len(result.successful_replicas) >= result.required_w
+```
+
+## 延迟统计计入规则
+
+副本通过 `ReplicaStats.read_latencies_ms` / `ReplicaStats.write_latencies_ms` 列表保存延迟样本，并通过 `avg_read_latency_ms` / `avg_write_latency_ms` 暴露平均值。为确保性能指标可用，统计遵循以下规则：
+
+| 场景 | 是否计入延迟统计 | 说明 |
+|------|------------------|------|
+| 读/写操作成功 | ✅ 计入 | 仅统计核心存储操作耗时（字典查询/写入） |
+| 副本不可达（`ReplicaUnreachableError`） | ❌ 不计入 | 请求未真正到达存储逻辑，无性能意义 |
+| 人工注入故障（`ReplicaInjectedFailureError`） | ❌ 不计入 | 测试注入的失败，不应污染生产指标 |
+| 写入因版本落后被拒绝（返回 `False`） | ❌ 不计入 | 仅做版本比较，未执行实际写入 |
+| 人工注入延迟（`set_artificial_latency()`） | ❌ 不计入 | 延迟在计时前通过 `time.sleep()` 注入，不计入操作本身耗时 |
+
+**计数规则**：
+- `total_reads` / `total_writes` 统计**所有调用次数**（包括不可达和注入失败的调用），用于计算成功率。
+- `successful_reads` / `successful_writes` 仅统计真正成功完成存储操作的次数。
+- 成功率 = `successful / total`，可反映节点真实可用率。
+
+```python
+r = Replica(id="r1")
+r.set_fail_reads(True)
+for _ in range(5):
+    try:
+        r.read("k")
+    except Exception:
+        pass
+r.set_fail_reads(False)
+r.read("k")
+
+stats = r.get_stats()
+assert stats.total_reads == 6          # 总调用次数含失败
+assert stats.successful_reads == 1     # 仅 1 次成功
+assert len(stats.read_latencies_ms) == 1  # 仅 1 条延迟样本
+assert stats.read_success_rate == 1 / 6
 ```
 
 ## 运行测试

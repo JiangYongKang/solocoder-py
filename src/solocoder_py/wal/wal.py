@@ -6,6 +6,7 @@ from typing import Dict, Iterator, List, Optional
 from .exceptions import (
     EmptyWalError,
     InvalidTruncateLsnError,
+    LsnGapError,
     LsnNotFoundError,
     TruncatedLsnError,
 )
@@ -77,22 +78,31 @@ class WriteAheadLog:
     def replay(self, from_lsn: Optional[int] = None) -> Iterator[LogEntry]:
         with self._lock:
             if self.is_empty:
-                return iter([])
+                return iter(())
 
             start = from_lsn if from_lsn is not None else self._min_readable_lsn
 
             if start < self._min_readable_lsn:
                 raise TruncatedLsnError(start, self._min_readable_lsn)
             if start > self.max_lsn:
-                return iter([])
+                return iter(())
 
-            entries: List[LogEntry] = []
-            for lsn in range(start, self._next_lsn):
-                if lsn not in self._entries:
-                    break
-                entries.append(self._entries[lsn])
+            end = self.max_lsn
+            min_readable = self._min_readable_lsn
 
-            return iter(entries)
+        return self._replay_generator(start, end, min_readable)
+
+    def _replay_generator(
+        self, start: int, end: int, min_readable: int
+    ) -> Iterator[LogEntry]:
+        for lsn in range(start, end + 1):
+            with self._lock:
+                if lsn < self._min_readable_lsn:
+                    raise TruncatedLsnError(lsn, self._min_readable_lsn)
+                entry = self._entries.get(lsn)
+                if entry is None:
+                    raise LsnGapError(lsn, min_readable, end)
+            yield entry
 
     def truncate(self, lsn: int) -> None:
         with self._lock:

@@ -6,6 +6,7 @@ from solocoder_py.quorum import (
     QuorumReadError,
     QuorumWriteError,
     Replica,
+    ReplicaInjectedFailureError,
     ReplicaStatus,
     ReplicaUnreachableError,
     StoredValue,
@@ -134,16 +135,20 @@ class TestReplicaBasics:
     def test_replica_fail_writes(self):
         r = make_replica()
         r.set_fail_writes(True)
-        ok = r.write("k1", "v1", 1)
-        assert ok is False
+        with pytest.raises(ReplicaInjectedFailureError) as exc_info:
+            r.write("k1", "v1", 1)
+        assert exc_info.value.replica_id == r.id
+        assert exc_info.value.operation == "write"
         assert r.get_version("k1") == 0
 
     def test_replica_fail_reads(self):
         r = make_replica()
         r.write("k1", "v1", 1)
         r.set_fail_reads(True)
-        with pytest.raises(ReplicaUnreachableError):
+        with pytest.raises(ReplicaInjectedFailureError) as exc_info:
             r.read("k1")
+        assert exc_info.value.replica_id == r.id
+        assert exc_info.value.operation == "read"
 
     def test_replica_reset_stats(self):
         r = make_replica()
@@ -534,3 +539,138 @@ class TestEdgeCases:
         r = coord.read("k")
         assert len(r.successful_replicas) == 3
         assert r.value == "val"
+
+
+class TestExceptionTypeDistinction:
+    def test_unreachable_vs_injected_failure_different_exceptions(self):
+        r = make_replica()
+        r.mark_unreachable()
+        with pytest.raises(ReplicaUnreachableError):
+            r.read("k")
+        r.mark_online()
+        r.set_fail_reads(True)
+        with pytest.raises(ReplicaInjectedFailureError):
+            r.read("k")
+
+    def test_unreachable_vs_injected_write_failure(self):
+        r = make_replica()
+        r.mark_unreachable()
+        with pytest.raises(ReplicaUnreachableError):
+            r.write("k", "v", 1)
+        r.mark_online()
+        r.set_fail_writes(True)
+        with pytest.raises(ReplicaInjectedFailureError):
+            r.write("k", "v", 1)
+
+    def test_injected_failure_has_operation_field(self):
+        r = make_replica()
+        r.set_fail_reads(True)
+        try:
+            r.read("k")
+        except ReplicaInjectedFailureError as e:
+            assert e.operation == "read"
+            assert e.replica_id == r.id
+        r.set_fail_reads(False)
+        r.set_fail_writes(True)
+        try:
+            r.write("k", "v", 1)
+        except ReplicaInjectedFailureError as e:
+            assert e.operation == "write"
+
+
+class TestResultSuccessSemantics:
+    def test_write_result_success_requires_w(self):
+        coord = make_coordinator(n=3, w=2, r=2)
+        result = coord.write("k", "v")
+        assert result.required_w == 2
+        assert result.success is True
+        assert len(result.successful_replicas) >= result.required_w
+
+    def test_read_result_success_requires_r(self):
+        coord = make_coordinator(n=3, w=2, r=2)
+        coord.write("k", "v")
+        result = coord.read("k")
+        assert result.required_r == 2
+        assert result.success is True
+        assert len(result.successful_replicas) >= result.required_r
+
+    def test_write_result_exactly_w_is_success(self):
+        coord = make_coordinator(n=5, w=3, r=3)
+        coord.replicas[3].set_fail_writes(True)
+        coord.replicas[4].set_fail_writes(True)
+        result = coord.write("k", "v")
+        assert result.required_w == 3
+        assert len(result.successful_replicas) == 3
+        assert result.success is True
+
+    def test_read_result_exactly_r_is_success(self):
+        coord = make_coordinator(n=5, w=3, r=3)
+        coord.write("k", "v")
+        coord.mark_replica_unreachable(coord.replicas[0].id)
+        coord.mark_replica_unreachable(coord.replicas[1].id)
+        result = coord.read("k")
+        assert result.required_r == 3
+        assert len(result.successful_replicas) == 3
+        assert result.success is True
+
+
+class TestLatencyStatistics:
+    def test_failed_read_not_counted_in_latency(self):
+        r = make_replica()
+        r.write("k", "v", 1)
+        r.set_fail_reads(True)
+        for _ in range(5):
+            try:
+                r.read("k")
+            except ReplicaInjectedFailureError:
+                pass
+        r.set_fail_reads(False)
+        r.read("k")
+        stats = r.get_stats()
+        assert stats.total_reads == 6
+        assert stats.successful_reads == 1
+        assert len(stats.read_latencies_ms) == 1
+        assert stats.avg_read_latency_ms >= 0
+
+    def test_failed_write_not_counted_in_latency(self):
+        r = make_replica()
+        r.set_fail_writes(True)
+        for _ in range(5):
+            try:
+                r.write("k", "v", 1)
+            except ReplicaInjectedFailureError:
+                pass
+        r.set_fail_writes(False)
+        r.write("k", "v", 1)
+        stats = r.get_stats()
+        assert stats.total_writes == 6
+        assert stats.successful_writes == 1
+        assert len(stats.write_latencies_ms) == 1
+
+    def test_unreachable_not_counted_in_latency(self):
+        r = make_replica()
+        r.write("k", "v", 1)
+        r.mark_unreachable()
+        for _ in range(3):
+            try:
+                r.read("k")
+            except ReplicaUnreachableError:
+                pass
+        r.mark_online()
+        r.read("k")
+        stats = r.get_stats()
+        assert stats.total_reads == 4
+        assert stats.successful_reads == 1
+        assert len(stats.read_latencies_ms) == 1
+
+    def test_artificial_latency_not_included_in_stats(self):
+        r = make_replica()
+        r.set_artificial_latency(50.0)
+        for _ in range(3):
+            r.read("k")
+            r.write("k", "v", 1)
+        stats = r.get_stats()
+        for lat in stats.read_latencies_ms:
+            assert lat < 10.0
+        for lat in stats.write_latencies_ms:
+            assert lat < 10.0

@@ -8,9 +8,12 @@ from .exceptions import (
     InvalidQuorumConfigError,
     QuorumReadError,
     QuorumWriteError,
+    ReplicaInjectedFailureError,
     ReplicaUnreachableError,
     VersionConflictError,
 )
+
+_REPLICA_ERROR_TYPES = (ReplicaUnreachableError, ReplicaInjectedFailureError)
 from .models import (
     ReadResult,
     ReplicaStats,
@@ -61,7 +64,7 @@ class QuorumCoordinator:
                     successful.append(replica.id)
                 else:
                     failed.append(replica.id)
-            except ReplicaUnreachableError:
+            except _REPLICA_ERROR_TYPES:
                 failed.append(replica.id)
 
         if len(successful) < self.w:
@@ -79,6 +82,7 @@ class QuorumCoordinator:
             version=write_version,
             successful_replicas=successful,
             failed_replicas=failed,
+            required_w=self.w,
         )
 
     def read(self, key: str, perform_repair: bool = True) -> ReadResult:
@@ -91,7 +95,7 @@ class QuorumCoordinator:
                 value = replica.read(key)
                 responses.append((replica.id, value))
                 successful.append(replica.id)
-            except ReplicaUnreachableError:
+            except _REPLICA_ERROR_TYPES:
                 failed.append(replica.id)
 
         if len(successful) < self.r:
@@ -106,6 +110,7 @@ class QuorumCoordinator:
                 version=0,
                 successful_replicas=successful,
                 failed_replicas=failed,
+                required_r=self.r,
             )
 
         versions_set = set(sv.version for _, sv in non_none_responses)
@@ -127,6 +132,7 @@ class QuorumCoordinator:
             version=winning_value.version,
             successful_replicas=successful,
             failed_replicas=failed,
+            required_r=self.r,
             repaired_replicas=repaired,
             conflict_detected=conflict_detected,
             winning_value=winning_value,
@@ -154,7 +160,7 @@ class QuorumCoordinator:
                     ok = replica.write(key, latest.value, latest.version)
                     if ok:
                         repaired.append(replica_id)
-                except ReplicaUnreachableError:
+                except _REPLICA_ERROR_TYPES:
                     pass
         return repaired
 
@@ -177,7 +183,7 @@ class QuorumCoordinator:
                 value = replica.read(key)
                 if value is not None:
                     responses.append((replica.id, value))
-            except ReplicaUnreachableError:
+            except _REPLICA_ERROR_TYPES:
                 continue
 
         if not responses:
@@ -198,7 +204,7 @@ class QuorumCoordinator:
             if replica and replica.status == ReplicaStatus.ONLINE:
                 try:
                     replica.write(key, winning_value.value, winning_value.version)
-                except ReplicaUnreachableError:
+                except _REPLICA_ERROR_TYPES:
                     pass
 
         return winning_value

@@ -44,6 +44,15 @@ class ReplicaUnreachableError(QuorumError):
         super().__init__(f"Replica '{replica_id}' is unreachable")
 
 
+class ReplicaInjectedFailureError(QuorumError):
+    def __init__(self, replica_id: str, operation: str) -> None:
+        self.replica_id = replica_id
+        self.operation = operation
+        super().__init__(
+            f"Replica '{replica_id}' injected failure on {operation}"
+        )
+
+
 class VersionConflictError(QuorumError):
     def __init__(self, key: str, versions: list[tuple[str, int]]) -> None:
         self.key = key

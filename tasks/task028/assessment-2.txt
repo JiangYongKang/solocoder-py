@@ -1,0 +1,8 @@
+产物不满意：
+1. _broadcast_heartbeat_from_leader 在 catch 到 StaleTermError 后做了退位和清空 _leader_id，但 run_election 和 check_and_run_elections 外层用 except StaleTermError: pass 把异常吞掉了，返回的 ElectionResult 仍标记 is_successful=True，而集群实际已无领导者，self._current_term 和 result.term 也未同步到退位后的更高任期，调用方拿到的是一份已过期的虚假成功结果。对应提示词第1条脑裂防护和第3条心跳异常处理，修复没有闭环。
+2. leader_send_heartbeat 里先 self._leader_id = None 清零，再在错误消息 f"Node {self._leader_id} is not leader" 中引用已清零的变量，导致异常文本变成 "Node None is not leader"，丢失了原始领导者 ID，问题排查时完全无法定位是哪个节点出了问题。
+3. 提示词第2条要求"节点能够在领导者失联一段时间后自动发起选举"，模型实现的 check_and_run_elections 是一个被动轮询接口，节点自身没有任何后台线程或定时器去主动检测心跳超时并自动触发选举，所有超时检测和选举发起仍然依赖外部调用方来驱动，不满足"自动发起"的要求。
+过程不满意：
+1. 模型在开始编码前先去读了 inbox/clock.py 和 singleflight/clock.py 两个跟当前任务无关的包，明确说"先看看其他模块的 clock.py 作为参考"，属于跨包抄模板而非针对提示词需求做独立设计，存在模式复制、增加不必要耦合的风险。
+2. 模型第一次批量改写所有源文件后跑测试出现 1 个预期失败（旧行为断言变化），修复后再跑又出现 2 个意外失败（test_cluster_heartbeat_detects_stale_term_and_steps_down 和 test_partitioned_nodes_not_considered_for_timeout），共三轮测试才全部通过，说明模型在批量改代码前没有充分预估改动对现有测试的边界影响，依赖重复跑测试来找问题，是典型的试错式修复。
+3. 模型对 node.py、cluster.py 等生产代码文件用的是全文覆盖 Write 而非按行精准修改，修复后的代码变更无法直接对应到问题点，加上整个修复过程中没有用 git diff 做变更复核，修改范围的可审计性差。

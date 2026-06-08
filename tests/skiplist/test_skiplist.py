@@ -8,6 +8,7 @@ from solocoder_py.skiplist import (
     InvalidRangeError,
     InvalidRankError,
     RangeQueryResult,
+    ScoreNotFoundError,
     SkipList,
 )
 
@@ -204,16 +205,18 @@ class TestSkipListRankQuery:
         assert sl.get_rank(1.0) == 0
         assert sl.get_rank(3.0) == 1
         assert sl.get_rank(5.0) == 2
-        assert sl.get_rank(10.0) == 3
 
     def test_get_rank_with_nonexistent_score(self):
         sl = SkipList()
         sl.insert(2.0, "a")
         sl.insert(4.0, "b")
 
-        assert sl.get_rank(3.0) == 1
-        assert sl.get_rank(1.0) == 0
-        assert sl.get_rank(10.0) == 2
+        with pytest.raises(ScoreNotFoundError):
+            sl.get_rank(3.0)
+        with pytest.raises(ScoreNotFoundError):
+            sl.get_rank(1.0)
+        with pytest.raises(ScoreNotFoundError):
+            sl.get_rank(10.0)
 
     def test_get_rank_with_same_scores(self):
         sl = SkipList()
@@ -337,8 +340,13 @@ class TestSkipListSingleNode:
         sl = SkipList()
         sl.insert(5.0, "mid")
         assert sl.get_rank(5.0) == 0
-        assert sl.get_rank(10.0) == 1
         assert sl.get_by_rank(1).value == "mid"
+
+    def test_rank_single_node_nonexistent_raises(self):
+        sl = SkipList()
+        sl.insert(5.0, "mid")
+        with pytest.raises(ScoreNotFoundError):
+            sl.get_rank(10.0)
 
     def test_range_query_single_node(self):
         sl = SkipList()
@@ -500,7 +508,10 @@ class TestSkipListConcurrentAccess:
         def rank_reader():
             try:
                 for i in range(50, 150):
-                    _ = sl.get_rank(float(i))
+                    try:
+                        _ = sl.get_rank(float(i))
+                    except ScoreNotFoundError:
+                        pass
             except Exception as e:
                 errors.append(e)
 

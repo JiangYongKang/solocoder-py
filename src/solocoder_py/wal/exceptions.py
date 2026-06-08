@@ -37,5 +37,16 @@ class LsnNotFoundError(WalError):
         )
 
 
+class LsnGapError(WalError):
+    def __init__(self, expected_lsn: int, min_readable_lsn: int, max_lsn: int) -> None:
+        self.expected_lsn = expected_lsn
+        self.min_readable_lsn = min_readable_lsn
+        self.max_lsn = max_lsn
+        super().__init__(
+            f"LSN gap detected at LSN {expected_lsn}: "
+            f"expected contiguous entries from {min_readable_lsn} to {max_lsn}."
+        )
+
+
 class EmptyWalError(WalError):
     pass

@@ -21,9 +21,16 @@ class TestVectorClockCreation:
         with pytest.raises(ValueError, match="clock count must be non-negative"):
             VectorClock({"a": -1})
 
-    def test_create_with_empty_node_id_allowed(self):
-        vc = VectorClock({"": 3})
-        assert vc.get("") == 3
+    def test_create_with_empty_node_id_raises(self):
+        with pytest.raises(ValueError, match="node_id must not be empty"):
+            VectorClock({"": 3})
+
+    def test_create_normalizes_zero_count_nodes(self):
+        vc = VectorClock({"a": 1, "b": 0, "c": 0})
+        assert vc.nodes() == {"a"}
+        assert vc.to_dict() == {"a": 1}
+        assert vc.get("b") == 0
+        assert vc.get("c") == 0
 
 
 class TestLocalEventIncrement:
@@ -333,6 +340,21 @@ class TestHashability:
         a = VectorClock({"a": 1})
         b = VectorClock({"a": 1})
         assert hash(a) == hash(b)
+
+    def test_hash_implied_zero_equal_clocks_same_hash(self):
+        a = VectorClock({"a": 1})
+        b = VectorClock({"a": 1, "b": 0, "c": 0})
+        assert a == b
+        assert hash(a) == hash(b)
+
+    def test_implied_zero_equal_clocks_in_set_deduplicated(self):
+        s = {VectorClock({"a": 1}), VectorClock({"a": 1, "b": 0})}
+        assert len(s) == 1
+        assert VectorClock({"a": 1, "c": 0}) in s
+
+    def test_implied_zero_equal_clocks_as_dict_key(self):
+        d = {VectorClock({"a": 1}): "value"}
+        assert d[VectorClock({"a": 1, "b": 0})] == "value"
 
     def test_can_use_in_set(self):
         s = {VectorClock({"a": 1}), VectorClock({"a": 2})}

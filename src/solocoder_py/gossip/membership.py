@@ -132,13 +132,13 @@ class MembershipView:
                     continue
 
                 if member.state == MemberState.ALIVE:
-                    time_since_heartbeat = now - member.last_heartbeat
-                    if time_since_heartbeat >= self._config.suspect_timeout:
+                    member.increment_missed_heartbeats()
+                    if member.missed_heartbeats >= self._config.suspect_missed_count:
                         member.mark_suspect(now)
                         transitions[node_id] = MemberState.SUSPECT
                 elif member.state == MemberState.SUSPECT:
                     time_since_state_change = now - member.state_changed_at
-                    if time_since_state_change >= (self._config.dead_timeout - self._config.suspect_timeout):
+                    if time_since_state_change >= self._config.dead_timeout:
                         member.mark_dead(now)
                         transitions[node_id] = MemberState.DEAD
 

@@ -76,17 +76,24 @@
 
 #### 主要方法
 
-| 方法 | 说明 |
-|------|------|
-| `check_duplicate(message_id)` | 核心去重检查，返回 `DedupResult`，内部自动滑动窗口和惰性过期检查 |
-| `contains(message_id)` | 判断消息 ID 是否存在于当前有效窗口内 |
-| `get_record(message_id)` | 查询消息记录快照，不存在或已过期返回 `None` |
-| `window_count()` | 返回当前窗口内的有效记录数 |
-| `get_stats()` | 返回去重统计信息 `DedupStats` |
-| `cleanup_expired()` | 主动清理所有 TTL 过期的记录，返回清理数量 |
-| `remove(message_id)` | 主动移除指定消息 ID |
-| `clear()` | 清空所有记录和统计数据 |
-| `list_records()` | 返回当前窗口内所有记录的快照列表 |
+方法按语义分为**写入**和**只读查询**两类：
+
+| 方法 | 类型 | 说明 |
+|------|------|------|
+| `check_duplicate(message_id)` | 写入 | 核心去重检查，返回 `DedupResult`，内部自动滑动窗口和惰性过期检查 |
+| `cleanup_expired()` | 写入 | 主动清理所有 TTL 过期的记录，返回清理数量 |
+| `remove(message_id)` | 写入 | 主动移除指定消息 ID |
+| `clear()` | 写入 | 清空所有记录和统计数据 |
+| `contains(message_id)` | 只读（微量副作用） | 判断消息 ID 是否存在于当前有效窗口内。仅当被查询的单条记录 TTL 过期时，才会删除该条记录（惰性过期），不会滑动窗口或触发全局清理 |
+| `get_record(message_id)` | 只读（微量副作用） | 查询消息记录快照，不存在或已过期返回 `None`。仅当被查询的单条记录 TTL 过期时，才会删除该条记录（惰性过期），不会滑动窗口或触发全局清理 |
+| `window_count()` | **纯只读** | 返回当前窗口内的有效记录数。不会修改任何内部状态，不滑动窗口、不触发清理 |
+| `get_stats()` | **纯只读** | 返回去重统计信息 `DedupStats`。不会修改任何内部状态，不滑动窗口、不触发清理 |
+| `list_records()` | **纯只读** | 返回当前窗口内所有记录的快照列表。不会修改任何内部状态，不滑动窗口、不触发清理 |
+
+> **查询的只读语义说明**：
+> - `window_count()`、`get_stats()`、`list_records()` 是**纯只读**方法，调用它们不会产生任何副作用，内部记录不会被淘汰或清理。它们基于当前时间计算"逻辑上的有效记录数"，但不实际修改存储。
+> - `contains()`、`get_record()` 仅有微量副作用：仅当被访问的那一条记录 TTL 过期时，才会删除它，不会影响其他记录，也不会滑动窗口。
+> - 如果需要立即应用窗口淘汰和全局 TTL 清理，请显式调用 `check_duplicate()`（触发滑动+清理）或 `cleanup_expired()`（仅触发 TTL 清理）。
 
 ## 滑动窗口去重原理
 
@@ -99,6 +106,8 @@
 - **move_to_end**：重复访问时将记录移到末尾，保持"最近活跃"的顺序语义
 
 ### 窗口滑动策略
+
+只有写入方法会实际修改内部状态。纯只读查询方法（`window_count` / `get_stats` / `list_records`）基于当前时间**逻辑计算**有效记录，但不会真正删除数据。
 
 每次 `check_duplicate()` 调用时按以下顺序执行：
 
@@ -132,7 +141,7 @@ check_duplicate(msg_id)
 
 ### 过期清理的两种方式
 
-1. **惰性过期（默认开启）**：每次 `check_duplicate` / `contains` / `get_record` 访问时，对被访问的单条记录检查 TTL。对整体性能影响最小，但未被访问的过期记录会继续占用内存。
+1. **惰性过期（默认开启）**：每次 `check_duplicate` / `contains` / `get_record` 访问时，对被访问的单条记录检查 TTL（仅 `contains` / `get_record` 只检查被访问的那一条）。对整体性能影响最小，但未被访问的过期记录会继续占用内存。
 
 2. **主动定时清理**：配置 `cleanup_interval_seconds` 后，每次 `check_duplicate` 会检查距上次清理是否超过间隔，若是则遍历所有记录清理 TTL 过期项。也可手动调用 `cleanup_expired()` 立即清理。
 

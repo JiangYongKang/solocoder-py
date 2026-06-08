@@ -9,6 +9,10 @@ class SlotNotAssignedError(ShardRouterError):
     pass
 
 
+class SlotNotRoutedError(ShardRouterError):
+    pass
+
+
 class SlotRangeInvalidError(ShardRouterError):
     pass
 
@@ -26,6 +30,14 @@ class SlotNotMigratingError(ShardRouterError):
 
 
 class NodeNotFoundError(ShardRouterError):
+    pass
+
+
+class NodeNotEmptyError(ShardRouterError):
+    pass
+
+
+class NodeHasMigrationsError(ShardRouterError):
     pass
 
 
