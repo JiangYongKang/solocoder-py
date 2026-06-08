@@ -1,0 +1,8 @@
+产物不满意：
+1. __hash__ 与 __eq__ 不一致：__eq__ 定义 {"a": 1} 和 {"a": 1, "b": 0} 相等（隐含零节点），但 __hash__ 基于实际存储的 items 计算，两者 hash 不同，违背 Python 的 "相等对象必须具有相同哈希值" 约定，会导致相等时钟在 set/dict 中行为异常。
+2. 构造函数允许空字符串作为节点 ID（VectorClock({"": 3}) 可以正常构建），但 tick("") 却抛出 ValueError，同一类对空字符串节点的校验策略不一致。
+3. happens_before 中 all_leq 变量始终为 True，因为一旦 a > b 就直接 return False，该变量既无实际判断作用也从未被赋值为 False，完全是冗余代码。
+过程不满意：
+1. 模型一开始查看了 consistent_hash 包的 models.py、ring.py 和测试文件，与 vector_clock 任务完全无关，属于在无关包上的无效探索，没有直接聚焦提示词要求的目标。
+2. 之前已经读过了 pyproject.toml 了解到项目使用 poetry 管理依赖，但首次运行测试时仍用了 python -m pytest，失败后才改用 poetry run pytest，工具使用不够直接。
+3. 初版 is_concurrent_with 没有排除相等时钟的情况，导致 test_not_concurrent_if_equal 和 test_empty_not_concurrent_with_empty 两个测试失败后才补修，说明编写代码时没有充分考虑并发关系定义中必须排除相等的前提条件。

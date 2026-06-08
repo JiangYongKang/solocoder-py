@@ -1,0 +1,12 @@
+产物不满意：
+1. remove_node 对"节点仍有已分配槽"和"节点有正在进行中的迁移"两种校验场景直接抛出 ValueError，而模块其他异常路径都用了自定义异常类（如 NodeNotFoundError、SlotMigrationInProgressError），API 风格不一致，调用方需要针对不同方法分别处理 ValueError 和自定义异常。
+2. route_from_node 内部直接调用 get_route，当 key 映射到未分配槽时会透传 SlotNotAssignedError。调用方的意图是"这个 key 在不在我给的节点上"，而槽未分配和槽已迁移到其他节点是两种不同错误，两种场景混用同一个异常让调用方难以区分。
+3. test_route_basic 只断言 node_id in ("node-a", "node-b")，没有验证 key 被路由到实际拥有对应槽的正确节点。如果实现把应路由到 node-a 的 key 错误返回 node-b，只要 slot 在有效范围内测试也能通过，没有真正验证路由正确性。
+4. remove_node 中第 85-88 行有对"节点有正在进行中的迁移"的拦截逻辑，但测试中没有任何用例覆盖这个分支，该代码路径未经验证。
+5. 正常非迁移场景下 prepare_write 返回 WriteStatus.SINGLE 没有单独的测试覆盖，只在 test_route_after_migration 中作为迁移完成后的附带验证，缺少对纯普通路由下 prepare_write 的直接测试。
+6. test_no_redirect_from_correct_node 只覆盖了"从正确节点访问不触发重定向"的正常路径，没有覆盖"从与 key 所属节点不同且无迁移历史的节点访问"时 route_from_node 的行为。方法名暗示只处理迁移后重定向，但实现上任何节点不匹配都会抛 RedirectRequiredError，测试没有暴露这个语义偏差。
+过程不满意：
+1. 模型收到任务后直接创建了 TodoList（8 项），没有先读取项目结构或分析需求。TodoList 也只是按文件创建做了拆分，缺乏对需求粒度的合理分解，属于先计划后分析的流程反了。
+2. 首次运行 pytest 时命令末尾带了字面量 "undefined"（python -m pytest tests/shard_router/ -v undefined），紧接着用 poetry run pytest 也复现了同样的参数错误，是明显的工具调用拼接失误。
+3. 首轮实现就有 3 个测试失败，原因是 assign_slot_range 检查顺序错误和暴力搜索 key 的循环上限不够，经过两轮修复（先改 router.py 再改测试辅助函数和多个测试用例）才全过，初始代码质量不过关。
+4. 末端调用了 GetDiagnostics 检查 router.py 和 test_shard_router.py，但没有报告任何发现结果，不知道是干净通过还是忽略了告警，该步骤流于形式。

@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+import random
+import threading
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+from .enums import NodeState
+from .exceptions import AlreadyVotedError, LeaderElectionError, NodeNotFoundError
+from .models import (
+    ClusterStatus,
+    ElectionResult,
+    Heartbeat,
+    NodeStatus,
+    VoteRecord,
+    VoteRequest,
+    VoteResponse,
+)
+from .node import RaftNode
+
+
+@dataclass
+class LeaderElectionCluster:
+    node_count: int
+    _nodes: Dict[str, RaftNode] = field(default_factory=dict)
+    _current_term: int = 0
+    _leader_id: Optional[str] = None
+    _last_election: Optional[ElectionResult] = None
+    _partitioned_nodes: set = field(default_factory=set)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def __post_init__(self) -> None:
+        if self.node_count < 1:
+            raise ValueError("node_count must be at least 1")
+        for i in range(self.node_count):
+            node_id = f"node-{i}"
+            self._nodes[node_id] = RaftNode(node_id=node_id)
+
+    @property
+    def majority_count(self) -> int:
+        return self.node_count // 2 + 1
+
+    @property
+    def leader_id(self) -> Optional[str]:
+        return self._leader_id
+
+    @property
+    def current_term(self) -> int:
+        return self._current_term
+
+    @property
+    def last_election(self) -> Optional[ElectionResult]:
+        return self._last_election
+
+    def get_node(self, node_id: str) -> RaftNode:
+        node = self._nodes.get(node_id)
+        if node is None:
+            raise NodeNotFoundError(f"Node {node_id} not found in cluster")
+        return node
+
+    def list_nodes(self) -> List[RaftNode]:
+        return list(self._nodes.values())
+
+    def get_reachable_nodes(self, from_node_id: str) -> List[RaftNode]:
+        return [
+            n
+            for n in self._nodes.values()
+            if n.node_id != from_node_id
+            and n.node_id not in self._partitioned_nodes
+            and from_node_id not in self._partitioned_nodes
+        ]
+
+    def partition_node(self, node_id: str) -> None:
+        self.get_node(node_id)
+        self._partitioned_nodes.add(node_id)
+
+    def heal_partition(self, node_id: str) -> None:
+        self._partitioned_nodes.discard(node_id)
+
+    def _synch_term_from_node(self, node: RaftNode) -> None:
+        if node.current_term > self._current_term:
+            self._current_term = node.current_term
+
+    def _collect_votes(
+        self, candidate: RaftNode, vote_request: VoteRequest
+    ) -> ElectionResult:
+        votes_received: Dict[str, List[str]] = {candidate.node_id: [candidate.node_id]}
+        voter_records: Dict[str, VoteRecord] = {}
+
+        voter_records[candidate.node_id] = candidate.vote_record
+
+        reachable = self.get_reachable_nodes(candidate.node_id)
+
+        for node in reachable:
+            try:
+                response = node.handle_vote_request(vote_request)
+                candidate.handle_vote_response(response)
+                self._synch_term_from_node(node)
+
+                if response.vote_granted:
+                    if candidate.node_id not in votes_received:
+                        votes_received[candidate.node_id] = []
+                    votes_received[candidate.node_id].append(node.node_id)
+
+                voter_records[node.node_id] = node.vote_record
+            except AlreadyVotedError:
+                voter_records[node.node_id] = node.vote_record
+                continue
+
+        result = ElectionResult(
+            term=candidate.current_term,
+            leader_id=None,
+            votes_received=votes_received,
+            voter_records=voter_records,
+        )
+
+        votes_count = len(votes_received.get(candidate.node_id, []))
+        if votes_count >= self.majority_count:
+            result.leader_id = candidate.node_id
+
+        return result
+
+    def run_election(self, candidate_node_id: str) -> ElectionResult:
+        with self._lock:
+            candidate = self.get_node(candidate_node_id)
+            vote_request = candidate.start_election()
+            self._synch_term_from_node(candidate)
+
+            result = self._collect_votes(candidate, vote_request)
+
+            if result.is_successful:
+                candidate.become_leader()
+                self._leader_id = candidate.node_id
+                self._current_term = candidate.current_term
+            else:
+                candidate.step_down()
+
+            self._last_election = result
+            return result
+
+    def run_election_random(self) -> ElectionResult:
+        with self._lock:
+            eligible = [
+                n
+                for n in self._nodes.values()
+                if n.state == NodeState.FOLLOWER
+                and n.node_id not in self._partitioned_nodes
+            ]
+            if not eligible:
+                eligible = [
+                    n
+                    for n in self._nodes.values()
+                    if n.node_id not in self._partitioned_nodes
+                ]
+            if not eligible:
+                raise LeaderElectionError("No eligible nodes to run election")
+
+            candidate = random.choice(eligible)
+            vote_request = candidate.start_election()
+            self._synch_term_from_node(candidate)
+
+            result = self._collect_votes(candidate, vote_request)
+
+            if result.is_successful:
+                candidate.become_leader()
+                self._leader_id = candidate.node_id
+                self._current_term = candidate.current_term
+            else:
+                candidate.step_down()
+
+            self._last_election = result
+            return result
+
+    def leader_send_heartbeat(self) -> List[Heartbeat]:
+        with self._lock:
+            if self._leader_id is None:
+                raise LeaderElectionError("No leader in cluster")
+
+            leader = self.get_node(self._leader_id)
+            if leader.state != NodeState.LEADER:
+                raise LeaderElectionError(f"Node {self._leader_id} is not leader")
+
+            heartbeat = leader.send_heartbeat()
+            heartbeats: List[Heartbeat] = [heartbeat]
+
+            for node in self.get_reachable_nodes(leader.node_id):
+                try:
+                    node.receive_heartbeat(heartbeat)
+                except Exception:
+                    continue
+
+            return heartbeats
+
+    def get_node_status(self, node_id: str) -> NodeStatus:
+        node = self.get_node(node_id)
+        return NodeStatus(
+            node_id=node.node_id,
+            state=node.state,
+            current_term=node.current_term,
+            voted_for=node.voted_for,
+        )
+
+    def get_vote_records(self) -> Dict[str, VoteRecord]:
+        return {nid: node.vote_record for nid, node in self._nodes.items()}
+
+    def get_status(self) -> ClusterStatus:
+        return ClusterStatus(
+            current_term=self._current_term,
+            leader_id=self._leader_id,
+            nodes=[self.get_node_status(nid) for nid in self._nodes],
+            last_election=self._last_election,
+        )
+
+    def force_new_leader(self, node_id: str) -> None:
+        with self._lock:
+            node = self.get_node(node_id)
+            if self._leader_id is not None:
+                old_leader = self._nodes.get(self._leader_id)
+                if old_leader is not None and old_leader.state == NodeState.LEADER:
+                    old_leader.step_down()
+
+            node._current_term += 1
+            node._state = NodeState.CANDIDATE
+            node._voted_for = node.node_id
+            node._voted_term = node._current_term
+            self._synch_term_from_node(node)
+
+            for other in self.list_nodes():
+                if other.node_id != node.node_id:
+                    other._current_term = node.current_term
+                    other._state = NodeState.FOLLOWER
+                    other._voted_for = node.node_id
+                    other._voted_term = node.current_term
+                    other._leader_id = node.node_id
+
+            node.become_leader()
+            self._leader_id = node.node_id
+            self._current_term = node.current_term
+
+            votes = {node.node_id: [n.node_id for n in self.list_nodes()]}
+            voter_records = {nid: n.vote_record for nid, n in self._nodes.items()}
+            self._last_election = ElectionResult(
+                term=node.current_term,
+                leader_id=node.node_id,
+                votes_received=votes,
+                voter_records=voter_records,
+            )

@@ -1,0 +1,10 @@
+产物不满意：
+1. 提示词要求"连续多次未收到某节点心跳时标记为可疑"，即 ALIVE→SUSPECT 应该是基于心跳缺失次数的计数检测，但实际实现用的是绝对时间比较（time_since_heartbeat >= suspect_timeout），与要求不符。Member 模型定义了 missed_heartbeats 字段但从未在 check_failures 中递增或用于判断，成了死代码。
+2. receive_heartbeat 中在 merge_heartbeat 之后再单独检查 sender_id 是否存在并补充添加，这个回退逻辑和心跳消息中已携带 sender_id 的正常路径之间缺少说明，两条添加路径的版本号起点也不一致（回退路径固定 version=1, incarnation=0，而消息内携带的可能更高）。
+3. 测试 test_all_peers_marked_dead 名称暗示"所有节点标记失活"，但实际断言只验证除自身外的其他节点，名称与覆盖范围有偏差。
+4. mark_node_alive 方法先通过 get_member 拿到克隆副本、对副本做 mark_alive、再用 add_or_update_member 写回，同一份数据走了"克隆→修改→合并"的迂回路径，不如直接操作内部字典中的原始对象简洁。
+过程不满意：
+1. 模型在收到任务后立即创建了 9 项 TodoList，没有先阅读现有项目代码风格和结构再做规划，违反了"不能刚收到任务就直接创建 TodoList，应先分析问题再规划"的要求。
+2. 连续尝试读取 6 个不存在的文件（quorum/models.py、shard_router/models.py 等）后才找到有效参考代码，路径探索零散低效，没有先列出目录结构再精准定位。
+3. 首次写入 test_membership.py 就出现了缩进错误导致 pytest 收集失败，说明代码写入后没有做基本的语法检查就提交到了测试步骤。
+4. 从头到尾经历了 3 轮"运行测试→发现失败→修改代码→再运行"的试错循环才让 74 个测试全部通过，没有在首轮编码时对核心比较逻辑（如 is_newer_than 的优先级）做充分的设计验证。

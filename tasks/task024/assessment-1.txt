@@ -1,0 +1,10 @@
+产物不满意：
+1. range_query 方法从 self._header.forward[0] 开始逐节点遍历，完全没有利用跳表的高层索引快速定位到 min_score 附近，导致范围查询退化为 O(n) 而非 O(log n + k)。跳表的多层结构在此被彻底绕过，当查询 [500, 510] 区间时仍需遍历前 500 个节点，跳表的核心加速优势荡然无存。
+2. _insert_seq 作为动态属性通过 new_node._insert_seq = insert_seq 挂在 SkipListNode dataclass 上，排序比较时用 getattr(..., "_insert_seq", 0) 读取。SkipListNode 是 dataclass，动态属性不在定义字段中，不会参与 __repr__、__eq__ 等生成方法，调试和序列化时容易遗漏，本质上是对 dataclass 设计意图的破坏。
+3. ScoreNotFoundError 异常类已定义并在 __init__.py 中导出，但代码中从未抛出它——delete() 找不到分值只返回 False，get_rank() 对不存在的分值直接返回排名计算值。这个异常类成了死代码，而且调用方通过 get_rank() 的返回值无法区分"分值存在排第 N"和"分值不存在但应排第 N"两种不同场景。
+4. test_skiplist.py 中 import time 从未被使用，属于残留的无效导入。
+
+过程不满意：
+1. 模型首次使用 python -m pytest 运行测试，失败后才改用 poetry run pytest。项目已有 poetry.lock 和 pyproject.toml，README.md 中也写了用 poetry run pytest，模型应先检查项目惯例而非直接尝试裸 python 命令。
+2. 模型在实现中途就直接将所有文件一次性写完（__init__、exceptions、models、skiplist、README、测试），没有采用增量构建验证的方式，虽然最终测试全部通过，但缺少"先写核心插入逻辑→测试→再加范围查询→测试"的渐进式验证过程。
+3. 模型在 COT 总结中声称 range_query 借助跳表结构实现高效查询，并突出强调 get_by_rank "利用 span 字段实现 O(log n) 查询"，但实际 range_query 的实现全程走在 level 0 链上，总结与代码实现不符，存在自夸倾向。

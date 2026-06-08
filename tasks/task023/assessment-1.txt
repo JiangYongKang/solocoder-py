@@ -1,0 +1,8 @@
+产物不满意：
+1. store 加了 threading.RLock 且 README 写"线程安全"，但全部 59 个测试都是单线程的，没有任何并发读写测试来验证锁在所有方法中是否被正确使用。如果某个路径漏加锁，测试完全不会暴露。
+2. begin_transaction 每次分配 start_version，commit 又单独分配 commit_version，导致全局版本号序列有空缺。用户通过 read_version 指定某个版本号时，如果碰巧命中一个事务的 start_version 会报 VersionNotFoundError，但 README 和代码注释都没有解释这种版本号消耗机制。
+3. create_snapshot 中直接把 _next_version - 1 作为快照版本号，但 _next_version 的增长包含了 begin_transaction 的调用，导致快照版本号可能落在未提交事务的 start_version 上，而非"当时已提交的最大版本"。语义不精确，与提示词"已提交的最大版本"有偏差。
+4. test_read_reclaimed_version_raises 用 try-except-else 结构做断言，内部直接访问 store._reclaimed_versions 私有属性来兜底，破坏了封装且依赖内部实现细节。test_single_key_many_versions 用 try-except 把 VersionReclaimedError 吞掉了，如果 GC 过度回收了所有版本，测试会静默通过不做任何验证。
+过程不满意：
+1. 模型在第 3 步就创建了 TodoList，此时只看了项目目录结构和 lock 包的代码风格，还没仔细分析 MVCC 的 7 条需求细节和模块架构设计。任务规划过早，缺乏对需求的深度理解。
+2. 首次测试失败后，模型没有直接阅读 GC 相关测试用例和 collect_garbage 的实现代码来分析根因，而是创建了临时 debug_gc.py 脚本来试错调试，效率不高且增加了不必要的临时文件操作。

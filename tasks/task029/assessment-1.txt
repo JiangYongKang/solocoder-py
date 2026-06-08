@@ -1,0 +1,13 @@
+产物不满意：
+1. Replica.read() 在 _fail_reads=True 时抛出 ReplicaUnreachableError，但副本实际状态仍是 ONLINE。故障注入和真实不可达共用同一个异常类型，协调器在 write() 和 read() 中捕获时无法区分是人工注入的故障还是真正的网络分区，导致统计信息和错误处理不够精确。
+2. WriteResult.success 和 ReadResult.success 只判断 successful_replicas > 0，不校验是否达到 W 和 R 阈值。虽然 write/read 方法本身在不足时抛异常，但返回值对象自带 success 属性，只要有一个成功副本就返回 True，调用方如果只检查 success 可能误判写入/读取已满足法定人数。
+3. read() 中 conflict_detected 只在版本号不一致时设为 True，数据缺失引起的不一致修复不被标记为冲突。例如某个副本从未收到过某 key 的数据，读取时会触发修复但 conflict_detected 仍为 False，调用方无法从结果中直接感知这次读取经过了不一致修复。
+4. resolve_conflict 跳过不可达副本时不做任何记录，调用方无法知道有多少副本因不可达而未参与裁决，裁决覆盖范围不透明。
+5. 副本的读写延迟统计在 finally 块中不加区分地记录，包含了失败请求和人工注入延迟的时间。失败的读写操作不应计入性能统计，否则 avg_read_latency_ms 和 avg_write_latency_ms 会混入无意义的失败延迟数据，拉低指标可用性。
+6. 测试 test_read_repair_fixes_stale_replica 和 test_read_repair_missing_replica 都用了 len(result.repaired_replicas) >= 1 的宽松断言，没有精确校验修复的是哪个副本或修复了几个，测试精度不足。
+
+过程不满意：
+1. 模型在收到任务后第一个工具调用就是 todo_write 创建 TodoList（9 项），没有先仔细阅读提示词或分析项目结构。虽然回复文字中说"让我先了解项目结构"，但实际行为是先规划再探索，违反了应先分析再规划的原则。
+2. 测试修复阶段经历了三轮试错：第一轮修改协调器逻辑和两个测试，跑完仍有失败；第二轮再调两个测试，还是失败；第三轮继续改才全绿。整个过程是"跑→看报错→改→再跑"的循环，没有先静下来分析失败根因再做最小修正。
+3. 首次运行测试用了 python -m pytest 而非 poetry run pytest，依赖缺失失败后才改用 poetry，说明对项目环境配置理解不足。
+4. 探索阶段只看 twopc 和 vector_clock 两个已有模块作为参考，没有更广泛地查看其他包（如 cache、queue 等）来全面了解项目中的模块组织、异常定义和测试结构约定。

@@ -1,0 +1,14 @@
+产物不满意：
+1. ORSet.is_ge 方法在判断 other 有而 self 没有的元素时检查的是 info.tags 非空，而不是活标签（tags - tombstones），当一个元素在 other 中所有标签都已移入 tombstone 时，该元素实际已不存在，但 is_ge 仍会返回 False，导致比较语义错误。
+2. PNCounter 缺少从 PNCounterState 恢复状态的工厂方法或构造函数，测试代码在 test_merge_commutative、test_merge_associative、test_diff_increased 等多处被迫直接写入私有属性 _positive 和 _negative 来复制/恢复状态，破坏了对象封装性，且这种做法对 ORSet 完全不适用（ORSet 的标签 ID 无法通过状态快照还原）。
+3. PNCounter.diff 和 ORSet.diff 在获取 self_state 后就释放了锁，再去获取 other_state，此时 other 可能在并发线程中被修改，导致 diff 结果出现不一致。
+4. ORSet 内部存储使用 tuple[set[str], set[str]] 来记录 tags 和 tombstones，但 get_state 导出时转换为 ORSetElement，内外数据类型不一致，merge 方法中混用两种表示（遍历 other_state.elements 拿到 ORSetElement，写入 self._elements 用 tuple），增加了理解和维护成本。
+5. diff 方法没有文档说明差异的语义方向，只看实现无法直观判断 added 是指 self 有而 other 无，还是 other 有而 self 无。
+6. 测试中两处 import random 写在函数体内而非文件顶部，不符合 PEP 8 导入规范。
+
+过程不满意：
+1. 模型在探索项目结构后直接创建 TodoList 开始编码，没有先阅读和分析提示词中的具体需求，违反了标注规范中"不能刚收到任务就直接创建 TodoList，应先分析问题再规划"的要求。
+2. 开发过程呈明显的试错式调试：第一次运行测试失败后直接声称"都是测试逻辑的问题"并修改测试代码，实际上失败的根因是 ORSet 核心实现缺少 tombstone 机制。随后为适应测试又重写了整个 ORSet 实现，重写后测试仍失败又去改测试，再遇到随机合并测试不稳定又再改测试逻辑。整个过程是先改测试、再改实现、再改测试的反复试错，而非先分析根因再做精确修复。
+3. 同一文件 test_or_set.py 被重复读取至少 4 次（第392、570、618、666行），test_pn_counter.py 被重复读取 2 次（第400、412行），说明没有在修改前完整梳理好所有需要改动的位置，而是零散地读一个改一个。
+4. 多次 shell 命令中携带 undefined 多余参数（第356、365、590、710、851、892行），工具调用格式不规范。
+5. 总结中声称"所有代码均遵循项目现有代码风格和规范"，但实际上 ORSet 内部存储与外部接口类型不一致，PNCounter 测试被迫操作私有属性，代码风格一致性存在明显问题，属于虚假完成描述。

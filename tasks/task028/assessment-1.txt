@@ -1,0 +1,12 @@
+产物不满意：
+1. run_election 不检查当前是否已有领导者，新领导当选后也不退位旧领导者。当集群已有 node-0 作为 term=1 的领导者时，直接调用 run_election("node-1") 会让 node-1 成为 term=2 的领导者，但 node-0 仍保持在 LEADER 状态不变，集群同时存在两个领导节点，违反了"任意时刻最多只有一个合法领导者"的脑裂防护要求。
+2. 完全缺少选举超时机制。提示词明确说"节点在超时未收到领导心跳时可以发起选举"，但当前节点从不基于心跳间隔主动发起选举。没有心跳监控定时器、没有选举超时逻辑，所有选举都由外部手动调用 run_election 或 run_election_random 触发，无法模拟"领导者失效→超时→新选举"的自动流程。
+3. leader_send_heartbeat 中用裸 except Exception 吞掉 StaleTermError。当跟随者因分区期间已更新到更高任期而拒绝领导者的旧任期心跳时，异常被静默忽略，领导者不会感知到自己任期落后并退位，只能靠外部手动干预来恢复一致性。
+4. force_new_leader 直接绕过投票流程操作所有节点的私有属性（_current_term、_state、_voted_for 等），不与任期校验和投票拒绝逻辑交互就直接强制指定新领导者，虽然作为测试辅助方法但完全绕开了选举机制的核心校验路径。
+5. handle_vote_request 对同任期同候选人的重复投票请求仍返回 vote_granted=True。调用方在 _collect_votes 中不会重复请求，但如果其他调用方误重试，该节点的投票会被重复追加到得票列表，导致计数超出实际票数。
+6. NotLeaderError 在 exceptions.py 中已定义但从未被使用，send_heartbeat 对非领导者抛出的是 StaleTermError，异常类型与实际错误语义不匹配，要么应该用 NotLeaderError，要么就不该定义它。
+7. README 中多个示例代码直接访问了私有属性 cluster._leader_id，向用户展示了绕过公开 API 直接操作内部状态的使用方式。
+
+过程不满意：
+1. 首次测试失败时模型发现 node-0 仍认为自己是领导者，但只修改测试添加了心跳步骤来绕过断言，没有分析到根因是 run_election 不清理旧领导者，属于让测试适应代码而非修复生产代码缺陷。
+2. 模型在探索阶段读取了 twopc 和 lock 等模块作为参考，但第一次运行测试时仍用了 python -m pytest（未加载 poetry 环境），失败后才切换为 poetry run pytest，存在无谓的试错步骤。

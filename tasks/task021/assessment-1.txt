@@ -1,0 +1,9 @@
+产物不满意：
+1. window_count() 和 get_stats() 在查询时连带触发了 _slide_window() 和 _maybe_trigger_cleanup()，查询方法会产生淘汰记录和主动清理的副作用，与"查询当前窗口"的只读语义不一致。
+2. 并发读写测试 test_concurrent_reads_and_writes 中的读者线程只固定检查 writer-0-msg-0 这一个 ID，没有覆盖多个随机 ID 下的并发查询一致性，并发覆盖不够全面。
+3. test_ttl_vs_window_independent 测试中 msg-A 同时命中了计数窗口淘汰和 TTL 过期淘汰，两种淘汰原因交织在一起，测试名声称独立但实际上未独立验证 TTL 过期和窗口滑动的隔离性。
+4. check_duplicate 方法中第 123 行 move_to_end 调用在非重复路径上是冗余操作，新插入的键已经在 OrderedDict 末尾，多了一次不必要的字典操作。
+过程不满意：
+1. 模型多次在 shell 命令末尾附加了字面量 undefined 参数，包括 mkdir、pytest、poetry install 等 4 个命令，工具调用参数传递存在缺陷。
+2. 模型已读取 pyproject.toml 知道项目用 poetry 管理依赖，但第一次运行测试却用了 python -m pytest 而非 poetry run pytest，遇到模块未安装的错误后才改用 poetry，没有在动手前确认项目工具链。
+3. 全部代码写完之后才第一次运行测试，首次运行就出现 2 个测试失败（时间窗口边界比较和 contains/get_record 未触发窗口滑动），后又回头修改实现才通过，缺少边写边验证的节奏。
