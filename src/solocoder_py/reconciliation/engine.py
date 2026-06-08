@@ -19,8 +19,16 @@ from .models import (
 )
 
 
+def _extract_txn_id(record: Dict, candidates: List[str]) -> Optional[str]:
+    for key in candidates:
+        val = record.get(key)
+        if val is not None and str(val).strip() != "":
+            return str(val)
+    return None
+
+
 def normalize_internal_record(record: Dict) -> Transaction:
-    txn_id = record.get("txn_id") or record.get("transaction_id") or record.get("order_id")
+    txn_id = _extract_txn_id(record, ["txn_id", "transaction_id", "order_id"])
     amount = float(record.get("amount", 0))
     txn_time = record.get("txn_time") or record.get("pay_time") or record.get("created_at")
     status_str = record.get("status", "success")
@@ -30,7 +38,7 @@ def normalize_internal_record(record: Dict) -> Transaction:
     elif not isinstance(txn_time, datetime):
         txn_time = datetime.now()
     return Transaction(
-        txn_id=str(txn_id),
+        txn_id=txn_id,
         amount=amount,
         txn_time=txn_time,
         status=TransactionStatus(status_str),
@@ -41,7 +49,7 @@ def normalize_internal_record(record: Dict) -> Transaction:
 
 
 def normalize_channel_record(record: Dict) -> Transaction:
-    txn_id = record.get("txn_id") or record.get("trade_no") or record.get("transaction_id")
+    txn_id = _extract_txn_id(record, ["txn_id", "trade_no", "transaction_id"])
     amount = float(record.get("amount", 0))
     txn_time = record.get("txn_time") or record.get("trade_time") or record.get("paid_at")
     status_str = record.get("status", "success")
@@ -51,7 +59,7 @@ def normalize_channel_record(record: Dict) -> Transaction:
     elif not isinstance(txn_time, datetime):
         txn_time = datetime.now()
     return Transaction(
-        txn_id=str(txn_id),
+        txn_id=txn_id,
         amount=amount,
         txn_time=txn_time,
         status=TransactionStatus(status_str),
@@ -70,19 +78,28 @@ class ReconciliationEngine:
         self._tolerance = tolerance or ToleranceConfig()
         self._fallback_time_window = fallback_time_window
         self._internal_txns: Dict[str, Transaction] = {}
+        self._internal_by_txn_id: Dict[str, str] = {}
         self._channel_txns: Dict[str, Transaction] = {}
+        self._channel_by_txn_id: Dict[str, str] = {}
         self._reports: Dict[str, ReconciliationReport] = {}
         self._reports_by_time: List[Tuple[datetime, ReconciliationReport]] = []
         self._lock = threading.RLock()
+
+    @staticmethod
+    def _make_internal_key() -> str:
+        return f"__txn_{uuid.uuid4().hex}"
 
     def import_internal_transactions(self, records: List[Dict]) -> List[Transaction]:
         with self._lock:
             imported = []
             for rec in records:
                 txn = normalize_internal_record(rec)
-                if txn.txn_id in self._internal_txns:
+                if txn.has_txn_id and txn.txn_id in self._internal_by_txn_id:
                     continue
-                self._internal_txns[txn.txn_id] = txn
+                key = self._make_internal_key()
+                self._internal_txns[key] = txn
+                if txn.has_txn_id:
+                    self._internal_by_txn_id[txn.txn_id] = key
                 imported.append(txn)
             return imported
 
@@ -91,17 +108,26 @@ class ReconciliationEngine:
             imported = []
             for rec in records:
                 txn = normalize_channel_record(rec)
-                if txn.txn_id in self._channel_txns:
+                if txn.has_txn_id and txn.txn_id in self._channel_by_txn_id:
                     continue
-                self._channel_txns[txn.txn_id] = txn
+                key = self._make_internal_key()
+                self._channel_txns[key] = txn
+                if txn.has_txn_id:
+                    self._channel_by_txn_id[txn.txn_id] = key
                 imported.append(txn)
             return imported
 
     def get_internal_transaction(self, txn_id: str) -> Optional[Transaction]:
-        return self._internal_txns.get(txn_id)
+        key = self._internal_by_txn_id.get(txn_id)
+        if key is None:
+            return None
+        return self._internal_txns.get(key)
 
     def get_channel_transaction(self, txn_id: str) -> Optional[Transaction]:
-        return self._channel_txns.get(txn_id)
+        key = self._channel_by_txn_id.get(txn_id)
+        if key is None:
+            return None
+        return self._channel_txns.get(key)
 
     def list_internal_transactions(self) -> List[Transaction]:
         return list(self._internal_txns.values())
@@ -112,15 +138,27 @@ class ReconciliationEngine:
     def clear(self) -> None:
         with self._lock:
             self._internal_txns.clear()
+            self._internal_by_txn_id.clear()
             self._channel_txns.clear()
+            self._channel_by_txn_id.clear()
 
     @staticmethod
     def _dedup(txns: List[Transaction]) -> Dict[str, Transaction]:
         seen: Dict[str, Transaction] = {}
+        no_id_counter = 0
         for txn in txns:
-            if txn.txn_id not in seen:
-                seen[txn.txn_id] = txn
+            if txn.has_txn_id:
+                if txn.txn_id not in seen:
+                    seen[txn.txn_id] = txn
+            else:
+                key = f"__no_id_{no_id_counter}"
+                no_id_counter += 1
+                seen[key] = txn
         return seen
+
+    @staticmethod
+    def _amounts_close(a: float, b: float, epsilon: float = 1e-6) -> bool:
+        return abs(round(a, 2) - round(b, 2)) <= epsilon
 
     def _try_match_by_id(
         self,
@@ -135,10 +173,20 @@ class ReconciliationEngine:
         write_off_count = 0
         write_off_diff = 0.0
 
-        for txn_id, itxn in internal_map.items():
-            ctxn = channel_map.get(txn_id)
-            if ctxn is None:
+        internal_by_real_id: Dict[str, Tuple[str, Transaction]] = {}
+        for key, txn in internal_map.items():
+            if txn.has_txn_id:
+                internal_by_real_id[txn.txn_id] = (key, txn)
+
+        channel_by_real_id: Dict[str, Tuple[str, Transaction]] = {}
+        for key, txn in channel_map.items():
+            if txn.has_txn_id:
+                channel_by_real_id[txn.txn_id] = (key, txn)
+
+        for real_id, (i_key, itxn) in internal_by_real_id.items():
+            if real_id not in channel_by_real_id:
                 continue
+            c_key, ctxn = channel_by_real_id[real_id]
 
             if itxn.status != ctxn.status:
                 internal_discrepancies[DiscrepancyType.STATUS_MISMATCH].append(
@@ -157,19 +205,19 @@ class ReconciliationEngine:
                         detail=f"Status mismatch: internal={itxn.status.value}, channel={ctxn.status.value}",
                     )
                 )
-                internal_matched.add(txn_id)
-                channel_matched.add(txn_id)
+                internal_matched.add(i_key)
+                channel_matched.add(c_key)
                 continue
 
-            if itxn.amount == ctxn.amount:
+            if self._amounts_close(itxn.amount, ctxn.amount):
                 matched_pairs.append(MatchedPair(
                     internal_txn=itxn,
                     channel_txn=ctxn,
                     match_type=MatchType.EXACT,
-                    diff_amount=0.0,
+                    diff_amount=itxn.amount - ctxn.amount,
                 ))
-                internal_matched.add(txn_id)
-                channel_matched.add(txn_id)
+                internal_matched.add(i_key)
+                channel_matched.add(c_key)
             elif self._tolerance.is_within_tolerance(itxn.amount, ctxn.amount):
                 diff = self._tolerance.diff_amount(itxn.amount, ctxn.amount)
                 matched_pairs.append(MatchedPair(
@@ -181,8 +229,8 @@ class ReconciliationEngine:
                 ))
                 write_off_count += 1
                 write_off_diff += diff
-                internal_matched.add(txn_id)
-                channel_matched.add(txn_id)
+                internal_matched.add(i_key)
+                channel_matched.add(c_key)
             else:
                 internal_discrepancies[DiscrepancyType.AMOUNT_MISMATCH].append(
                     Discrepancy.create(
@@ -200,8 +248,8 @@ class ReconciliationEngine:
                         detail=f"Amount mismatch out of tolerance: internal={itxn.amount}, channel={ctxn.amount}",
                     )
                 )
-                internal_matched.add(txn_id)
-                channel_matched.add(txn_id)
+                internal_matched.add(i_key)
+                channel_matched.add(c_key)
 
         return write_off_count, write_off_diff
 
@@ -212,6 +260,8 @@ class ReconciliationEngine:
         matched_pairs: List[MatchedPair],
         internal_matched: set[str],
         channel_matched: set[str],
+        internal_discrepancies: Dict[DiscrepancyType, List[Discrepancy]],
+        channel_discrepancies: Dict[DiscrepancyType, List[Discrepancy]],
     ) -> Tuple[int, float]:
         write_off_count = 0
         write_off_diff = 0.0
@@ -226,35 +276,42 @@ class ReconciliationEngine:
 
             c_time = ctxn.txn_time.replace(microsecond=0)
 
-            exact_candidates = []
-            tolerance_candidates = []
+            exact_same_status = []
+            tolerance_same_status = []
+            status_mismatch_candidates = []
 
             for itid in remaining_internal_ids:
                 itxn = internal_map[itid]
-                if itxn.status != ctxn.status:
-                    continue
                 itime = itxn.txn_time.replace(microsecond=0)
                 time_diff = abs((c_time - itime).total_seconds())
                 if time_diff > self._fallback_time_window.total_seconds():
                     continue
-                if itxn.amount == ctxn.amount:
-                    exact_candidates.append((itid, time_diff, 0.0))
-                elif self._tolerance.is_within_tolerance(itxn.amount, ctxn.amount):
-                    diff = self._tolerance.diff_amount(itxn.amount, ctxn.amount)
-                    tolerance_candidates.append((itid, time_diff, diff))
 
-            exact_candidates.sort(key=lambda x: x[1])
-            tolerance_candidates.sort(key=lambda x: x[1])
+                amounts_match_rounded = self._amounts_close(itxn.amount, ctxn.amount)
+                amounts_in_tolerance = self._tolerance.is_within_tolerance(itxn.amount, ctxn.amount)
+
+                if itxn.status == ctxn.status:
+                    if amounts_match_rounded:
+                        exact_same_status.append((itid, time_diff, itxn.amount - ctxn.amount))
+                    elif amounts_in_tolerance:
+                        diff = self._tolerance.diff_amount(itxn.amount, ctxn.amount)
+                        tolerance_same_status.append((itid, time_diff, diff))
+                elif amounts_match_rounded or amounts_in_tolerance:
+                    status_mismatch_candidates.append((itid, time_diff, itxn))
+
+            exact_same_status.sort(key=lambda x: x[1])
+            tolerance_same_status.sort(key=lambda x: x[1])
+            status_mismatch_candidates.sort(key=lambda x: x[1])
 
             matched_itid = None
             matched_diff = 0.0
             is_write_off = False
 
-            if exact_candidates:
-                matched_itid, _, matched_diff = exact_candidates[0]
+            if exact_same_status:
+                matched_itid, _, matched_diff = exact_same_status[0]
                 is_write_off = False
-            elif tolerance_candidates:
-                matched_itid, _, matched_diff = tolerance_candidates[0]
+            elif tolerance_same_status:
+                matched_itid, _, matched_diff = tolerance_same_status[0]
                 is_write_off = True
 
             if matched_itid is not None:
@@ -272,6 +329,27 @@ class ReconciliationEngine:
                 internal_matched.add(matched_itid)
                 channel_matched.add(ctid)
                 remaining_internal_ids.remove(matched_itid)
+            elif status_mismatch_candidates:
+                itid, _, itxn = status_mismatch_candidates[0]
+                internal_discrepancies[DiscrepancyType.STATUS_MISMATCH].append(
+                    Discrepancy.create(
+                        DiscrepancyType.STATUS_MISMATCH,
+                        internal_txn=itxn,
+                        channel_txn=ctxn,
+                        detail=f"Fallback status mismatch (amount/time matched): internal={itxn.status.value}, channel={ctxn.status.value}",
+                    )
+                )
+                channel_discrepancies[DiscrepancyType.STATUS_MISMATCH].append(
+                    Discrepancy.create(
+                        DiscrepancyType.STATUS_MISMATCH,
+                        internal_txn=itxn,
+                        channel_txn=ctxn,
+                        detail=f"Fallback status mismatch (amount/time matched): internal={itxn.status.value}, channel={ctxn.status.value}",
+                    )
+                )
+                internal_matched.add(itid)
+                channel_matched.add(ctid)
+                remaining_internal_ids.remove(itid)
 
         return write_off_count, write_off_diff
 
@@ -328,6 +406,8 @@ class ReconciliationEngine:
                 matched_pairs,
                 internal_matched_ids,
                 channel_matched_ids,
+                internal_discrepancies,
+                channel_discrepancies,
             )
             total_write_off_count += wo_cnt2
             total_write_off_diff += wo_diff2
@@ -357,7 +437,7 @@ class ReconciliationEngine:
             channel_total_count = len(channel_map)
             channel_total_amount = sum(t.amount for t in channel_map.values())
             matched_count = len(matched_pairs)
-            matched_amount = sum(p.internal_txn.amount for p in matched_pairs)
+            matched_amount = sum(p.channel_txn.amount for p in matched_pairs)
 
             end_time = datetime.now()
             batch_id = str(uuid.uuid4())

@@ -38,6 +38,7 @@ class Account:
     account_type: AccountType = AccountType.ASSET
     allow_overdraft: bool = False
     balance: int = 0
+    initial_balance: int = 0
     created_at: datetime = field(default_factory=datetime.now)
 
     def __post_init__(self) -> None:
@@ -72,6 +73,17 @@ class Account:
             )
         self.balance -= amount
 
+    def copy(self) -> "Account":
+        return Account(
+            account_id=self.account_id,
+            name=self.name,
+            account_type=self.account_type,
+            allow_overdraft=self.allow_overdraft,
+            balance=self.balance,
+            initial_balance=self.initial_balance,
+            created_at=self.created_at,
+        )
+
 
 @dataclass
 class Entry:
@@ -88,6 +100,15 @@ class Entry:
             raise ValueError("account_id cannot be empty")
         if self.amount < 0:
             raise EntryValidationError("Amount cannot be negative")
+
+    def copy(self) -> "Entry":
+        return Entry(
+            entry_id=self.entry_id,
+            account_id=self.account_id,
+            entry_type=self.entry_type,
+            amount=self.amount,
+            description=self.description,
+        )
 
 
 @dataclass
@@ -144,6 +165,16 @@ class Transaction:
 
     def get_account_ids(self) -> set[str]:
         return {e.account_id for e in self.entries}
+
+    def copy(self) -> "Transaction":
+        return Transaction(
+            transaction_id=self.transaction_id,
+            entries=[e.copy() for e in self.entries],
+            description=self.description,
+            status=self.status,
+            created_at=self.created_at,
+            posted_at=self.posted_at,
+        )
 
 
 def make_entry(account_id: str, entry_type: EntryType, amount: int, description: str = "") -> Entry:

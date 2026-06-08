@@ -1,0 +1,11 @@
+产物不满意：
+1. _require_account_has_bills 方法名和实际校验逻辑不匹配：方法名暗示校验"账户是否有账单"，但实际校验的是"账户是否在引擎中出现过（有用量上报或已有账单）"，_known_accounts 只增不减，一旦账户有过任意一条用量记录就永远不会再触发 AccountNotFoundError，异常的覆盖面只对完全陌生的账户生效，语义范围比异常名字暗示的更窄。
+2. _known_resources 集合的状态与 _pricing_configs 的键集完全同步维护，引入该集合是冗余状态。直接检查 resource_type in self._pricing_configs 才能达成同样的"资源是否已注册"判断，多维护一套同步状态增加了未来状态不一致的风险。
+3. _calculate_line_item 中对 TierCalculationDetail 对象做了原地属性改写（td.tier_cost = rounded_cost、td.units_applied = rounded_units），会污染 models.py 中 pricing.calculate_cost() 返回的原始对象。如果 billing 模块未来有其他代码路径引用了同一 detail 实例，就会读到被引擎内部改写过的值。
+4. test_concurrent_settle_and_report_consistent 只验证了并发场景无异常，没有断言结算后的最终状态一致性——账单总金额是否正确、用量是否归零、账单数量是否符合预期等，并发覆盖深度不足。
+过程不满意：
+1. 模型在收到任务的第 1 行就立即创建 TodoList，没有先读取第一轮标注和当前代码状态理解问题全貌，违反了"先分析问题再规划"的原则。
+2. 第 66 行模型决定"直接重写整个 engine.py"而非针对每个问题做精确编辑。选择全量重写核心引擎风险高，且第一次重写的精度方案方向就是错的——先加总再舍入，后续（第 275 行）才靠测试发现问题并改成各分段先舍入再加总，说明第一次重写时没有想清楚精度归整的时机。
+3. 模型在第 87 行宣称"engine.py 已完整重写，涵盖了问题 1-4 的修复"，但紧接着三轮测试分别暴露了不同级别的失败：第一轮资源检查顺序变更导致一个测试失败，第二轮精度累积方向错误和导入缺失导致两个测试失败。从宣称完成到真正通过中间经历了至少三轮试错循环。
+4. COT 中多次使用 python -m pytest 运行测试（第 122 行和第 340 行），而提示词明确要求使用 poetry run pytest。虽然最后一次（第 530 行）使用了正确命令，但过程中反复使用不规范方式验证。
+5. 测试代码中 AccountNotFoundError 的导入写在测试方法内部（第 491、498 行使用 from solocoder_py.billing import AccountNotFoundError）而非在文件顶部统一导入，不够规范整洁。

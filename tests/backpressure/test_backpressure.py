@@ -474,3 +474,158 @@ class TestEdgeCases:
         for i in range(10):
             queue_with_watermarks.enqueue(i)
         assert len(events) == 0
+
+
+class TestClearWakesBlockedThreads:
+    def test_clear_wakes_blocked_consumer(self):
+        q = BoundedQueue(capacity=5, strategy=BackpressureStrategy.BLOCK)
+        consumer_result = {"woke": False, "got_value": None}
+
+        def blocking_consumer():
+            try:
+                item = q.dequeue(timeout=1.0)
+                consumer_result["woke"] = True
+                consumer_result["got_value"] = item
+            except DequeueTimeoutError:
+                consumer_result["woke"] = False
+
+        t = threading.Thread(target=blocking_consumer)
+        t.start()
+        time.sleep(0.05)
+        q.clear()
+        t.join(timeout=1.0)
+
+        assert consumer_result["woke"] is True
+        assert consumer_result["got_value"] is None
+        assert t.is_alive() is False
+
+    def test_clear_wakes_multiple_blocked_consumers(self):
+        q = BoundedQueue(capacity=5, strategy=BackpressureStrategy.BLOCK)
+        wake_count = 0
+        lock = threading.Lock()
+
+        def blocking_consumer():
+            nonlocal wake_count
+            try:
+                q.dequeue(timeout=1.0)
+            except DequeueTimeoutError:
+                return
+            with lock:
+                wake_count += 1
+
+        threads = [threading.Thread(target=blocking_consumer) for _ in range(3)]
+        for t in threads:
+            t.start()
+        time.sleep(0.05)
+        q.clear()
+        for t in threads:
+            t.join(timeout=1.0)
+
+        assert wake_count == 3
+
+    def test_clear_wakes_blocked_producer(self):
+        q = BoundedQueue(capacity=2, strategy=BackpressureStrategy.BLOCK)
+        q.enqueue("a")
+        q.enqueue("b")
+
+        producer_result = {"woke": False}
+
+        def blocking_producer():
+            result = q.enqueue("c", timeout=1.0)
+            producer_result["woke"] = True
+            producer_result["result"] = result
+
+        t = threading.Thread(target=blocking_producer)
+        t.start()
+        time.sleep(0.05)
+        q.clear()
+        t.join(timeout=1.0)
+
+        assert producer_result["woke"] is True
+        assert producer_result["result"].success is True
+        assert t.is_alive() is False
+
+
+class TestCallbackExceptionIsolation:
+    def test_high_watermark_callback_exception_does_not_block_others(self, queue_with_watermarks: BoundedQueue):
+        good_results = []
+
+        def bad_callback(state):
+            raise RuntimeError("boom")
+
+        def good_callback(state):
+            good_results.append(state)
+
+        queue_with_watermarks.register_high_watermark_callback(bad_callback)
+        queue_with_watermarks.register_high_watermark_callback(good_callback)
+
+        for i in range(10):
+            queue_with_watermarks.enqueue(i)
+
+        assert len(good_results) == 1
+        assert good_results[0].is_high_watermark is True
+
+    def test_low_watermark_callback_exception_does_not_block_others(self, queue_with_watermarks: BoundedQueue):
+        good_results = []
+
+        def bad_callback(state):
+            raise RuntimeError("boom")
+
+        def good_callback(state):
+            good_results.append(state)
+
+        for i in range(10):
+            queue_with_watermarks.enqueue(i)
+
+        queue_with_watermarks.register_low_watermark_callback(bad_callback)
+        queue_with_watermarks.register_low_watermark_callback(good_callback)
+
+        for _ in range(10):
+            queue_with_watermarks.dequeue(block=False)
+
+        assert len(good_results) == 1
+        assert good_results[0].is_high_watermark is False
+
+    def test_callback_can_safely_enqueue_dequeue_without_deadlock(self, queue_with_watermarks: BoundedQueue):
+        enqueue_result = {"success": False}
+
+        def callback_on_high(state):
+            try:
+                queue_with_watermarks.dequeue(block=False)
+                enqueue_result["success"] = True
+            except Exception:
+                pass
+
+        queue_with_watermarks.register_high_watermark_callback(callback_on_high)
+
+        for i in range(10):
+            queue_with_watermarks.enqueue(i)
+
+        assert enqueue_result["success"] is True
+
+    def test_callback_exception_order_preserved(self, queue_with_watermarks: BoundedQueue):
+        call_order = []
+
+        def cb1(state):
+            call_order.append(1)
+            raise RuntimeError("fail 1")
+
+        def cb2(state):
+            call_order.append(2)
+
+        def cb3(state):
+            call_order.append(3)
+            raise RuntimeError("fail 3")
+
+        def cb4(state):
+            call_order.append(4)
+
+        queue_with_watermarks.register_high_watermark_callback(cb1)
+        queue_with_watermarks.register_high_watermark_callback(cb2)
+        queue_with_watermarks.register_high_watermark_callback(cb3)
+        queue_with_watermarks.register_high_watermark_callback(cb4)
+
+        for i in range(10):
+            queue_with_watermarks.enqueue(i)
+
+        assert call_order == [1, 2, 3, 4]

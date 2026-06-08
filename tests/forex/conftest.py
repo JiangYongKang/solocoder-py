@@ -1,12 +1,26 @@
+from typing import Optional
+
 from solocoder_py.forex import ForexConverter
 
 
-def make_converter(max_hops: int = 5) -> ForexConverter:
-    return ForexConverter(max_hops=max_hops)
+def make_converter(
+    max_hops: int = 5,
+    max_paths_explored: Optional[int] = None,
+) -> ForexConverter:
+    kwargs = {"max_hops": max_hops}
+    if max_paths_explored is not None:
+        kwargs["max_paths_explored"] = max_paths_explored
+    return ForexConverter(**kwargs)
 
 
-def make_converter_with_basic_rates(max_hops: int = 5) -> ForexConverter:
-    fx = ForexConverter(max_hops=max_hops)
+def make_converter_with_basic_rates(
+    max_hops: int = 5,
+    max_paths_explored: Optional[int] = None,
+) -> ForexConverter:
+    kwargs = {"max_hops": max_hops}
+    if max_paths_explored is not None:
+        kwargs["max_paths_explored"] = max_paths_explored
+    fx = ForexConverter(**kwargs)
     fx.set_precision("USD", 2)
     fx.set_precision("CNY", 2)
     fx.set_precision("EUR", 2)

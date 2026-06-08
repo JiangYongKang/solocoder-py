@@ -24,10 +24,6 @@ class FeatureFlagEngine:
         self._flags: dict[str, FlagConfig] = {}
 
     def add_flag(self, config: FlagConfig) -> None:
-        if config.name in self._flags:
-            self._check_no_cycle(config.name, config.dependencies)
-            self._flags[config.name] = config
-            return
         self._check_no_cycle(config.name, config.dependencies)
         self._flags[config.name] = config
 
@@ -261,10 +257,12 @@ class FeatureFlagEngine:
         if rule.operator == Operator.NEQ:
             return actual != expected
         if rule.operator == Operator.CONTAINS:
-            if isinstance(actual, (list, tuple, set, dict)):
-                return expected in actual
             if isinstance(actual, str):
                 return str(expected) in actual
+            if isinstance(actual, dict):
+                return expected in actual.values()
+            if isinstance(actual, (list, tuple, set)):
+                return expected in actual
             return False
         if rule.operator == Operator.GT:
             return actual > expected

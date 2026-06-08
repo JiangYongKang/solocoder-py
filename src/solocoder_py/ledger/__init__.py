@@ -8,6 +8,7 @@ from .exceptions import (
     OverdraftError,
     TransactionBalanceError,
     TransactionError,
+    TransactionNotFoundError,
     TransactionStateError,
 )
 from .models import (
@@ -32,6 +33,7 @@ __all__ = [
     "OverdraftError",
     "TransactionBalanceError",
     "TransactionError",
+    "TransactionNotFoundError",
     "TransactionStateError",
     "Account",
     "AccountType",

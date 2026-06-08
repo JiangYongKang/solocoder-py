@@ -800,3 +800,232 @@ class TestClock:
         clock = ManualClock()
         with pytest.raises(ValueError, match="Cannot advance by negative"):
             clock.advance(-1.0)
+
+
+class TestTaskIdKwargsConflict:
+    def test_submit_user_func_task_id_via_positional_arg(self):
+        executor = _make_executor()
+        executor.create_group(_make_config(max_concurrency=1))
+
+        captured: dict = {}
+
+        def func_with_task_id(task_id: str, value: int) -> tuple:
+            captured["task_id"] = task_id
+            captured["value"] = value
+            return (task_id, value)
+
+        result = executor.submit(
+            "test_group",
+            func_with_task_id,
+            "user-expected-id",
+            value=99,
+        )
+
+        assert result.status == TaskStatus.SUCCESS
+        assert captured["task_id"] == "user-expected-id"
+        assert captured["value"] == 99
+        assert result.task_id != "user-expected-id"
+        assert result.result == ("user-expected-id", 99)
+
+    def test_submit_framework_task_id_is_keyword_only(self):
+        executor = _make_executor()
+        executor.create_group(_make_config(max_concurrency=1))
+
+        captured: dict = {}
+
+        def func_no_task_id(value: int) -> int:
+            captured["value"] = value
+            return value
+
+        result = executor.submit(
+            "test_group",
+            func_no_task_id,
+            99,
+            task_id="my-framework-task-id",
+        )
+
+        assert result.status == TaskStatus.SUCCESS
+        assert result.task_id == "my-framework-task-id"
+        assert captured["value"] == 99
+        assert result.result == 99
+
+    def test_submit_auto_task_id_not_leaked_to_user_kwargs(self):
+        executor = _make_executor()
+        executor.create_group(_make_config(max_concurrency=1))
+
+        captured_kwargs: dict = {}
+
+        def func_capture_kwargs(**kwargs) -> dict:
+            captured_kwargs.update(kwargs)
+            return kwargs
+
+        result = executor.submit("test_group", func_capture_kwargs, x=1, y=2)
+
+        assert result.status == TaskStatus.SUCCESS
+        assert "task_id" not in captured_kwargs
+        assert captured_kwargs == {"x": 1, "y": 2}
+        assert result.task_id is not None
+
+
+class TestAcquireQueueStrategy:
+    def test_acquire_queue_then_get_slot(self):
+        executor = _make_executor()
+        executor.create_group(
+            _make_config(
+                max_concurrency=1,
+                full_strategy=FullStrategy.QUEUE,
+                queue_timeout=5.0,
+            )
+        )
+        start_event = threading.Event()
+        continue_event = threading.Event()
+
+        def holder() -> None:
+            with executor.acquire("test_group"):
+                start_event.set()
+                continue_event.wait()
+
+        t1 = threading.Thread(target=holder)
+        t1.start()
+        start_event.wait()
+
+        stats = executor.get_group_stats("test_group")
+        assert stats.current_concurrency == 1
+        assert stats.queue_size == 0
+
+        acquire_result_holder: list = []
+
+        def waiting_acquirer() -> None:
+            try:
+                with executor.acquire("test_group"):
+                    stats_inside = executor.get_group_stats("test_group")
+                    acquire_result_holder.append(("ok", stats_inside.current_concurrency))
+            except Exception as e:
+                acquire_result_holder.append(("error", e))
+
+        t2 = threading.Thread(target=waiting_acquirer)
+        t2.start()
+        time.sleep(0.05)
+
+        stats_with_waiter = executor.get_group_stats("test_group")
+        assert stats_with_waiter.queue_size == 1
+
+        continue_event.set()
+        t1.join()
+        t2.join()
+
+        assert len(acquire_result_holder) == 1
+        assert acquire_result_holder[0][0] == "ok"
+        assert acquire_result_holder[0][1] == 1
+
+        stats_final = executor.get_group_stats("test_group")
+        assert stats_final.current_concurrency == 0
+        assert stats_final.queue_size == 0
+
+    def test_acquire_queue_timeout(self):
+        clock = ManualClock()
+        executor = _make_executor(clock=clock)
+        executor.create_group(
+            _make_config(
+                max_concurrency=1,
+                full_strategy=FullStrategy.QUEUE,
+                queue_timeout=1.0,
+            )
+        )
+        start_event = threading.Event()
+        continue_event = threading.Event()
+
+        def holder() -> None:
+            with executor.acquire("test_group"):
+                start_event.set()
+                continue_event.wait()
+
+        t1 = threading.Thread(target=holder)
+        t1.start()
+        start_event.wait()
+
+        error_holder: list = []
+
+        def timed_out_acquirer() -> None:
+            try:
+                with executor.acquire("test_group"):
+                    pass
+            except Exception as e:
+                error_holder.append(e)
+
+        t2 = threading.Thread(target=timed_out_acquirer)
+        t2.start()
+        time.sleep(0.05)
+
+        stats_with_waiter = executor.get_group_stats("test_group")
+        assert stats_with_waiter.queue_size == 1
+
+        clock.advance(2.0)
+        t2.join(timeout=5.0)
+        assert not t2.is_alive()
+
+        assert len(error_holder) == 1
+        assert isinstance(error_holder[0], BulkheadQueueTimeoutError)
+        assert error_holder[0].group_name == "test_group"
+
+        stats_final = executor.get_group_stats("test_group")
+        assert stats_final.queue_size == 0
+
+        continue_event.set()
+        t1.join()
+
+    def test_acquire_queue_respects_max_queue_size(self):
+        executor = _make_executor()
+        executor.create_group(
+            _make_config(
+                max_concurrency=1,
+                full_strategy=FullStrategy.QUEUE,
+                max_queue_size=1,
+                queue_timeout=10.0,
+            )
+        )
+        start_event = threading.Event()
+        continue_event = threading.Event()
+
+        def holder() -> None:
+            with executor.acquire("test_group"):
+                start_event.set()
+                continue_event.wait()
+
+        t1 = threading.Thread(target=holder)
+        t1.start()
+        start_event.wait()
+
+        queued_result: list = []
+
+        def queued_acquirer() -> None:
+            try:
+                with executor.acquire("test_group"):
+                    queued_result.append("ok")
+            except Exception as e:
+                queued_result.append(("error", e))
+
+        t2 = threading.Thread(target=queued_acquirer)
+        t2.start()
+        time.sleep(0.05)
+
+        stats = executor.get_group_stats("test_group")
+        assert stats.current_concurrency == 1
+        assert stats.queue_size == 1
+
+        rejected_error: list = []
+        try:
+            with executor.acquire("test_group"):
+                pass
+        except Exception as e:
+            rejected_error.append(e)
+
+        assert len(rejected_error) == 1
+        assert isinstance(rejected_error[0], BulkheadFullError)
+        assert "queue is full" in str(rejected_error[0])
+
+        continue_event.set()
+        t1.join()
+        t2.join()
+
+        assert queued_result[0] == "ok"

@@ -308,10 +308,37 @@ class TestRuleFlagEvaluation:
         assert result.enabled is False
         assert result.reason == EvaluationReason.MISSING_ATTRIBUTE
 
+    def test_rule_contains_in_dict_values(self):
+        engine = FeatureFlagEngine()
+        engine.add_flag(
+            FlagConfig(
+                name="r_contains_dict",
+                enabled=True,
+                flag_type=FlagType.RULE,
+                rules=[Rule(attribute="user_roles", operator=Operator.CONTAINS, expected_value="admin")],
+            )
+        )
+        assert engine.evaluate(
+            "r_contains_dict", context={"user_roles": {"a": "admin", "b": "user"}}
+        ).enabled is True
+        assert engine.evaluate(
+            "r_contains_dict", context={"user_roles": {"a": "user", "b": "guest"}}
+        ).enabled is False
+
     def test_rule_priority_sorting(self):
         engine = FeatureFlagEngine()
-        low_priority = Rule(attribute="age", operator=Operator.GT, expected_value=100, priority=0)
-        high_priority = Rule(attribute="age", operator=Operator.GT, expected_value=10, priority=10)
+        high_priority = Rule(
+            attribute="missing_field",
+            operator=Operator.EQ,
+            expected_value="anything",
+            priority=10,
+        )
+        low_priority = Rule(
+            attribute="age",
+            operator=Operator.GT,
+            expected_value=1000,
+            priority=0,
+        )
         engine.add_flag(
             FlagConfig(
                 name="r_priority",
@@ -320,8 +347,10 @@ class TestRuleFlagEvaluation:
                 rules=[low_priority, high_priority],
             )
         )
-        sorted_rules = sorted([low_priority, high_priority], key=lambda r: r.priority, reverse=True)
-        assert sorted_rules[0].priority == 10
+        result = engine.evaluate("r_priority", context={"age": 30})
+        assert result.enabled is False
+        assert result.reason == EvaluationReason.MISSING_ATTRIBUTE
+        assert "missing_field" in result.detail
 
 
 class TestDependencyEvaluation:

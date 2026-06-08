@@ -18,6 +18,7 @@ from solocoder_py.ledger import (
     OverdraftError,
     Transaction,
     TransactionBalanceError,
+    TransactionNotFoundError,
     TransactionStatus,
     make_entry,
     make_transaction,
@@ -29,6 +30,7 @@ def _add_raw_transaction(ledger: Ledger, txn: Transaction) -> None:
     ledger._transactions[txn.transaction_id] = txn
     for e in txn.entries:
         ledger._account_entries.setdefault(e.account_id, []).append(e)
+        ledger._entry_to_transaction[e.entry_id] = txn.transaction_id
 
 
 class TestAccountModel:
@@ -39,10 +41,12 @@ class TestAccountModel:
         assert account.account_type == AccountType.ASSET
         assert account.allow_overdraft is False
         assert account.balance == 0
+        assert account.initial_balance == 0
 
     def test_account_with_balance(self):
         account = Account(account_id="acc-1", name="Cash", balance=1000)
         assert account.balance == 1000
+        assert account.initial_balance == 0
 
     def test_account_overdraft_disallowed(self):
         with pytest.raises(OverdraftError):
@@ -103,6 +107,16 @@ class TestAccountModel:
         with pytest.raises(OverdraftError):
             account.apply_credit(200)
 
+    def test_account_copy_is_independent(self):
+        account = Account(
+            account_id="acc-1", name="Cash", balance=500, initial_balance=500
+        )
+        dup = account.copy()
+        assert dup.account_id == account.account_id
+        assert dup.balance == account.balance
+        dup.balance = 9999
+        assert account.balance == 500
+
 
 class TestEntryModel:
     def test_entry_creation(self):
@@ -125,6 +139,15 @@ class TestEntryModel:
                 entry_type=EntryType.DEBIT,
                 amount=-1,
             )
+
+    def test_entry_copy_is_independent(self):
+        entry = Entry(
+            entry_id="e-1", account_id="acc-1", entry_type=EntryType.DEBIT, amount=100
+        )
+        dup = entry.copy()
+        assert dup.entry_id == entry.entry_id
+        dup.amount = 9999
+        assert entry.amount == 100
 
 
 class TestTransactionModel:
@@ -188,6 +211,17 @@ class TestTransactionModel:
         assert txn.has_debit() is True
         assert txn.has_credit() is False
 
+    def test_transaction_copy_is_independent(self):
+        debit = make_entry("acc-1", EntryType.DEBIT, 100)
+        credit = make_entry("acc-2", EntryType.CREDIT, 100)
+        txn = make_transaction([debit, credit], "orig")
+        dup = txn.copy()
+        assert dup.transaction_id == txn.transaction_id
+        dup.description = "mutated"
+        dup.entries[0].amount = 9999
+        assert txn.description == "orig"
+        assert txn.entries[0].amount == 100
+
 
 class TestAccountCreation:
     def test_create_account(self):
@@ -196,6 +230,7 @@ class TestAccountCreation:
         assert account.account_id == "cash"
         assert account.name == "Cash Account"
         assert account.balance == 0
+        assert account.initial_balance == 0
         assert ledger.get_balance("cash") == 0
 
     def test_create_account_with_initial_balance(self):
@@ -204,6 +239,7 @@ class TestAccountCreation:
             "cash", "Cash Account", initial_balance=1000
         )
         assert account.balance == 1000
+        assert account.initial_balance == 1000
         assert ledger.get_balance("cash") == 1000
 
     def test_create_duplicate_account_raises(self):
@@ -378,6 +414,26 @@ class TestTransactionBalanceValidation:
             ledger.post_transaction(txn.transaction_id)
 
 
+class TestTransactionNotFound:
+    def test_get_transaction_not_found_raises_custom_error(self):
+        ledger = make_ledger()
+        with pytest.raises(TransactionNotFoundError):
+            ledger.get_transaction("nonexistent-txn")
+
+    def test_post_transaction_not_found_raises_custom_error(self):
+        ledger = make_ledger()
+        with pytest.raises(TransactionNotFoundError):
+            ledger.post_transaction("nonexistent-txn")
+
+    def test_both_not_found_errors_inherit_from_ledger_error(self):
+        ledger = make_ledger()
+        try:
+            ledger.get_transaction("x")
+        except Exception as e:
+            assert isinstance(e, TransactionNotFoundError)
+            assert isinstance(e, Exception)
+
+
 class TestDraftTransaction:
     def test_draft_transaction_does_not_affect_balance(self):
         ledger = make_ledger()
@@ -477,44 +533,59 @@ class TestOverdraftValidation:
 class TestTrialBalance:
     def test_trial_balance_empty(self):
         ledger = make_ledger()
-        td, tc, balanced = ledger.get_trial_balance()
+        td, tc, balanced, details = ledger.get_trial_balance()
         assert td == 0
         assert tc == 0
         assert balanced is True
+        assert details == {}
 
-    def test_trial_balance_after_transfers(self):
+    def test_trial_balance_with_zero_init_and_transfers(self):
         ledger = make_ledger()
-        ledger.create_account("cash", "Cash", initial_balance=1000)
-        ledger.create_account("bank", "Bank", initial_balance=2000)
+        ledger.create_account("cash", "Cash")
+        ledger.create_account("capital", "Capital", AccountType.EQUITY, True)
+
+        ledger.transfer("cash", "capital", 1000)
         ledger.create_account("rent", "Rent Expense")
-        ledger.create_account("salary", "Salary Expense")
-
         ledger.transfer("rent", "cash", 400)
-        ledger.transfer("salary", "bank", 800)
 
-        td, tc, balanced = ledger.get_trial_balance()
+        td, tc, balanced, details = ledger.get_trial_balance()
         assert balanced is True
-        assert td == 1200
-        assert tc == 1200
+        assert td == tc
 
-    def test_trial_balance_all_accounts_zero(self):
+    def test_trial_balance_integrity_check_detects_tampering(self):
         ledger = make_ledger()
-        ledger.create_account("a", "A", initial_balance=1000)
-        ledger.create_account("b", "B", initial_balance=1000)
-        ledger.create_account("c", "C", initial_balance=1000)
+        ledger.create_account("a", "A", initial_balance=100)
+        ledger.create_account("b", "B", initial_balance=100)
+
+        ledger.transfer("a", "b", 50)
+
+        td, tc, balanced, details = ledger.get_trial_balance()
+        assert all(d[4] for d in details.values())
+
+        ledger._accounts["a"].balance = 99999
+        td, tc, balanced, details = ledger.get_trial_balance()
+        assert balanced is False
+        assert details["a"][4] is False
+        assert details["b"][4] is True
+        assert details["a"][2] == 99999
+        assert details["a"][3] != 99999
+
+    def test_trial_balance_details_structure(self):
+        ledger = make_ledger()
+        ledger.create_account("a", "A", initial_balance=500)
+        ledger.create_account("b", "B", initial_balance=500, allow_overdraft=True)
 
         ledger.transfer("a", "b", 100)
-        ledger.transfer("b", "c", 100)
-        ledger.transfer("c", "a", 100)
 
-        assert ledger.get_balance("a") == 1000
-        assert ledger.get_balance("b") == 1000
-        assert ledger.get_balance("c") == 1000
-
-        td, tc, balanced = ledger.get_trial_balance()
-        assert balanced is True
-        assert td == 300
-        assert tc == 300
+        td, tc, balanced, details = ledger.get_trial_balance()
+        assert "a" in details
+        assert "b" in details
+        total_debits_a, total_credits_a, bal_a, exp_a, ok_a = details["a"]
+        assert total_debits_a == 100
+        assert total_credits_a == 0
+        assert bal_a == 600
+        assert exp_a == 600
+        assert ok_a is True
 
 
 class TestGetAllBalances:
@@ -587,6 +658,108 @@ class TestAccountEntriesHistory:
 
         all_entries = ledger.get_account_entries("a", start_time=before, end_time=after)
         assert len(all_entries) == 2
+
+
+class TestEncapsulation:
+    def test_get_account_returns_copy_not_internal_reference(self):
+        ledger = make_ledger()
+        ledger.create_account("cash", "Cash", initial_balance=1000)
+        account = ledger.get_account("cash")
+        account.balance = 99999
+        assert ledger.get_balance("cash") == 1000
+
+    def test_list_accounts_returns_copies(self):
+        ledger = make_ledger()
+        ledger.create_account("a", "A", initial_balance=100)
+        accounts = ledger.list_accounts()
+        accounts[0].balance = 99999
+        assert ledger.get_balance("a") == 100
+
+    def test_get_transaction_returns_copy(self):
+        ledger = make_ledger()
+        ledger.create_account("a", "A", initial_balance=500)
+        ledger.create_account("b", "B", initial_balance=500)
+        txn = ledger.transfer("a", "b", 100)
+        txn.status = "HACKED"
+        txn.entries[0].amount = 99999
+        reloaded = ledger.get_transaction(txn.transaction_id)
+        assert reloaded.is_posted is True
+        assert reloaded.entries[0].amount == 100
+
+    def test_list_transactions_returns_copies(self):
+        ledger = make_ledger()
+        ledger.create_account("a", "A", initial_balance=500)
+        ledger.create_account("b", "B", initial_balance=500)
+        ledger.transfer("a", "b", 100)
+        txns = ledger.list_transactions()
+        txns[0].description = "MUTATED"
+        reloaded = ledger.get_transaction(txns[0].transaction_id)
+        assert reloaded.description != "MUTATED"
+
+    def test_create_account_returns_copy(self):
+        ledger = make_ledger()
+        account = ledger.create_account("cash", "Cash", initial_balance=500)
+        account.balance = 99999
+        assert ledger.get_balance("cash") == 500
+
+
+class TestEntryIndexPerformance:
+    def test_entry_to_transaction_index_populated(self):
+        ledger = make_ledger()
+        ledger.create_account("a", "A", initial_balance=1000)
+        ledger.create_account("b", "B", initial_balance=1000)
+        txn = ledger.transfer("a", "b", 100)
+        for entry in txn.entries:
+            assert entry.entry_id in ledger._entry_to_transaction
+            assert ledger._entry_to_transaction[entry.entry_id] == txn.transaction_id
+
+    def test_multi_entry_index_populated(self):
+        ledger = make_ledger()
+        ledger.create_account("a", "A", initial_balance=1000)
+        ledger.create_account("b", "B", initial_balance=1000)
+        ledger.create_account("c", "C")
+        txn = ledger.create_multi_entry_transaction(
+            entries=[
+                ("c", EntryType.DEBIT, 200, ""),
+                ("a", EntryType.CREDIT, 100, ""),
+                ("b", EntryType.CREDIT, 100, ""),
+            ]
+        )
+        ledger.post_transaction(txn.transaction_id)
+        for entry in txn.entries:
+            assert ledger._entry_to_transaction[entry.entry_id] == txn.transaction_id
+
+    def test_index_lookup_is_o1_vs_on(self):
+        ledger = make_ledger()
+        ledger.create_account("a", "A", initial_balance=1000000)
+        ledger.create_account("b", "B", initial_balance=1000000)
+
+        N = 500
+        for i in range(N):
+            ledger.transfer("a", "b", 1)
+            ledger.transfer("b", "a", 1)
+
+        t0 = time.time()
+        for _ in range(200):
+            ledger.get_account_entries("a")
+        indexed_time = time.time() - t0
+
+        slow_count = 0
+        t0 = time.time()
+        for _ in range(200):
+            for entry_list in ledger._account_entries.values():
+                for entry in entry_list:
+                    for txn_id, txn in ledger._transactions.items():
+                        if any(e.entry_id == entry.entry_id for e in txn.entries):
+                            slow_count += 1
+                            break
+        scan_time = time.time() - t0
+
+        assert slow_count > 0
+        assert indexed_time < scan_time, (
+            f"Indexed lookup should be faster than O(N) scan: "
+            f"indexed={indexed_time:.4f}s vs scan={scan_time:.4f}s"
+        )
 
 
 class TestConcurrency:

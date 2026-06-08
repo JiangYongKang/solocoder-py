@@ -133,9 +133,13 @@ class TieredCoupon(Coupon):
             raise InvalidCouponError("TieredCoupon must have at least one tier")
         sorted_tiers = sorted(self.tiers, key=lambda t: t.min_amount)
         for i in range(len(sorted_tiers) - 1):
-            if sorted_tiers[i].max_amount is None:
+            current = sorted_tiers[i]
+            next_tier = sorted_tiers[i + 1]
+            if current.max_amount is None:
                 raise InvalidCouponError("Only the last tier can have max_amount=None")
-            if sorted_tiers[i + 1].min_amount < sorted_tiers[i].max_amount:
+            if next_tier.min_amount < current.max_amount:
+                raise InvalidCouponError("Tiers must not overlap and must be contiguous")
+            if next_tier.min_amount > current.max_amount:
                 raise InvalidCouponError("Tiers must not overlap and must be contiguous")
         self.tiers = sorted_tiers
 

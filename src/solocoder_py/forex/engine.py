@@ -2,32 +2,36 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
 from .exceptions import (
-    CircularPathDetectedError,
     CurrencyPrecisionNotFoundError,
-    ExchangeRateNotFoundError,
     InvalidExchangeRateError,
     NoConversionPathError,
     PathExplosionError,
-    VersionNotFoundError,
 )
 from .models import (
     ConversionPath,
     ConversionResult,
-    CurrencyPrecision,
     ExchangeRate,
     RoundingMode,
 )
 
+DERIVED_RATE_VERSION = 0
+
 
 class ForexConverter:
-    def __init__(self, max_hops: int = 5) -> None:
+    def __init__(
+        self,
+        max_hops: int = 5,
+        max_paths_explored: int = 1000,
+    ) -> None:
         if max_hops <= 0:
             raise ValueError("max_hops must be positive")
+        if max_paths_explored <= 0:
+            raise ValueError("max_paths_explored must be positive")
         self._max_hops = max_hops
+        self._max_paths_explored = max_paths_explored
         self._rates: Dict[Tuple[str, str], List[ExchangeRate]] = {}
         self._precision: Dict[str, int] = {}
         self._next_version: int = 1
@@ -201,7 +205,7 @@ class ForexConverter:
                 base_currency=source,
                 target_currency=target,
                 rate=1.0 / inverse.rate,
-                version=inverse.version,
+                version=DERIVED_RATE_VERSION,
             )
             return ConversionPath(
                 path=(source, target),
@@ -222,32 +226,43 @@ class ForexConverter:
         target: str,
         version: Optional[int],
     ) -> Tuple[Optional[List[str]], Optional[List[ExchangeRate]]]:
-        queue: deque[Tuple[List[str], List[ExchangeRate], Set[str]]] = deque()
-        queue.append(([source], [], {source}))
+        queue: deque[Tuple[List[str], List[ExchangeRate], Set[str], float]] = deque()
+        queue.append(([source], [], {source}, 1.0))
 
+        best_path: Optional[List[str]] = None
+        best_rates: Optional[List[ExchangeRate]] = None
+        best_product: float = -1.0
+        min_hops_to_target: Optional[int] = None
         paths_explored = 0
-        max_paths = 1000
 
         while queue:
-            current_path, current_rates, visited = queue.popleft()
+            current_path, current_rates, visited, current_product = queue.popleft()
             current = current_path[-1]
+            hops = len(current_path) - 1
 
-            if len(current_path) - 1 > self._max_hops:
-                continue
+            if min_hops_to_target is not None and hops > min_hops_to_target:
+                break
 
             if current == target:
-                return current_path, current_rates
+                if current_product > best_product:
+                    best_product = current_product
+                    best_path = current_path
+                    best_rates = current_rates
+                if min_hops_to_target is None:
+                    min_hops_to_target = hops
+                continue
+
+            if hops >= self._max_hops:
+                continue
 
             neighbors = self._get_neighbors(current, version)
             for neighbor, rate in neighbors:
                 if neighbor in visited:
                     continue
-                if len(current_path) > self._max_hops:
-                    continue
                 paths_explored += 1
-                if paths_explored > max_paths:
+                if paths_explored > self._max_paths_explored:
                     raise PathExplosionError(
-                        f"Path exploration exceeded {max_paths} paths"
+                        f"Path exploration exceeded {self._max_paths_explored} paths"
                     )
                 new_visited = set(visited)
                 new_visited.add(neighbor)
@@ -256,10 +271,11 @@ class ForexConverter:
                         current_path + [neighbor],
                         current_rates + [rate],
                         new_visited,
+                        current_product * rate.rate,
                     )
                 )
 
-        return None, None
+        return best_path, best_rates
 
     def _get_neighbors(
         self,
@@ -284,7 +300,7 @@ class ForexConverter:
                     base_currency=currency,
                     target_currency=b,
                     rate=1.0 / best.rate,
-                    version=best.version,
+                    version=DERIVED_RATE_VERSION,
                 )
                 result.append((b, inverse_rate))
         return result

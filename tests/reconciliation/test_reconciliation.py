@@ -401,15 +401,27 @@ class TestToleranceConfig:
 
 
 class TestTransactionValidation:
-    def test_empty_txn_id_raises(self, base_time):
-        with pytest.raises(ReconciliationError):
-            Transaction(
-                txn_id="",
-                amount=100.0,
-                txn_time=base_time,
-                status=TransactionStatus.SUCCESS,
-                side=TransactionSide.INTERNAL,
-            )
+    def test_none_txn_id_is_allowed(self, base_time):
+        txn = Transaction(
+            txn_id=None,
+            amount=100.0,
+            txn_time=base_time,
+            status=TransactionStatus.SUCCESS,
+            side=TransactionSide.INTERNAL,
+        )
+        assert txn.txn_id is None
+        assert txn.has_txn_id is False
+
+    def test_empty_string_txn_id_is_allowed(self, base_time):
+        txn = Transaction(
+            txn_id="",
+            amount=100.0,
+            txn_time=base_time,
+            status=TransactionStatus.SUCCESS,
+            side=TransactionSide.INTERNAL,
+        )
+        assert txn.txn_id == ""
+        assert txn.has_txn_id is False
 
     def test_negative_amount_raises(self, base_time):
         with pytest.raises(ReconciliationError):
@@ -513,3 +525,123 @@ class TestMixedScenarios:
         assert report.matched_amount == 300.0
         assert report.internal_discrepancy_total_amount == 0
         assert report.channel_discrepancy_total_amount == 0
+
+
+class TestMissingTxnIdFallback:
+    def test_both_sides_missing_txn_id_match_via_fallback(self, default_engine, base_time):
+        internal_records = [
+            {"amount": 150.0, "txn_time": base_time, "status": "success"},
+        ]
+        channel_records = [
+            {"amount": 150.0, "trade_time": base_time, "status": "success"},
+        ]
+        default_engine.import_internal_transactions(internal_records)
+        default_engine.import_channel_transactions(channel_records)
+
+        itxns = default_engine.list_internal_transactions()
+        ctxns = default_engine.list_channel_transactions()
+        assert len(itxns) == 1
+        assert len(ctxns) == 1
+        assert itxns[0].has_txn_id is False
+        assert ctxns[0].has_txn_id is False
+
+        report = default_engine.reconcile()
+        assert report.matched_count == 1
+        assert report.matched_pairs[0].match_type == MatchType.FALLBACK
+        assert report.internal_discrepancy_total_count == 0
+        assert report.channel_discrepancy_total_count == 0
+
+    def test_multiple_missing_txn_id_not_falsely_deduped(self, default_engine, base_time):
+        internal_records = [
+            {"amount": 100.0, "txn_time": base_time, "status": "success"},
+            {"amount": 200.0, "txn_time": base_time + timedelta(minutes=1), "status": "success"},
+        ]
+        channel_records = [
+            {"amount": 100.0, "trade_time": base_time, "status": "success"},
+            {"amount": 200.0, "trade_time": base_time + timedelta(minutes=1), "status": "success"},
+        ]
+        default_engine.import_internal_transactions(internal_records)
+        default_engine.import_channel_transactions(channel_records)
+        assert len(default_engine.list_internal_transactions()) == 2
+        assert len(default_engine.list_channel_transactions()) == 2
+        report = default_engine.reconcile()
+        assert report.matched_count == 2
+        assert report.internal_discrepancy_total_count == 0
+
+
+class TestFallbackAmountPrecision:
+    def test_fallback_amount_minor_float_precision_diff(self, default_engine, base_time):
+        internal_records = [
+            {"amount": 12.345000001, "txn_time": base_time, "status": "success"},
+        ]
+        channel_records = [
+            {"amount": 12.345, "trade_time": base_time, "status": "success"},
+        ]
+        engine = ReconciliationEngine()
+        engine.import_internal_transactions(internal_records)
+        engine.import_channel_transactions(channel_records)
+        report = engine.reconcile()
+        assert report.matched_count == 1
+        assert report.matched_pairs[0].match_type == MatchType.FALLBACK
+        assert abs(report.matched_pairs[0].diff_amount) < 0.001
+
+    def test_fallback_amount_rounded_two_decimals_match(self, default_engine, base_time):
+        internal_records = [
+            {"amount": 99.994, "txn_time": base_time, "status": "success"},
+        ]
+        channel_records = [
+            {"amount": 99.991, "trade_time": base_time, "status": "success"},
+        ]
+        engine = ReconciliationEngine()
+        engine.import_internal_transactions(internal_records)
+        engine.import_channel_transactions(channel_records)
+        report = engine.reconcile()
+        assert report.matched_count == 1
+
+
+class TestFallbackStatusMismatch:
+    def test_fallback_status_mismatch_classified_correctly(self, default_engine, base_time):
+        internal_records = [
+            {"amount": 150.0, "txn_time": base_time, "status": "success"},
+        ]
+        channel_records = [
+            {"amount": 150.0, "trade_time": base_time, "status": "failed"},
+        ]
+        default_engine.import_internal_transactions(internal_records)
+        default_engine.import_channel_transactions(channel_records)
+        report = default_engine.reconcile()
+        assert report.matched_count == 0
+        assert len(report.internal_discrepancies[DiscrepancyType.STATUS_MISMATCH]) == 1
+        assert len(report.channel_discrepancies[DiscrepancyType.STATUS_MISMATCH]) == 1
+        assert len(report.internal_discrepancies[DiscrepancyType.CHANNEL_MISSING]) == 0
+        assert len(report.channel_discrepancies[DiscrepancyType.INTERNAL_MISSING]) == 0
+        disc = report.internal_discrepancies[DiscrepancyType.STATUS_MISMATCH][0]
+        assert "Fallback status mismatch" in disc.detail
+
+
+class TestMatchedAmount口径:
+    def test_matched_amount_uses_channel_amount_after_write_off(self, lenient_engine, base_time):
+        lenient_engine.import_internal_transactions([
+            make_internal_record("T001", 100.0, base_time),
+        ])
+        lenient_engine.import_channel_transactions([
+            make_channel_record("T001", 99.5, base_time),
+        ])
+        report = lenient_engine.reconcile()
+        assert report.matched_count == 1
+        assert report.matched_amount == 99.5
+        assert report.tolerance_write_off_diff_amount == 0.5
+        assert report.internal_total_amount == 100.0
+        assert report.channel_total_amount == 99.5
+
+    def test_exact_match_matched_amount_same_both_sides(self, default_engine, base_time):
+        default_engine.import_internal_transactions([
+            make_internal_record("T001", 250.0, base_time),
+        ])
+        default_engine.import_channel_transactions([
+            make_channel_record("T001", 250.0, base_time),
+        ])
+        report = default_engine.reconcile()
+        assert report.matched_amount == 250.0
+        assert report.internal_total_amount == 250.0
+        assert report.channel_total_amount == 250.0

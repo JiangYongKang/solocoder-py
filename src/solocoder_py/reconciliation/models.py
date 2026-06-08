@@ -58,7 +58,7 @@ class ToleranceConfig:
 
 @dataclass
 class Transaction:
-    txn_id: str
+    txn_id: Optional[str]
     amount: float
     txn_time: datetime
     status: TransactionStatus
@@ -67,10 +67,12 @@ class Transaction:
     order_id: Optional[str] = None
 
     def __post_init__(self) -> None:
-        if not self.txn_id:
-            raise ReconciliationError("Transaction txn_id cannot be empty")
         if self.amount < 0:
             raise ReconciliationError("Transaction amount cannot be negative")
+
+    @property
+    def has_txn_id(self) -> bool:
+        return self.txn_id is not None and self.txn_id != ""
 
 
 @dataclass

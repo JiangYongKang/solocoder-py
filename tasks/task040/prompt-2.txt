@@ -1,0 +1,8 @@
+你实现的支付对账引擎存在几个比较严重的问题，需要修复：
+1. normalize_internal_record 和 normalize_channel_record 用 str(txn_id) 兜底缺失的流水号，导致所有候选字段都缺失时 txn_id 变成字符串 "None"。这个假流水号会使多条缺失流水号的记录因 txn_id 相同被错误去重，且它们彼此间能通过流水号匹配配对。提示词明确说"流水号缺失时的匹配降级"，缺失应该走 fallback 路径匹配，而不是造一个假流水号去参与 ID 匹配。
+2. fallback 匹配用 itxn.amount == ctxn.amount 做浮点精确比较，既没有四舍五入也没有 epsilon 容差保护。不同系统间的金额可能因浮点运算产生微小误差（如 12.345000001 vs 12.345），导致本应匹配的记录匹配失败。
+3. fallback 匹配中，状态不一致的流水在金额和时间也能对上的情况下被直接跳过，后续不再尝试匹配其他候选，最终被分别归为 CHANNEL_MISSING 和 INTERNAL_MISSING。状态不一致这一条差异分类信息就这样丢失了。
+4. matched_amount 的计算只取了 internal_txn.amount，对于容差核销的记录没有使用核销后的金额。汇总报告的"匹配成功金额"与实际核销金额口径不一致，两个金额对不上。
+5. 修复后需要为该模块补充流水号真正缺失（两边记录都没有 txn_id 字段）、fallback 金额微小差异比较、状态不一致差异正确分类的单元测试。
+6. 更新 README.md，说明流水号缺失时的降级匹配策略、fallback 金额比较的精度约定以及匹配金额的口径定义。
+7. 重新运行 poetry run pytest tests/reconciliation/ -q，需要让所有测试通过。

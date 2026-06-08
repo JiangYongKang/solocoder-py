@@ -462,3 +462,137 @@ class TestDetailAccuracy:
         assert len(capped_details) == 1
         assert capped_details[0].coupon_id == "c2"
         assert capped_details[0].discount_amount == 5.0
+
+
+class TestTieredCouponContiguity:
+    def test_tiers_with_gap_raises(self):
+        tiers = [
+            Tier(0, 50, TierDiscountType.FIXED_AMOUNT, 5),
+            Tier(100, 200, TierDiscountType.FIXED_AMOUNT, 20),
+        ]
+        with pytest.raises(InvalidCouponError, match="contiguous"):
+            make_tiered_coupon("c1", tiers=tiers)
+
+    def test_tiers_with_large_gap_raises(self):
+        tiers = [
+            Tier(0, 100, TierDiscountType.PERCENTAGE, 0.05),
+            Tier(500, None, TierDiscountType.PERCENTAGE, 0.15),
+        ]
+        with pytest.raises(InvalidCouponError, match="contiguous"):
+            make_tiered_coupon("c1", tiers=tiers)
+
+    def test_tiers_contiguous_accepted(self):
+        tiers = [
+            Tier(0, 100, TierDiscountType.FIXED_AMOUNT, 5),
+            Tier(100, 300, TierDiscountType.FIXED_AMOUNT, 20),
+            Tier(300, None, TierDiscountType.FIXED_AMOUNT, 50),
+        ]
+        coupon = make_tiered_coupon("c1", tiers=tiers)
+        assert len(coupon.tiers) == 3
+
+    def test_tiers_overlap_raises(self):
+        tiers = [
+            Tier(0, 100, TierDiscountType.FIXED_AMOUNT, 5),
+            Tier(50, 200, TierDiscountType.FIXED_AMOUNT, 20),
+        ]
+        with pytest.raises(InvalidCouponError, match="contiguous"):
+            make_tiered_coupon("c1", tiers=tiers)
+
+
+class TestGlobalCapRollbackChainConsistency:
+    def test_multi_coupon_rollback_chain_consistent(self):
+        engine = make_engine(global_max_discount=25)
+        c1 = make_fixed_coupon("c1", 0, 15, priority=3, mutex_groups=["g1"])
+        c2 = make_fixed_coupon("c2", 0, 10, priority=2, mutex_groups=["g2"])
+        c3 = make_fixed_coupon("c3", 0, 10, priority=1, mutex_groups=["g3"])
+        result = engine.calculate(100.0, [c3, c1, c2])
+
+        assert result.total_discount == 25.0
+        assert result.final_amount == 75.0
+        assert result.global_capped is True
+
+        applied = [d for d in result.details if d.applied]
+        applied.sort(key=lambda d: (-d.amount_before, d.coupon_id))
+        assert len(applied) == 3
+
+        prev_after = result.original_amount
+        for d in applied:
+            assert d.amount_before == pytest.approx(prev_after)
+            assert d.amount_after == pytest.approx(d.amount_before - d.discount_amount)
+            prev_after = d.amount_after
+        assert prev_after == pytest.approx(result.final_amount)
+
+    def test_five_coupons_rollback_chain_consistent(self):
+        engine = make_engine(global_max_discount=30)
+        coupons = []
+        for i in range(5):
+            coupons.append(make_fixed_coupon(
+                f"c{i}", 0, 10, priority=5 - i, mutex_groups=[f"g{i}"]
+            ))
+        result = engine.calculate(200.0, coupons)
+
+        assert result.global_capped is True
+        assert result.total_discount == 30.0
+
+        applied = [d for d in result.details if d.applied]
+        applied.sort(key=lambda d: -d.amount_before)
+
+        prev = result.original_amount
+        for d in applied:
+            assert d.amount_before == pytest.approx(prev)
+            assert d.amount_after == pytest.approx(d.amount_before - d.discount_amount)
+            prev = d.amount_after
+        assert prev == pytest.approx(result.final_amount)
+
+    def test_rollback_sum_matches_total_discount(self):
+        engine = make_engine(global_max_discount=22)
+        c1 = make_percentage_coupon("c1", 0, 0.2, priority=2, mutex_groups=["g1"])
+        c2 = make_fixed_coupon("c2", 0, 15, priority=1, mutex_groups=["g2"])
+        result = engine.calculate(100.0, [c1, c2])
+
+        assert result.global_capped is True
+        applied_discounts = sum(d.discount_amount for d in result.details if d.applied)
+        assert applied_discounts == pytest.approx(result.total_discount)
+        assert applied_discounts == pytest.approx(22.0)
+
+
+class TestInputImmutability:
+    def test_calculate_does_not_mutate_input_coupons(self):
+        coupon = make_fixed_coupon("c1", threshold=100, discount_amount=20)
+        original_mutex_groups = list(coupon.mutex_groups)
+        original_name = coupon.name
+
+        engine = make_engine()
+        engine.calculate(200.0, [coupon])
+
+        assert coupon.mutex_groups == original_mutex_groups
+        assert coupon.name == original_name
+
+    def test_calculate_does_not_mutate_multiple_inputs(self):
+        tiers = [Tier(0, None, TierDiscountType.FIXED_AMOUNT, 5)]
+        c1 = make_fixed_coupon("c1", 0, 10, mutex_groups=[])
+        c2 = make_tiered_coupon("c2", tiers=tiers, mutex_groups=[])
+        c1_groups_before = list(c1.mutex_groups)
+        c2_groups_before = list(c2.mutex_groups)
+        assert len(c1_groups_before) == 0
+        assert len(c2_groups_before) == 0
+
+        engine = make_engine()
+        engine.calculate(100.0, [c1, c2])
+
+        assert c1.mutex_groups == c1_groups_before
+        assert c2.mutex_groups == c2_groups_before
+        assert len(c1.mutex_groups) == 0
+        assert len(c2.mutex_groups) == 0
+
+    def test_custom_mutex_groups_preserved(self):
+        c1 = make_fixed_coupon("c1", 0, 10, mutex_groups=["custom-group"])
+        c2 = make_fixed_coupon("c2", 0, 10, mutex_groups=["custom-group"])
+        groups_before_1 = list(c1.mutex_groups)
+        groups_before_2 = list(c2.mutex_groups)
+
+        engine = make_engine(auto_resolve_mutex=True)
+        engine.calculate(100.0, [c1, c2])
+
+        assert c1.mutex_groups == groups_before_1
+        assert c2.mutex_groups == groups_before_2

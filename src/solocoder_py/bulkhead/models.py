@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Optional
-from uuid import uuid4
 
 from .exceptions import InvalidConfigError
 
@@ -75,5 +74,9 @@ class _TaskWrapper:
     args: tuple
     kwargs: dict
     submitted_at: float
-    timeout_deadline: Optional[float] = None
-    result: Optional[TaskResult] = None
+
+
+@dataclass
+class _AcquireWaiter:
+    task_id: str
+    submitted_at: float

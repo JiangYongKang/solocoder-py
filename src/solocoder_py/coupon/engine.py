@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -27,15 +27,23 @@ DEFAULT_TIERED_MUTEX_GROUP = "tiered"
 
 
 def _apply_default_mutex_groups(coupons: List[Coupon]) -> List[Coupon]:
+    result: List[Coupon] = []
     for c in coupons:
-        if not c.mutex_groups:
-            if isinstance(c, FixedAmountCoupon):
-                c.mutex_groups = [DEFAULT_FIXED_MUTEX_GROUP]
-            elif isinstance(c, PercentageCoupon):
-                c.mutex_groups = [DEFAULT_PERCENTAGE_MUTEX_GROUP]
-            elif isinstance(c, TieredCoupon):
-                c.mutex_groups = [DEFAULT_TIERED_MUTEX_GROUP]
-    return coupons
+        if c.mutex_groups:
+            result.append(c)
+            continue
+        default_group: Optional[str] = None
+        if isinstance(c, FixedAmountCoupon):
+            default_group = DEFAULT_FIXED_MUTEX_GROUP
+        elif isinstance(c, PercentageCoupon):
+            default_group = DEFAULT_PERCENTAGE_MUTEX_GROUP
+        elif isinstance(c, TieredCoupon):
+            default_group = DEFAULT_TIERED_MUTEX_GROUP
+        if default_group is not None:
+            result.append(replace(c, mutex_groups=[default_group]))
+        else:
+            result.append(c)
+    return result
 
 
 @dataclass
@@ -200,10 +208,6 @@ class CouponEngine:
         if self.global_max_discount is not None and total_discount >= self.global_max_discount and total_discount > 0:
             excess = total_discount - self.global_max_discount
             total_discount = self.global_max_discount
-            current_amount = order_amount - total_discount
-            if current_amount < 0:
-                current_amount = 0.0
-                total_discount = order_amount
             global_capped = True
 
             applied_details = [d for d in details if d.applied]
@@ -213,11 +217,24 @@ class CouponEngine:
                     if remaining_excess <= 0:
                         break
                     reduce = min(d.discount_amount, remaining_excess)
-                    d.discount_amount -= reduce
-                    d.amount_after += reduce
-                    remaining_excess -= reduce
                     if reduce > 0:
+                        d.discount_amount -= reduce
                         d.capped = True
+                    remaining_excess -= reduce
+
+                running_amount = applied_details[0].amount_before
+                for d in applied_details:
+                    d.amount_before = running_amount
+                    d.amount_after = running_amount - d.discount_amount
+                    if d.amount_after < 0:
+                        d.discount_amount = running_amount
+                        d.amount_after = 0.0
+                    running_amount = d.amount_after
+
+            current_amount = order_amount - total_discount
+            if current_amount < 0:
+                current_amount = 0.0
+                total_discount = order_amount
 
         return CalculationResult(
             original_amount=order_amount,

@@ -48,7 +48,7 @@ class TestTrialToActiveRenewFlow:
         assert sub.current_cycle_start == date(2024, 1, 1)
         assert sub.current_cycle_end == date(2024, 2, 1)
 
-        renew_time = datetime(2024, 1, 15, 10, 0, 0)
+        renew_time = datetime(2024, 2, 1, 10, 0, 0)
         sub.renew(now=renew_time)
         assert sub.state == SubscriptionState.ACTIVE
         assert sub.current_cycle_start == date(2024, 2, 1)
@@ -60,7 +60,7 @@ class TestTrialToActiveRenewFlow:
         assert sub.current_cycle_start == date(2024, 1, 1)
         assert sub.current_cycle_end == date(2024, 4, 1)
 
-        renew_time = datetime(2024, 3, 15, 10, 0, 0)
+        renew_time = datetime(2024, 4, 1, 10, 0, 0)
         sub.renew(now=renew_time)
         assert sub.current_cycle_start == date(2024, 4, 1)
         assert sub.current_cycle_end == date(2024, 7, 1)
@@ -89,10 +89,124 @@ class TestTrialToActiveRenewFlow:
 
     def test_state_history_includes_relevant_ops(self):
         sub = make_active_subscription()
+        renew_time = datetime(2024, 2, 1, 10, 0, 0)
+        sub.renew(now=renew_time)
         history = sub.state_history
         op_types = [op.operation_type for op in history]
         assert OperationType.CREATE in op_types
         assert OperationType.ACTIVATE in op_types
+        assert OperationType.RENEW in op_types
+
+
+class TestEndOfMonthDateHandling:
+    def test_monthly_jan_31_to_feb_non_leap_year(self):
+        plan = make_pro_monthly_plan()
+        activated_at = datetime(2023, 1, 31, 10, 0, 0)
+        sub = make_active_subscription(plan=plan, activated_at=activated_at)
+        assert sub.current_cycle_start == date(2023, 1, 31)
+        assert sub.current_cycle_end == date(2023, 2, 28)
+
+    def test_monthly_jan_31_to_feb_leap_year(self):
+        plan = make_pro_monthly_plan()
+        activated_at = datetime(2024, 1, 31, 10, 0, 0)
+        sub = make_active_subscription(plan=plan, activated_at=activated_at)
+        assert sub.current_cycle_start == date(2024, 1, 31)
+        assert sub.current_cycle_end == date(2024, 2, 29)
+
+    def test_monthly_mar_31_to_april(self):
+        plan = make_pro_monthly_plan()
+        activated_at = datetime(2024, 3, 31, 10, 0, 0)
+        sub = make_active_subscription(plan=plan, activated_at=activated_at)
+        assert sub.current_cycle_start == date(2024, 3, 31)
+        assert sub.current_cycle_end == date(2024, 4, 30)
+
+    def test_monthly_dec_31_to_jan(self):
+        plan = make_pro_monthly_plan()
+        activated_at = datetime(2024, 12, 31, 10, 0, 0)
+        sub = make_active_subscription(plan=plan, activated_at=activated_at)
+        assert sub.current_cycle_start == date(2024, 12, 31)
+        assert sub.current_cycle_end == date(2025, 1, 31)
+
+    def test_quarterly_jan_31_to_april(self):
+        plan = make_pro_quarterly_plan()
+        activated_at = datetime(2024, 1, 31, 10, 0, 0)
+        sub = make_active_subscription(plan=plan, activated_at=activated_at)
+        assert sub.current_cycle_start == date(2024, 1, 31)
+        assert sub.current_cycle_end == date(2024, 4, 30)
+
+    def test_quarterly_nov_30_to_feb(self):
+        plan = make_pro_quarterly_plan()
+        activated_at = datetime(2024, 11, 30, 10, 0, 0)
+        sub = make_active_subscription(plan=plan, activated_at=activated_at)
+        assert sub.current_cycle_start == date(2024, 11, 30)
+        assert sub.current_cycle_end == date(2025, 2, 28)
+
+    def test_yearly_leap_day_feb_29(self):
+        plan = make_pro_yearly_plan()
+        activated_at = datetime(2024, 2, 29, 10, 0, 0)
+        sub = make_active_subscription(plan=plan, activated_at=activated_at)
+        assert sub.current_cycle_start == date(2024, 2, 29)
+        assert sub.current_cycle_end == date(2025, 2, 28)
+
+    def test_renew_from_end_of_month_preserves_end_of_month(self):
+        plan = make_pro_monthly_plan()
+        activated_at = datetime(2024, 1, 31, 10, 0, 0)
+        sub = make_active_subscription(plan=plan, activated_at=activated_at)
+        assert sub.current_cycle_end == date(2024, 2, 29)
+
+        renew_time = datetime(2024, 2, 29, 10, 0, 0)
+        sub.renew(now=renew_time)
+        assert sub.current_cycle_start == date(2024, 2, 29)
+        assert sub.current_cycle_end == date(2024, 3, 29)
+
+
+class TestAutoDowngradeOnExpiry:
+    def test_downgrade_pending_auto_applies_on_cycle_end(self):
+        sub = make_active_subscription()
+        basic_plan = make_basic_monthly_plan()
+        downgrade_time = datetime(2024, 1, 10, 10, 0, 0)
+        sub.downgrade(basic_plan, now=downgrade_time)
+        assert sub.state == SubscriptionState.DOWNGRADE_PENDING
+        assert sub.plan.name == "pro-monthly"
+
+        check_time = datetime(2024, 2, 1, 10, 0, 0)
+        sub.check_expiry(now=check_time)
+
+        assert sub.state == SubscriptionState.ACTIVE
+        assert sub.plan.name == "basic-monthly"
+        assert sub.downgrade_request is None
+        assert sub.current_cycle_start == date(2024, 2, 1)
+        assert sub.current_cycle_end == date(2024, 3, 1)
+
+    def test_auto_downgrade_records_operation(self):
+        sub = make_active_subscription()
+        basic_plan = make_basic_monthly_plan()
+        downgrade_time = datetime(2024, 1, 10, 10, 0, 0)
+        sub.downgrade(basic_plan, now=downgrade_time)
+
+        check_time = datetime(2024, 2, 1, 10, 0, 0)
+        sub.check_expiry(now=check_time)
+
+        apply_ops = [
+            op for op in sub.operations
+            if op.operation_type == OperationType.DOWNGRADE_APPLY
+        ]
+        assert len(apply_ops) == 1
+        assert apply_ops[0].reason == "到期自动降级生效"
+        assert "basic-monthly" in apply_ops[0].detail
+
+    def test_no_auto_downgrade_before_cycle_end(self):
+        sub = make_active_subscription()
+        basic_plan = make_basic_monthly_plan()
+        downgrade_time = datetime(2024, 1, 10, 10, 0, 0)
+        sub.downgrade(basic_plan, now=downgrade_time)
+
+        check_time = datetime(2024, 1, 31, 10, 0, 0)
+        sub.check_expiry(now=check_time)
+
+        assert sub.state == SubscriptionState.DOWNGRADE_PENDING
+        assert sub.plan.name == "pro-monthly"
+        assert sub.downgrade_request is not None
 
 
 class TestDowngradeFlow:
@@ -114,7 +228,7 @@ class TestDowngradeFlow:
         downgrade_time = datetime(2024, 1, 10, 10, 0, 0)
         sub.downgrade(basic_plan, now=downgrade_time)
 
-        renew_time = datetime(2024, 1, 31, 10, 0, 0)
+        renew_time = datetime(2024, 2, 1, 10, 0, 0)
         sub.renew(now=renew_time)
 
         assert sub.state == SubscriptionState.ACTIVE

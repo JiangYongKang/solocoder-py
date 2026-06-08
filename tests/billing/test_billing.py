@@ -12,6 +12,7 @@ from solocoder_py.billing import (
     PeriodSettledError,
     PricingNotFoundError,
     PricingTier,
+    ResourceNotFoundError,
 )
 
 from .conftest import (
@@ -464,12 +465,38 @@ class TestBillQuery:
 
 
 class TestExceptionCases:
-    def test_report_usage_for_unpriced_resource_raises(self):
+    def test_report_usage_for_unknown_resource_raises(self):
         engine = BillingEngine()
         _, period = open_standard_period(engine)
 
-        with pytest.raises(PricingNotFoundError):
+        with pytest.raises(ResourceNotFoundError):
             engine.report_usage(ACC, "no-such-resource", 10, reported_at=in_period(period, 1))
+
+    def test_report_usage_for_resource_pricing_not_effective_yet_raises(self):
+        engine = BillingEngine()
+        period_start = datetime(2024, 1, 1)
+        pricing_effective = datetime(2024, 1, 15)
+        engine.configure_tiered_pricing(
+            RES,
+            make_simple_tier(1.0),
+            effective_from=pricing_effective,
+        )
+        _, period = open_standard_period(engine, base_day=1)
+
+        with pytest.raises(PricingNotFoundError):
+            engine.report_usage(ACC, RES, 10, reported_at=datetime(2024, 1, 5))
+
+    def test_get_bills_for_unknown_account_raises(self):
+        engine = BillingEngine()
+        from solocoder_py.billing import AccountNotFoundError
+        with pytest.raises(AccountNotFoundError):
+            engine.get_bills("ghost-account")
+
+    def test_get_bill_for_unknown_account_raises(self):
+        engine = BillingEngine()
+        from solocoder_py.billing import AccountNotFoundError
+        with pytest.raises(AccountNotFoundError):
+            engine.get_bill("ghost-account", "fake-bill-id")
 
     def test_future_usage_timestamp_raises(self):
         engine = build_engine_with_single_tier(RES, 1.0)
@@ -528,3 +555,235 @@ class TestExceptionCases:
 
         with pytest.raises(InvalidPeriodError):
             engine.settle_period(end_time=period.end_time + timedelta(days=1))
+
+
+class TestPricingEffectiveTimeBoundary:
+    def test_usage_reported_exactly_at_pricing_effective_time_accepted(self):
+        engine = BillingEngine()
+        period_start = datetime(2024, 1, 1)
+        pricing_effective = datetime(2024, 1, 10)
+        engine.configure_tiered_pricing(
+            RES,
+            make_simple_tier(1.0),
+            effective_from=pricing_effective,
+        )
+        engine.open_period(period_start, timedelta(days=30))
+
+        engine.report_usage(ACC, RES, 10, reported_at=pricing_effective)
+        assert engine.get_current_usage(ACC, RES) == 10
+
+    def test_usage_reported_right_after_pricing_effective_accepted(self):
+        engine = BillingEngine()
+        period_start = datetime(2024, 1, 1)
+        pricing_effective = datetime(2024, 1, 10)
+        engine.configure_tiered_pricing(
+            RES,
+            make_simple_tier(1.0),
+            effective_from=pricing_effective,
+        )
+        engine.open_period(period_start, timedelta(days=30))
+
+        engine.report_usage(ACC, RES, 10, reported_at=pricing_effective + timedelta(seconds=1))
+        assert engine.get_current_usage(ACC, RES) == 10
+
+    def test_usage_reported_right_before_pricing_effective_rejected(self):
+        engine = BillingEngine()
+        period_start = datetime(2024, 1, 1)
+        pricing_effective = datetime(2024, 1, 10, 0, 0, 0)
+        engine.configure_tiered_pricing(
+            RES,
+            make_simple_tier(1.0),
+            effective_from=pricing_effective,
+        )
+        engine.open_period(period_start, timedelta(days=30))
+
+        just_before = pricing_effective - timedelta(seconds=1)
+        with pytest.raises(PricingNotFoundError):
+            engine.report_usage(ACC, RES, 10, reported_at=just_before)
+
+    def test_usage_reported_after_two_price_changes_uses_latest(self):
+        engine = BillingEngine()
+        period_start = datetime(2024, 1, 1)
+        engine.configure_tiered_pricing(
+            RES, make_simple_tier(1.0), effective_from=datetime(2024, 1, 1)
+        )
+        engine.configure_tiered_pricing(
+            RES, make_simple_tier(2.0), effective_from=datetime(2024, 1, 15)
+        )
+        engine.open_period(period_start, timedelta(days=30))
+        period = engine.get_current_period()
+
+        engine.report_usage(ACC, RES, 100, reported_at=datetime(2024, 1, 20))
+        estimates = engine.estimate_current_cost(ACC)
+        line = estimates[RES]
+        first_split = line.proportional_splits[0]
+        second_split = line.proportional_splits[1]
+        assert first_split.tier_details[0].unit_price == 1.0
+        assert second_split.tier_details[0].unit_price == 2.0
+
+
+class TestAmountPrecision:
+    def test_bill_amount_rounds_to_two_decimals(self):
+        engine = BillingEngine(amount_precision=2)
+        _, period = open_standard_period(engine)
+        engine.configure_tiered_pricing(
+            RES, make_simple_tier(0.3333333), effective_from=period.start_time
+        )
+
+        engine.report_usage(ACC, RES, 100, reported_at=in_period(period, 1))
+        bills = engine.settle_period()
+
+        assert len(bills) == 1
+        assert bills[0].total_amount == pytest.approx(33.33)
+
+    def test_tier_costs_are_rounded(self):
+        engine = BillingEngine(amount_precision=2)
+        _, period = open_standard_period(engine)
+        engine.configure_tiered_pricing(
+            RES,
+            [
+                PricingTier(min_units=0, max_units=100, unit_price=0.123456),
+                PricingTier(min_units=100, max_units=None, unit_price=0.654321),
+            ],
+            effective_from=period.start_time,
+        )
+
+        engine.report_usage(ACC, RES, 150, reported_at=in_period(period, 1))
+        bills = engine.settle_period()
+        line = bills[0].line_items[0]
+        split = line.proportional_splits[0]
+
+        first_tier = split.tier_details[0]
+        assert first_tier.tier_cost == pytest.approx(12.35)
+
+        second_tier = split.tier_details[1]
+        assert second_tier.tier_cost == pytest.approx(32.72)
+
+        assert line.total_cost == pytest.approx(12.35 + 32.72)
+
+    def test_custom_precision(self):
+        engine = BillingEngine(amount_precision=4)
+        _, period = open_standard_period(engine)
+        engine.configure_tiered_pricing(
+            RES, make_simple_tier(0.1234567), effective_from=period.start_time
+        )
+
+        engine.report_usage(ACC, RES, 1, reported_at=in_period(period, 1))
+        bills = engine.settle_period()
+        assert bills[0].total_amount == pytest.approx(0.1235)
+
+
+class TestConcurrency:
+    def test_concurrent_report_usage_consistency(self):
+        import threading
+
+        engine = build_engine_with_single_tier(RES, 1.0)
+        _, period = open_standard_period(engine)
+        report_time = in_period(period, 1)
+
+        num_threads = 10
+        reports_per_thread = 100
+        units_per_report = 1.0
+
+        errors: list[Exception] = []
+
+        def worker():
+            try:
+                for _ in range(reports_per_thread):
+                    engine.report_usage(
+                        ACC, RES, units_per_report, reported_at=report_time
+                    )
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+        expected = num_threads * reports_per_thread * units_per_report
+        assert engine.get_current_usage(ACC, RES) == pytest.approx(expected)
+
+    def test_concurrent_read_write_no_crash(self):
+        import threading
+
+        engine = build_engine_with_single_tier(RES, 1.0)
+        _, period = open_standard_period(engine)
+        report_time = in_period(period, 1)
+
+        errors: list[Exception] = []
+        stop_flag = threading.Event()
+
+        def writer():
+            try:
+                for i in range(200):
+                    engine.report_usage(
+                        ACC, RES, 1.0, reported_at=report_time
+                    )
+            except Exception as e:
+                errors.append(e)
+            finally:
+                stop_flag.set()
+
+        def reader():
+            try:
+                while not stop_flag.is_set():
+                    _ = engine.get_current_usage(ACC, RES)
+                    _ = engine.get_current_period()
+                    _ = engine.list_periods()
+                    _ = engine.estimate_current_cost(ACC)
+                    _ = engine.list_bills()
+            except Exception as e:
+                errors.append(e)
+
+        t_writer = threading.Thread(target=writer)
+        t_reader = threading.Thread(target=reader)
+        t_reader.start()
+        t_writer.start()
+        t_writer.join()
+        t_reader.join()
+
+        assert len(errors) == 0
+
+    def test_concurrent_settle_and_report_consistent(self):
+        import threading
+
+        engine = build_engine_with_single_tier(RES, 1.0)
+        _, period = open_standard_period(engine)
+        report_time = in_period(period, 1)
+
+        errors: list[Exception] = []
+
+        for i in range(50):
+            engine.report_usage(ACC, RES, 1.0, reported_at=report_time)
+
+        def reporter():
+            try:
+                for _ in range(50):
+                    try:
+                        engine.report_usage(
+                            ACC, RES, 1.0, reported_at=report_time
+                        )
+                    except (PeriodSettledError, BillingError):
+                        break
+            except Exception as e:
+                errors.append(e)
+
+        def settler():
+            try:
+                engine.settle_period()
+            except (BillingError, PeriodSettledError):
+                pass
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=reporter)
+        t2 = threading.Thread(target=settler)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert len(errors) == 0

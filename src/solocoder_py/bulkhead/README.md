@@ -156,18 +156,19 @@ current_concurrency < max ?
 
 ## 故障隔离策略
 
-1. **槽位始终释放**：无论任务是正常返回、抛出业务异常（`Exception` 子类），
-   还是系统级异常（`BaseException` 子类，如 `KeyboardInterrupt`），`finally` 块都会
-   确保释放已占用的并发槽位，并通过条件变量通知等待队列。这避免了因任务异常
-   导致的槽位泄漏。
+1. **槽位始终释放**：无论任务是正常返回，还是在执行中抛出任何异常，
+   `finally` 块都会确保释放已占用的并发槽位，并通过条件变量通知等待队列。
+   这避免了因任务异常导致的槽位泄漏。
 
 2. **失败不跨组传播**：每个资源组的 `success_count` / `failure_count` 独立统计，
    某个资源组的任务连续失败不会影响其他资源组的并发调度。
 
-3. **业务异常与系统异常区分**：`submit()` 仅捕获 `Exception` 子类并将其封装为
-   `TaskResult(status=FAILED)` 正常返回；`BaseException`（如 `SystemExit`、
-   `KeyboardInterrupt`）会原样向上抛出，但槽位依然会被正确释放。
-   `acquire()` 上下文管理器不捕获任何异常，全部交由调用方处理，只保证 `finally` 中释放槽位。
+3. **异常处理策略**：`submit()` 仅捕获 `Exception` 子类并将其封装为
+   `TaskResult(status=FAILED)` 正常返回，以便调用方统一处理业务异常。
+   对于更底层的异常（如 `SystemExit`、`KeyboardInterrupt`），不会被捕获封装，
+   而是原样向上抛出，但并发槽位依然会通过 `finally` 块被正确释放。
+   `acquire()` 上下文管理器不捕获任何异常，全部交由调用方处理，
+   只保证 `finally` 中释放槽位。
 
 4. **可配置降级策略**：每个资源组可独立配置 `REJECT` 或 `QUEUE` 策略，
    为关键业务组和非关键业务组设置不同的服务等级。

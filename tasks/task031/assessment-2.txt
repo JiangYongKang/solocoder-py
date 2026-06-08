@@ -1,0 +1,6 @@
+产物不满意：
+1. README.md 中 clear() 触发规则的描述与代码实际行为不一致——"线程安全与异常隔离"章节和"clear() 触发"部分都写阻塞模式 dequeue 被 clear 唤醒后可能"重新阻塞"，但代码通过 _clear_epoch 检测到 clear 后直接 return None，被唤醒的消费者根本不会重新进入阻塞等待。
+2. 新增测试 test_callback_can_safely_enqueue_dequeue_without_deadlock 的变量命名有误导性——字典名叫 enqueue_result 但回调里实际执行的是 dequeue，验证的也是 dequeue 成功与否，名字和语义对不上。
+过程不满意：
+1. 模型收到提示词后第一件事就是创建 TodoList 并开始重写 queue.py，中间没有先阅读现有代码、分析根因或梳理影响范围，直接跳过了评估阶段就动手编码，不符合标注规范中"先分析问题再规划"的要求。
+2. 第一次实现中模型给 clear() 加了 _not_empty.notify_all() 就认为修好了，没有提前想到消费者被唤醒后发现队列为空会重新进入 wait() 的问题，运行测试失败后才补 _clear_epoch 机制。说明模型在编码前没有充分推演 clear 唤醒后的完整线程调度路径。

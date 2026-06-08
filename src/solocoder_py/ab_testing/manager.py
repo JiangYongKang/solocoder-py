@@ -25,8 +25,7 @@ from .models import (
 class _MutexGroupInfo:
     def __init__(self, name: str) -> None:
         self.name = name
-        self.bucket_start: Optional[int] = None
-        self.bucket_end: Optional[int] = None
+        self.buckets: list[int] = []
         self.total_traffic: int = 0
         self.experiments: list[str] = []
 
@@ -119,23 +118,30 @@ class ABTestManager:
             raise ValueError("user_id must not be empty")
 
         with self._lock:
-            bucket = StableHashBucketer.get_global_bucket(user_id)
-            owner = self._bucket_owner[bucket]
+            return self._compute_allocation(user_id)
 
-            if owner is None:
-                allocation = BucketAllocation(experiment_name=None, bucket=bucket)
-            elif owner["type"] == "experiment":
-                allocation = BucketAllocation(
-                    experiment_name=owner["name"], bucket=bucket
-                )
-            else:
-                group_name = owner["name"]
-                exp_name = self._resolve_within_mutex_group(user_id, group_name)
-                allocation = BucketAllocation(experiment_name=exp_name, bucket=bucket)
+    def record_user_allocation(self, user_id: str) -> BucketAllocation:
+        if not user_id:
+            raise ValueError("user_id must not be empty")
 
+        with self._lock:
+            allocation = self._compute_allocation(user_id)
             key = allocation.experiment_name or "__control__"
             self._user_stats[key] = self._user_stats.get(key, 0) + 1
             return allocation
+
+    def _compute_allocation(self, user_id: str) -> BucketAllocation:
+        bucket = StableHashBucketer.get_global_bucket(user_id)
+        owner = self._bucket_owner[bucket]
+
+        if owner is None:
+            return BucketAllocation(experiment_name=None, bucket=bucket)
+        elif owner["type"] == "experiment":
+            return BucketAllocation(experiment_name=owner["name"], bucket=bucket)
+        else:
+            group_name = owner["name"]
+            exp_name = self._resolve_within_mutex_group(user_id, group_name)
+            return BucketAllocation(experiment_name=exp_name, bucket=bucket)
 
     def get_bucket_occupancy(self) -> list[BucketOccupancy]:
         with self._lock:
@@ -161,7 +167,7 @@ class ABTestManager:
                             BucketOccupancy(bucket=bucket_idx, experiment_name=None)
                         )
                     else:
-                        within_bucket = bucket_idx - group.bucket_start
+                        within_bucket = group.buckets.index(bucket_idx)
                         exp_name = self._map_within_bucket_to_experiment(
                             group_name, within_bucket
                         )
@@ -248,22 +254,18 @@ class ABTestManager:
                 raise TrafficOverflowError(
                     f"cannot find {traffic} contiguous free buckets for mutex group"
                 )
-            group.bucket_start = start
-            group.bucket_end = start + traffic - 1
-            group.total_traffic = traffic
             for i in range(traffic):
-                self._bucket_owner[start + i] = {"type": "mutex_group", "name": group_name}
+                bucket = start + i
+                self._bucket_owner[bucket] = {"type": "mutex_group", "name": group_name}
+                group.buckets.append(bucket)
+            group.total_traffic = traffic
             self._mutex_groups[group_name] = group
         else:
             group = self._mutex_groups[group_name]
-            new_total = group.total_traffic + traffic
-            used = self._get_used_traffic()
-            current_group_size = group.total_traffic
             extra_needed = traffic
 
-            if new_total <= current_group_size:
-                pass
-            else:
+            if extra_needed > 0:
+                used = self._get_used_traffic()
                 if used + extra_needed > 100:
                     raise TrafficOverflowError(
                         f"cannot expand mutex group '{group_name}' by {traffic}%, "
@@ -275,16 +277,18 @@ class ABTestManager:
                         f"cannot find {extra_needed} contiguous free buckets to expand mutex group"
                     )
                 for i in range(extra_needed):
-                    self._bucket_owner[extra_start + i] = {
+                    bucket = extra_start + i
+                    self._bucket_owner[bucket] = {
                         "type": "mutex_group",
                         "name": group_name,
                     }
-                group.bucket_end = extra_start + extra_needed - 1
-                group.total_traffic = new_total
+                    group.buckets.append(bucket)
+                group.total_traffic += extra_needed
 
         group.experiments.append(experiment.name)
-        experiment.bucket_start = group.bucket_start
-        experiment.bucket_end = group.bucket_end
+        if group.buckets:
+            experiment.bucket_start = group.buckets[0]
+            experiment.bucket_end = group.buckets[-1]
 
     def _release_buckets(self, experiment: Experiment) -> None:
         if experiment.mutex_group:
@@ -306,9 +310,13 @@ class ABTestManager:
             group.experiments.remove(experiment.name)
 
         if not group.experiments:
-            if group.bucket_start is not None and group.bucket_end is not None:
-                for i in range(group.bucket_start, group.bucket_end + 1):
-                    self._bucket_owner[i] = None
+            for bucket in group.buckets:
+                if (
+                    self._bucket_owner[bucket] is not None
+                    and self._bucket_owner[bucket].get("type") == "mutex_group"
+                    and self._bucket_owner[bucket].get("name") == group_name
+                ):
+                    self._bucket_owner[bucket] = None
             del self._mutex_groups[group_name]
 
     def _get_used_traffic(self) -> int:

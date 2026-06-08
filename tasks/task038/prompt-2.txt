@@ -1,0 +1,11 @@
+你实现的订阅生命周期域存在几个比较严重的问题，需要修复：
+1. _add_cycle 用 date.replace(month=…) 推算下个周期，但起始日在月末（如 1 月 31 日月付、3 月 31 日月付）时，目标月份没有该日期会直接崩溃。比如从 1 月 31 日加一个月，2 月不存在 31 日，date.replace 会抛 ValueError。月末日期需要回退到目标月最后一天。
+2. renew() 和 terminate() 直接调用 set_state() 绕过了 transition_to() 的状态合法性校验。虽然当前目标转移碰巧是合法的，但这样写意味着状态机形同虚设——以后如果转移规则变了，这两个方法不会感知到。应该统一走 transition_to() 做状态切换。
+3. downgrade() 在操作入口处不允许从 PAUSED 状态发起降级，但 states.py 的 _TRANSITIONS 和测试都声明 PAUSED → DOWNGRADE_PENDING 是合法转移。操作的入口守卫跟状态机定义之间结论不统一，到底从暂停状态能不能降级需要定清楚。
+4. 提示词要求覆盖"重复续费"的异常场景，但 renew() 完全没有检测同一周期内重复续费的逻辑，无论调多少次都会顺次延长周期。
+5. _calculate_cycle_days 在 models.py 中定义了但从未被任何地方调用，是死代码。实际退款用的是日期直接做差计算天数，这个函数没有被用到。
+6. DOWNGRADE_PENDING 到期后不会自动应用降级计划变更，check_expiry() 中对应分支只写了一个 pass。提示词说的"到期后变更为降级后的计划"没有独立的触发路径。
+7. state_history 过滤掉了 RENEW 操作，导致"完整的状态变更历史记录"里没有续费记录，而续费是订阅最核心的事件之一。
+8. 修复后需要为该模块补充月末日期处理、重复续费检测、到期自动降级的单元测试。
+9. 更新 README.md，修复状态转移表中 PAUSED 行遗漏 DOWNGRADE_PENDING 的问题，说明月末日期处理规则和到期自动降级逻辑。
+10. 重新运行 poetry run pytest tests/subscription/ -q，需要让所有测试通过。

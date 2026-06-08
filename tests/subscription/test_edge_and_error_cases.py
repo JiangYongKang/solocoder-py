@@ -162,19 +162,43 @@ class TestErrorCases:
         with pytest.raises(InvalidStateTransitionError):
             sub.renew()
 
+    def test_duplicate_renew_before_cycle_end(self):
+        sub = make_active_subscription()
+        renew_time = datetime(2024, 1, 15, 10, 0, 0)
+        with pytest.raises(DuplicateOperationException) as exc:
+            sub.renew(now=renew_time)
+        assert "Cannot renew before current cycle ends" in str(exc.value)
+
+    def test_duplicate_renew_one_day_before_end(self):
+        sub = make_active_subscription()
+        renew_time = datetime(2024, 1, 31, 10, 0, 0)
+        with pytest.raises(DuplicateOperationException):
+            sub.renew(now=renew_time)
+
+    def test_renew_allowed_exactly_on_cycle_end(self):
+        sub = make_active_subscription()
+        renew_time = datetime(2024, 2, 1, 0, 0, 0)
+        sub.renew(now=renew_time)
+        assert sub.current_cycle_start == date(2024, 2, 1)
+        assert sub.current_cycle_end == date(2024, 3, 1)
+
     def test_downgrade_from_trial_state(self):
         sub = make_subscription()
         basic_plan = make_basic_monthly_plan()
         with pytest.raises(InvalidStateTransitionError):
             sub.downgrade(basic_plan)
 
-    def test_downgrade_from_paused_state(self):
+    def test_downgrade_from_paused_state_is_allowed(self):
         sub = make_active_subscription()
         pause_time = datetime(2024, 1, 5, 10, 0, 0)
         sub.pause(pause_days=5, now=pause_time)
         basic_plan = make_basic_monthly_plan()
-        with pytest.raises(InvalidStateTransitionError):
-            sub.downgrade(basic_plan)
+        downgrade_time = datetime(2024, 1, 7, 10, 0, 0)
+        sub.downgrade(basic_plan, now=downgrade_time)
+
+        assert sub.state == SubscriptionState.DOWNGRADE_PENDING
+        assert sub.downgrade_request is not None
+        assert sub.downgrade_request.target_plan == basic_plan
 
     def test_downgrade_to_higher_price_rejected(self):
         sub = make_active_subscription()

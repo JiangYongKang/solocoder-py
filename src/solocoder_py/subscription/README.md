@@ -93,7 +93,7 @@
 |---------|---------|
 | 试用 (TRIAL) | 活跃 (ACTIVE)、已取消 (CANCELLED)、已过期 (EXPIRED) |
 | 活跃 (ACTIVE) | 活跃 (ACTIVE)、暂停 (PAUSED)、降级处理中 (DOWNGRADE_PENDING)、已取消 (CANCELLED)、已过期 (EXPIRED) |
-| 暂停 (PAUSED) | 活跃 (ACTIVE)、已取消 (CANCELLED)、已过期 (EXPIRED) |
+| 暂停 (PAUSED) | 活跃 (ACTIVE)、降级处理中 (DOWNGRADE_PENDING)、已取消 (CANCELLED)、已过期 (EXPIRED) |
 | 降级处理中 (DOWNGRADE_PENDING) | 活跃 (ACTIVE)、暂停 (PAUSED)、已取消 (CANCELLED)、已过期 (EXPIRED) |
 | 已取消 (CANCELLED) | 已过期 (EXPIRED) |
 | 已过期 (EXPIRED) | （终态，不可转移） |
@@ -126,6 +126,40 @@
 
 1. 目标计划价格 **严格低于** 当前计划价格
 2. 目标计划周期 **不长于** 当前计划周期（按月付=30天、季付=90天、年付=365天比较）
+
+## 月末日期处理规则
+
+计算周期结束日期时，若起始日为月末且目标月份不存在该日期，则自动回退到目标月的最后一天：
+
+- **月付示例**：
+  - 1月31日 + 1个月 → 2月28日（或闰年2月29日）
+  - 3月31日 + 1个月 → 4月30日
+  - 12月31日 + 1个月 → 次年1月31日
+
+- **季付示例**：
+  - 1月31日 + 3个月 → 4月30日
+  - 11月30日 + 3个月 → 次年2月28日（或闰年2月29日）
+
+- **年付示例**：
+  - 2024年2月29日 + 1年 → 2025年2月28日
+
+## 到期自动降级
+
+当订阅处于 `降级处理中 (DOWNGRADE_PENDING)` 状态且当前周期结束时，通过调用 `check_expiry()` 可触发自动降级：
+
+1. 自动将当前计划切换为降级请求中的目标计划
+2. 自动续期一个新周期（使用降级后的计划）
+3. 状态自动变更回 `活跃 (ACTIVE)`
+4. 记录 `降级生效 (DOWNGRADE_APPLY)` 操作日志
+
+若未调用 `check_expiry()`，也可通过主动调用 `renew()` 手动触发降级生效。
+
+## 重复续费检测
+
+为防止同一周期内重复续费，`renew()` 方法会进行检测：
+
+- 若当前日期早于 `current_cycle_end`，则抛出 `DuplicateOperationException`
+- 只有在当前周期结束后（`now.date() >= current_cycle_end`）才能执行续费
 
 ## 使用示例
 

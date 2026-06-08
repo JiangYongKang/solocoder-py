@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Tuple
 
 from .exceptions import (
+    AccountNotFoundError,
     BillingError,
     FutureUsageError,
     InvalidPeriodError,
     InvalidTierConfigError,
     PeriodSettledError,
     PricingNotFoundError,
+    ResourceNotFoundError,
 )
 from .models import (
     Bill,
@@ -24,14 +27,51 @@ from .models import (
     UsageRecord,
 )
 
+DEFAULT_AMOUNT_PRECISION = 2
+DEFAULT_QUANTITY_PRECISION = 6
+
+
+def _round_amount(value: float, precision: int = DEFAULT_AMOUNT_PRECISION) -> float:
+    if value == 0:
+        return 0.0
+    d = Decimal(str(value)).quantize(
+        Decimal("1e-{}".format(precision)), rounding=ROUND_HALF_UP
+    )
+    return float(d)
+
+
+def _round_quantity(value: float, precision: int = DEFAULT_QUANTITY_PRECISION) -> float:
+    if value == 0:
+        return 0.0
+    d = Decimal(str(value)).quantize(
+        Decimal("1e-{}".format(precision)), rounding=ROUND_HALF_UP
+    )
+    return float(d)
+
 
 class BillingEngine:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        amount_precision: int = DEFAULT_AMOUNT_PRECISION,
+        quantity_precision: int = DEFAULT_QUANTITY_PRECISION,
+    ) -> None:
         self._pricing_configs: Dict[str, List[Tuple[datetime, TieredPricing]]] = {}
         self._periods: List[BillingPeriod] = []
         self._bills: Dict[str, List[Bill]] = {}
         self._current_period: Optional[BillingPeriod] = None
         self._lock = threading.RLock()
+        self._amount_precision = amount_precision
+        self._quantity_precision = quantity_precision
+        self._known_accounts: set[str] = set()
+        self._known_resources: set[str] = set()
+
+    @property
+    def amount_precision(self) -> int:
+        return self._amount_precision
+
+    @property
+    def quantity_precision(self) -> int:
+        return self._quantity_precision
 
     def _now(self) -> datetime:
         return datetime.now()
@@ -57,10 +97,17 @@ class BillingEngine:
 
             self._pricing_configs[resource_type].append((effective_from, pricing))
             self._pricing_configs[resource_type].sort(key=lambda x: x[0])
+            self._known_resources.add(resource_type)
 
             return pricing
 
     def get_pricing_at(
+        self, resource_type: str, when: datetime
+    ) -> Optional[TieredPricing]:
+        with self._lock:
+            return self._get_pricing_at_unlocked(resource_type, when)
+
+    def _get_pricing_at_unlocked(
         self, resource_type: str, when: datetime
     ) -> Optional[TieredPricing]:
         if resource_type not in self._pricing_configs:
@@ -76,12 +123,20 @@ class BillingEngine:
         return result
 
     def _require_pricing_at(self, resource_type: str, when: datetime) -> TieredPricing:
-        pricing = self.get_pricing_at(resource_type, when)
+        pricing = self._get_pricing_at_unlocked(resource_type, when)
         if pricing is None:
             raise PricingNotFoundError(
                 f"No pricing configured for resource {resource_type} at {when}"
             )
         return pricing
+
+    def _require_resource_exists(self, resource_type: str) -> None:
+        if resource_type not in self._known_resources:
+            raise ResourceNotFoundError(f"Resource not found: {resource_type}")
+
+    def _require_account_has_bills(self, account_id: str) -> None:
+        if account_id not in self._bills and account_id not in self._known_accounts:
+            raise AccountNotFoundError(f"Account not found: {account_id}")
 
     def open_period(self, start_time: datetime, duration: timedelta) -> BillingPeriod:
         with self._lock:
@@ -97,16 +152,19 @@ class BillingEngine:
             return period
 
     def get_current_period(self) -> Optional[BillingPeriod]:
-        return self._current_period
+        with self._lock:
+            return self._current_period
 
     def get_period(self, period_id: str) -> Optional[BillingPeriod]:
-        for p in self._periods:
-            if p.id == period_id:
-                return p
-        return None
+        with self._lock:
+            for p in self._periods:
+                if p.id == period_id:
+                    return p
+            return None
 
     def list_periods(self) -> List[BillingPeriod]:
-        return list(self._periods)
+        with self._lock:
+            return list(self._periods)
 
     def report_usage(
         self,
@@ -132,6 +190,8 @@ class BillingEngine:
                     "Cannot report usage to a settled period"
                 )
 
+            self._require_resource_exists(resource_type)
+
             period = self._current_period
 
             if not period.contains_time(reported_at):
@@ -145,23 +205,28 @@ class BillingEngine:
                         f"Please settle the current period first."
                     )
 
-            self._require_pricing_at(resource_type, period.start_time)
+            self._require_pricing_at(resource_type, reported_at)
 
-            return period.add_usage(
+            rounded_units = _round_quantity(units, self._quantity_precision)
+
+            record = period.add_usage(
                 account_id=account_id,
                 resource_type=resource_type,
-                units=units,
+                units=rounded_units,
                 reported_at=reported_at,
             )
+            self._known_accounts.add(account_id)
+            return record
 
     def get_current_usage(
         self, account_id: str, resource_type: str
     ) -> float:
-        if self._current_period is None:
-            return 0.0
-        if not self._current_period.is_active:
-            return 0.0
-        return self._current_period.get_usage(account_id, resource_type)
+        with self._lock:
+            if self._current_period is None:
+                return 0.0
+            if not self._current_period.is_active:
+                return 0.0
+            return self._current_period.get_usage(account_id, resource_type)
 
     def _get_pricing_segments(
         self, resource_type: str, period: BillingPeriod
@@ -227,23 +292,41 @@ class BillingEngine:
         for seg_start, seg_end, pricing in segments:
             seg_duration = (seg_end - seg_start).total_seconds()
             time_ratio = seg_duration / period_duration if period_duration > 0 else 0.0
-            allocated_units = total_units * time_ratio
+            allocated_units = _round_quantity(
+                total_units * time_ratio, self._quantity_precision
+            )
 
             if allocated_units > 0:
-                seg_cost, tier_details = pricing.calculate_cost(allocated_units)
-                total_cost += seg_cost
+                seg_cost_raw, tier_details = pricing.calculate_cost(allocated_units)
+
+                rounded_tier_details = []
+                seg_cost_from_tiers = 0.0
+                for td in tier_details:
+                    rounded_cost = _round_amount(td.tier_cost, self._amount_precision)
+                    rounded_units = _round_quantity(
+                        td.units_applied, self._quantity_precision
+                    )
+                    td.tier_cost = rounded_cost
+                    td.units_applied = rounded_units
+                    rounded_tier_details.append(td)
+                    seg_cost_from_tiers = _round_amount(
+                        seg_cost_from_tiers + rounded_cost, self._amount_precision
+                    )
+
+                seg_cost = seg_cost_from_tiers
+                total_cost = _round_amount(total_cost + seg_cost, self._amount_precision)
                 line_item.proportional_splits.append(
                     ProportionalSplitDetail(
                         pricing_effective_from=seg_start,
                         pricing_effective_to=seg_end,
                         time_ratio=time_ratio,
                         allocated_units=allocated_units,
-                        tier_details=tier_details,
+                        tier_details=rounded_tier_details,
                         segment_cost=seg_cost,
                     )
                 )
 
-        line_item.total_cost = total_cost
+        line_item.total_cost = _round_amount(total_cost, self._amount_precision)
         return line_item
 
     def estimate_current_cost(
@@ -308,29 +391,34 @@ class BillingEngine:
                         account_id, resource_type, total_units, period
                     )
                     bill.line_items.append(line_item)
-                    bill.total_amount += line_item.total_cost
+                    bill.total_amount = _round_amount(
+                        bill.total_amount + line_item.total_cost,
+                        self._amount_precision,
+                    )
 
                 if account_id not in self._bills:
                     self._bills[account_id] = []
                 self._bills[account_id].append(bill)
                 bills.append(bill)
 
-            if period is self._current_period:
-                pass
-
             return bills
 
     def get_bills(self, account_id: str) -> List[Bill]:
-        return list(self._bills.get(account_id, []))
+        with self._lock:
+            self._require_account_has_bills(account_id)
+            return list(self._bills.get(account_id, []))
 
     def get_bill(self, account_id: str, bill_id: str) -> Optional[Bill]:
-        for bill in self._bills.get(account_id, []):
-            if bill.id == bill_id:
-                return bill
-        return None
+        with self._lock:
+            self._require_account_has_bills(account_id)
+            for bill in self._bills.get(account_id, []):
+                if bill.id == bill_id:
+                    return bill
+            return None
 
     def list_bills(self) -> List[Bill]:
-        all_bills: List[Bill] = []
-        for bills in self._bills.values():
-            all_bills.extend(bills)
-        return all_bills
+        with self._lock:
+            all_bills: List[Bill] = []
+            for bills in self._bills.values():
+                all_bills.extend(bills)
+            return all_bills

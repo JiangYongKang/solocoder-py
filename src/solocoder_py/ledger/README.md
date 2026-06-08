@@ -22,6 +22,7 @@
 | `AccountExistsError` | 创建重复账户 |
 | `OverdraftError` | 账户余额不足（透支） |
 | `TransactionError` | 交易相关异常基类 |
+| `TransactionNotFoundError` | 指定交易不存在（统一使用，而非通用 `ValueError`） |
 | `TransactionStateError` | 交易状态非法（如对非暂存交易过账） |
 | `TransactionBalanceError` | 交易借贷不平衡或缺少借方/贷方 |
 | `DuplicatePostError` | 重复过账已过账交易 |
@@ -34,9 +35,9 @@
 | `EntryType` | 分录类型枚举：`DEBIT`（借方）、`CREDIT`（贷方） |
 | `TransactionStatus` | 交易状态枚举：`DRAFT`（暂存）、`POSTED`（已过账） |
 | `AccountType` | 账户类型枚举：`ASSET`（资产）、`LIABILITY`（负债）、`EQUITY`（权益）、`REVENUE`（收入）、`EXPENSE`（费用） |
-| `Account` | 账户数据模型：记录账户标识、名称、类型、是否可透支、当前余额；提供 `can_credit()`、`apply_debit()`、`apply_credit()` 方法 |
-| `Entry` | 分录数据模型：记录分录 ID、所属账户、借贷类型、金额、描述、创建时间 |
-| `Transaction` | 交易数据模型：记录交易 ID、分录列表、描述、创建时间、过账时间、状态；提供 `has_debit()`、`has_credit()`、`is_balanced`、`total_debit`、`total_credit`、`mark_posted()` 等方法 |
+| `Account` | 账户数据模型：记录账户标识、名称、类型、是否可透支、当前余额、初始余额（`initial_balance`）；提供 `can_credit()`、`apply_debit()`、`apply_credit()`、`copy()` 方法 |
+| `Entry` | 分录数据模型：记录分录 ID、所属账户、借贷类型、金额、描述、创建时间；提供 `copy()` 方法 |
+| `Transaction` | 交易数据模型：记录交易 ID、分录列表、描述、创建时间、过账时间、状态；提供 `has_debit()`、`has_credit()`、`is_balanced`、`total_debit`、`total_credit`、`mark_posted()`、`copy()` 等方法 |
 | `make_entry()` | 工厂函数，创建带唯一 ID 的分录 |
 | `make_transaction()` | 工厂函数，创建带唯一 ID 的交易 |
 
@@ -44,7 +45,29 @@
 
 | 类名 | 职责 |
 |------|------|
-| `Ledger` | 账本引擎，线程安全，维护账户表、交易表、账户分录索引、账户锁；提供账户管理、交易创建、过账、转账、余额查询、分录查询、试算平衡等核心操作 |
+| `Ledger` | 账本引擎，线程安全，维护账户表、交易表、账户分录索引、`entry_id → transaction_id` 映射、账户锁；提供账户管理、交易创建、过账、转账、余额查询、分录查询、试算平衡等核心操作 |
+
+## 异常类型约定
+
+所有异常均继承自 `LedgerError`，形成统一的异常层次，调用方可通过捕获 `LedgerError` 一次性处理所有账本相关错误：
+
+```
+LedgerError
+├── AccountError
+│   ├── AccountNotFoundError   # 账户不存在
+│   ├── AccountExistsError     # 创建重复账户
+│   └── OverdraftError         # 透支（余额不足）
+└── TransactionError
+    ├── TransactionNotFoundError  # 交易不存在（已替代通用 ValueError）
+    ├── TransactionStateError     # 交易状态非法
+    ├── TransactionBalanceError   # 借贷不平衡或缺少借/贷方
+    ├── DuplicatePostError        # 重复过账
+    └── EntryValidationError      # 分录金额非法
+```
+
+- **账户不存在**：`get_account()`、`get_balance()` 抛出 `AccountNotFoundError`
+- **交易不存在**：`get_transaction()`、`post_transaction()` 抛出 `TransactionNotFoundError`
+- 两者均属于 `LedgerError` 子类，调用方可以 `except LedgerError` 统一捕获
 
 ## 借贷语义与平衡校验规则
 
@@ -140,14 +163,71 @@ DRAFT (暂存) ──post_transaction()──► POSTED (已过账)
 
 - `post_transaction()`：先用全局锁读取并校验交易和账户 → 释放全局锁 → 按序获取账户锁 → 执行余额变更
 - `get_all_balances()`：先用全局锁快照账户 ID 列表 → 释放全局锁 → 按序获取所有账户锁 → 原子读取全部余额
-- `get_balance()`：先用全局锁确认账户存在 → 释放全局锁 → 获取该账户锁 → 读取余额
-- `get_account_entries()`：先用全局锁快照分录和交易 → 释放全局锁 → 无锁筛选返回
+- `get_balance()`：在全局锁下直接读取余额（int 读取为原子操作）
+- `get_account_entries()`：在全局锁下通过 `entry_id → transaction_id` 索引 O(1) 查找所属交易 → 筛选后返回副本
 
 ### 线性一致性保证
 
 - 任何时刻查询账户余额，都能看到截至该时刻所有已完成过账交易的完整结果
 - 过账操作对涉及的所有账户余额的修改是原子的：外界要么看到全部修改生效，要么都不生效，不会看到部分余额已修改而另一部分未修改的中间态
 - 由于获取账户锁后才读取和修改余额，同一账户的所有读写操作是线性一致的
+
+## 试算平衡表校验逻辑
+
+`get_trial_balance()` 提供的是**账户余额层面**的完整性验证，而非简单的单笔交易内部借贷相等校验（后者已在过账时保证）。返回值为四元组：
+
+```
+(total_debit_balances, total_credit_balances, balanced, account_details)
+```
+
+### 校验维度一：账户余额完整性（防篡改）
+
+对每个账户，独立计算其期望余额，并与实际存储余额比对：
+
+```
+期望余额 = initial_balance + 该账户所有已过账 DEBIT 金额 - 该账户所有已过账 CREDIT 金额
+integrity_ok = (期望余额 == 实际存储余额)
+```
+
+如果 `integrity_ok` 为 `False`，说明账户余额被外部直接修改（绕过账本 API），数据完整性已被破坏。
+
+### 校验维度二：借贷余额平衡（会计恒等式）
+
+- **借方余额合计**：所有余额为正的账户，其余额绝对值之和
+- **贷方余额合计**：所有余额为负的账户，其余额绝对值之和
+- 平衡条件：`total_debit_balances == total_credit_balances` 且所有账户 `integrity_ok` 均为 `True`
+
+> 注意：要使借贷余额平衡，创建账户时的初始余额也应遵循会计恒等式（例如借记资产 1000 的同时贷记资本 1000），否则仅有正余额账户而无对应负余额账户，试算平衡将显示不平衡。
+
+### account_details 结构
+
+每个账户的明细为五元组：
+
+| 位置 | 含义 |
+|------|------|
+| `[0]` | 该账户所有已过账 DEBIT 金额合计 |
+| `[1]` | 该账户所有已过账 CREDIT 金额合计 |
+| `[2]` | 当前存储的账户余额 |
+| `[3]` | 根据分录重算得到的期望余额 |
+| `[4]` | 完整性标志（`[2] == [3]`） |
+
+## 封装保护
+
+所有返回 `Account`、`Entry`、`Transaction` 对象的公共方法均返回对象的**深拷贝**，调用方对返回值的任何修改都不会影响账本内部状态：
+
+- `create_account()`、`get_account()`、`list_accounts()` → 返回 `Account.copy()`
+- `create_transaction()`、`create_multi_entry_transaction()`、`get_transaction()`、`list_transactions()`、`post_transaction()`、`transfer()` → 返回 `Transaction.copy()`
+- `get_account_entries()` → 每个 `Entry` 和 `Transaction` 均返回副本
+
+这防止了绕过账本 API 直接修改 `balance`、`status`、`amount` 等关键字段的风险。
+
+## 分录索引与查询性能
+
+为避免 `get_account_entries()` 在分录查询时对全量交易做 O(N²) 线性扫描，账本维护了一个 `_entry_to_transaction: Dict[str, str]` 哈希索引：
+
+- **写入时建立索引**：每次 `create_transaction()` 或 `create_multi_entry_transaction()` 创建交易时，为每条分录建立 `entry_id → transaction_id` 映射
+- **读取时 O(1) 查找**：查询分录所属交易时，直接通过索引字典定位，无需遍历所有交易
+- **性能提升**：随着交易数量增长，查询耗时保持常数级，而非随数据量线性退化
 
 ## 使用示例
 
@@ -237,9 +317,14 @@ draft_entries = ledger.get_account_entries(
     start_time=datetime.now() - timedelta(days=1),
 )
 
-# 试算平衡表
-total_debits, total_credits, balanced = ledger.get_trial_balance()
-print(f"借方总额: {total_debits}, 贷方总额: {total_credits}, 平衡: {balanced}")
+# 试算平衡表（账户余额层面的校验，非单笔交易层面）
+total_debits, total_credits, balanced, account_details = ledger.get_trial_balance()
+print(f"借方余额合计: {total_debits}, 贷方余额合计: {total_credits}, 平衡: {balanced}")
+
+# account_details 提供每个账户的完整校验信息
+for account_id, (total_dr, total_cr, stored_balance, expected_balance, integrity_ok) in account_details.items():
+    print(f"账户 {account_id}: 借={total_dr}, 贷={total_cr}, "
+          f"余额={stored_balance}, 期望={expected_balance}, 数据完整={integrity_ok}")
 ```
 
 ### 并发转账
@@ -277,7 +362,7 @@ assert ledger.get_balance("b") == 100000
 ## 运行测试
 
 ```bash
-pytest tests/ledger/ -v
+poetry run pytest tests/ledger/ -q
 ```
 
 测试覆盖以下场景：
@@ -285,3 +370,8 @@ pytest tests/ledger/ -v
 - **正常流程**：账户创建、单笔记账、多分录交易过账、余额正确更新
 - **边界条件**：零金额分录、多借多贷的复杂交易、所有账户刚好过账到零余额
 - **异常分支**：借贷金额不平拒绝、重复过账已过账交易、并发转账的余额一致性、暂存交易不影响余额、透支校验
+- **异常类型统一**：账户/交易不存在均抛出自定义 `LedgerError` 子类（`AccountNotFoundError` / `TransactionNotFoundError`），而非通用 `ValueError`
+- **封装保护**：所有返回的 `Account`/`Transaction`/`Entry` 对象均为独立副本，修改返回值不影响账本内部状态
+- **试算平衡表校验**：空账本、零初始余额转账、完整性检测（可发现外部篡改余额）、账户明细结构正确性
+- **分录索引性能**：索引正确填充、索引查找较 O(N) 线性扫描有显著性能优势
+- **并发一致性**：双向转账资金守恒、多账户无死锁、并发读写线性一致、并发透支校验准确

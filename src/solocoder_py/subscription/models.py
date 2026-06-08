@@ -123,39 +123,33 @@ class PlanCatalog:
         return plan1.price - plan2.price
 
 
-def _calculate_cycle_days(start_date: date, cycle_type: BillingCycleType) -> int:
-    if cycle_type == BillingCycleType.MONTHLY:
-        next_month = start_date.replace(day=28) + timedelta(days=4)
-        next_month_start = next_month.replace(day=1)
-        if next_month_start.month == 12:
-            month_end = date(next_month_start.year, 12, 31)
-        else:
-            month_end = date(next_month_start.year, next_month_start.month, 1) - timedelta(days=1)
-        return (month_end - start_date).days + 1
-    elif cycle_type == BillingCycleType.QUARTERLY:
-        quarter_month = ((start_date.month - 1) // 3) * 3 + 1
-        if quarter_month + 3 > 12:
-            quarter_end = date(start_date.year + 1, 1, 1) - timedelta(days=1)
-        else:
-            quarter_end = date(start_date.year, quarter_month + 3, 1) - timedelta(days=1)
-        return (quarter_end - start_date).days + 1
+def _last_day_of_month(year: int, month: int) -> int:
+    if month == 12:
+        next_month_first = date(year + 1, 1, 1)
     else:
-        year_end = date(start_date.year, 12, 31)
-        return (year_end - start_date).days + 1
+        next_month_first = date(year, month + 1, 1)
+    return (next_month_first - timedelta(days=1)).day
+
+
+def _add_months_safe(start_date: date, months: int) -> date:
+    total_months = start_date.year * 12 + start_date.month - 1 + months
+    new_year = total_months // 12
+    new_month = total_months % 12 + 1
+    last_day = _last_day_of_month(new_year, new_month)
+    new_day = min(start_date.day, last_day)
+    return date(new_year, new_month, new_day)
 
 
 def _add_cycle(start_date: date, cycle_type: BillingCycleType) -> date:
     if cycle_type == BillingCycleType.MONTHLY:
-        if start_date.month == 12:
-            return start_date.replace(year=start_date.year + 1, month=1)
-        return start_date.replace(month=start_date.month + 1)
+        return _add_months_safe(start_date, 1)
     elif cycle_type == BillingCycleType.QUARTERLY:
-        new_month = start_date.month + 3
-        if new_month > 12:
-            return start_date.replace(year=start_date.year + 1, month=new_month - 12)
-        return start_date.replace(month=new_month)
+        return _add_months_safe(start_date, 3)
     else:
-        return start_date.replace(year=start_date.year + 1)
+        try:
+            return start_date.replace(year=start_date.year + 1)
+        except ValueError:
+            return start_date.replace(year=start_date.year + 1, day=28)
 
 
 def calculate_refund(
@@ -231,6 +225,7 @@ class Subscription:
         state_ops = [
             OperationType.CREATE,
             OperationType.ACTIVATE,
+            OperationType.RENEW,
             OperationType.PAUSE,
             OperationType.RESUME,
             OperationType.DOWNGRADE_REQUEST,
@@ -278,6 +273,13 @@ class Subscription:
         if self.state not in (SubscriptionState.ACTIVE, SubscriptionState.DOWNGRADE_PENDING):
             raise InvalidStateTransitionError(self.state, SubscriptionState.ACTIVE)
 
+        if self.current_cycle_start is not None and self.current_cycle_end is not None:
+            if now.date() < self.current_cycle_end:
+                raise DuplicateOperationException(
+                    f"Cannot renew before current cycle ends: "
+                    f"current cycle ends on {self.current_cycle_end}"
+                )
+
         if self._downgrade_request is not None:
             target_plan = self._downgrade_request.target_plan
             self.plan = target_plan
@@ -292,7 +294,7 @@ class Subscription:
         new_start = self.current_cycle_end if self.current_cycle_end else now.date()
         self.current_cycle_start = new_start
         self.current_cycle_end = _add_cycle(new_start, self.plan.cycle_type)
-        self._state_machine.set_state(SubscriptionState.ACTIVE)
+        self._state_machine.transition_to(SubscriptionState.ACTIVE)
         self._add_operation(
             OperationType.RENEW,
             now,
@@ -307,7 +309,11 @@ class Subscription:
         reason: str = "用户申请降级",
     ) -> None:
         now = now or datetime.now()
-        if self.state not in (SubscriptionState.ACTIVE, SubscriptionState.DOWNGRADE_PENDING):
+        if self.state not in (
+            SubscriptionState.ACTIVE,
+            SubscriptionState.DOWNGRADE_PENDING,
+            SubscriptionState.PAUSED,
+        ):
             raise InvalidStateTransitionError(self.state, SubscriptionState.DOWNGRADE_PENDING)
 
         if target_plan.price >= self.plan.price:
@@ -326,7 +332,7 @@ class Subscription:
             requested_at=now,
             effective_at=self.current_cycle_end if self.current_cycle_end else now.date(),
         )
-        if self.state == SubscriptionState.ACTIVE:
+        if self.state in (SubscriptionState.ACTIVE, SubscriptionState.PAUSED):
             self._state_machine.transition_to(SubscriptionState.DOWNGRADE_PENDING)
         self._add_operation(
             OperationType.DOWNGRADE_REQUEST,
@@ -418,7 +424,7 @@ class Subscription:
                     now.date(),
                 )
 
-        self._state_machine.set_state(SubscriptionState.EXPIRED)
+        self._state_machine.transition_to(SubscriptionState.EXPIRED)
         self._add_operation(
             OperationType.TERMINATE,
             now,
@@ -438,7 +444,7 @@ class Subscription:
         if self.state == SubscriptionState.PAUSED:
             if self._pause_resume_at and today >= self._pause_resume_at:
                 if self._pause_end_at and self._pause_end_at <= today:
-                    self._state_machine.set_state(SubscriptionState.EXPIRED)
+                    self._state_machine.transition_to(SubscriptionState.EXPIRED)
                     self._add_operation(
                         OperationType.AUTO_CANCEL,
                         now,
@@ -456,8 +462,20 @@ class Subscription:
                     now,
                     reason="取消后到期自动过期",
                 )
-            elif self.state in (SubscriptionState.ACTIVE, SubscriptionState.DOWNGRADE_PENDING):
-                pass
+            elif self.state == SubscriptionState.DOWNGRADE_PENDING:
+                if self._downgrade_request is not None:
+                    target_plan = self._downgrade_request.target_plan
+                    self.plan = target_plan
+                    self._downgrade_request = None
+                    self.current_cycle_start = self.current_cycle_end
+                    self.current_cycle_end = _add_cycle(self.current_cycle_start, self.plan.cycle_type)
+                    self._add_operation(
+                        OperationType.DOWNGRADE_APPLY,
+                        now,
+                        reason="到期自动降级生效",
+                        detail=f"新计划: {self.plan.name}, 新周期: {self.current_cycle_start} ~ {self.current_cycle_end}",
+                    )
+                    self._state_machine.transition_to(SubscriptionState.ACTIVE)
 
     def preview_refund(self, as_of: Optional[date] = None) -> Decimal:
         as_of = as_of or date.today()

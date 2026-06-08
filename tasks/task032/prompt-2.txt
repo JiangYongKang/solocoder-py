@@ -1,0 +1,7 @@
+你实现的舱壁隔离执行器存在几个比较严重的问题，需要修复：
+1. acquire() 上下文管理器在 QUEUE 策略下等待槽位时没有将自身加入 state.queue 队列。这导致三个连锁问题：队列统计看不到 acquire 的等待者、max_queue_size 限制对 acquire 调用者完全无效、_execute_task 释放槽位后如果队列为空则不会通知等待者，acquire 的等待者可能被永久饿死。acquire 和 submit 两条路径在队列管理和通知机制上必须保持一致。
+2. _TaskWrapper 内部定义了 timeout_deadline 和 result 两个字段但从未被写入和使用，deadline 在 _execute_task 里又单独重新计算了一遍，这两个字段纯属冗余。
+3. submit() 的 **kwargs 参数直接透传给用户任务函数。如果用户函数碰巧有一个叫 task_id 的关键字参数，就会收到框架自动生成的 task_id 值，而非函数本身期望的参数值。
+4. 修复后需要为该模块补充 acquire 搭配 QUEUE 策略和超时场景的单元测试，覆盖排队等待后获得槽位、排队超时失败这两条关键路径。
+5. 更新 README.md，修正其中关于 BaseException 处理的描述——当前只 catch 了 Exception，README 写"区分处理 BaseException 子类"与实际代码对不上。
+6. 重新运行 poetry run pytest tests/bulkhead/ -q，需要让所有测试通过。

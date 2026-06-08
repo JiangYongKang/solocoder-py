@@ -65,10 +65,23 @@
 |--------|------|----------|
 | `EQ` | 等于 | 任意 |
 | `NEQ` | 不等于 | 任意 |
-| `CONTAINS` | 包含 | 字符串、列表、集合、字典 |
+| `CONTAINS` | 包含 | 字符串、列表、元组、集合、字典 |
 | `GT` | 大于 | 数值 |
 | `LT` | 小于 | 数值 |
 | `REGEX` | 正则匹配 | 字符串 |
+
+### CONTAINS 语义约定
+
+`CONTAINS` 操作符统一语义为 **"expected 是否作为 actual 的元素/值存在"**，不同数据类型的具体行为：
+
+| 数据类型 | 匹配逻辑 | 示例 |
+|----------|----------|------|
+| `str` | 子串包含（`str(expected) in actual`） | `"@example.com" in "user@example.com"` → True |
+| `list` / `tuple` | 元素包含（`expected in actual`） | `"vip" in ["vip", "new"]` → True |
+| `set` | 元素包含（`expected in actual`） | `10 in {10, 20, 30}` → True |
+| `dict` | **值**包含（`expected in actual.values()`），而非键包含 | `"admin" in {"a": "admin", "b": "user"}` → True |
+
+如需按字典键匹配，请先通过上下文预处理提取键集合，或使用 `EQ` / `REGEX` 等其他操作符。
 
 ## 依赖短路求值逻辑
 

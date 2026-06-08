@@ -57,12 +57,12 @@ class TestExchangeRate:
         with pytest.raises(InvalidExchangeRateError, match="rate must be positive"):
             ExchangeRate(base_currency="USD", target_currency="CNY", rate=-7.2, version=1)
 
-    def test_zero_version(self):
-        with pytest.raises(InvalidExchangeRateError, match="version must be positive"):
-            ExchangeRate(base_currency="USD", target_currency="CNY", rate=7.2, version=0)
+    def test_zero_version_is_valid_for_derived_rates(self):
+        r = ExchangeRate(base_currency="USD", target_currency="CNY", rate=7.2, version=0)
+        assert r.version == 0
 
     def test_negative_version(self):
-        with pytest.raises(InvalidExchangeRateError, match="version must be positive"):
+        with pytest.raises(InvalidExchangeRateError, match="version cannot be negative"):
             ExchangeRate(base_currency="USD", target_currency="CNY", rate=7.2, version=-1)
 
 

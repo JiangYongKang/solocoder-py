@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import deque
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 from .models import (
     BackpressureStrategy,
@@ -15,6 +16,8 @@ from .models import (
     QueueFullError,
     RejectedError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BoundedQueue:
@@ -45,6 +48,7 @@ class BoundedQueue:
         self._dropped_count = 0
         self._rejected_count = 0
         self._in_high_watermark = False
+        self._clear_epoch = 0
 
         self._high_callbacks: List[HighWatermarkCallback] = []
         self._low_callbacks: List[LowWatermarkCallback] = []
@@ -111,49 +115,68 @@ class BoundedQueue:
             self._high_callbacks.clear()
             self._low_callbacks.clear()
 
-    def _fire_high_watermark(self) -> None:
-        state = BoundedQueueState(
+    def _build_state(self, is_high: bool) -> BoundedQueueState:
+        return BoundedQueueState(
             capacity=self._capacity,
             size=len(self._queue),
             strategy=self._strategy,
-            is_high_watermark=True,
+            is_high_watermark=is_high,
             dropped_count=self._dropped_count,
             rejected_count=self._rejected_count,
         )
-        for cb in list(self._high_callbacks):
-            cb(state)
 
-    def _fire_low_watermark(self) -> None:
-        state = BoundedQueueState(
-            capacity=self._capacity,
-            size=len(self._queue),
-            strategy=self._strategy,
-            is_high_watermark=False,
-            dropped_count=self._dropped_count,
-            rejected_count=self._rejected_count,
-        )
-        for cb in list(self._low_callbacks):
-            cb(state)
-
-    def _check_watermark_on_enqueue(self, previous_size: int) -> None:
+    def _collect_watermark_callbacks_on_enqueue(
+        self, previous_size: int
+    ) -> List[Tuple[HighWatermarkCallback, BoundedQueueState]]:
         current_size = len(self._queue)
+        pending: List[Tuple[HighWatermarkCallback, BoundedQueueState]] = []
         if (
             not self._in_high_watermark
             and previous_size < self._high_watermark
             and current_size >= self._high_watermark
         ):
             self._in_high_watermark = True
-            self._fire_high_watermark()
+            state = self._build_state(is_high=True)
+            for cb in list(self._high_callbacks):
+                pending.append((cb, state))
+        return pending
 
-    def _check_watermark_on_dequeue(self, previous_size: int) -> None:
+    def _collect_watermark_callbacks_on_dequeue(
+        self, previous_size: int
+    ) -> List[Tuple[LowWatermarkCallback, BoundedQueueState]]:
         current_size = len(self._queue)
+        pending: List[Tuple[LowWatermarkCallback, BoundedQueueState]] = []
         if (
             self._in_high_watermark
             and previous_size > self._low_watermark
             and current_size <= self._low_watermark
         ):
             self._in_high_watermark = False
-            self._fire_low_watermark()
+            state = self._build_state(is_high=False)
+            for cb in list(self._low_callbacks):
+                pending.append((cb, state))
+        return pending
+
+    def _collect_watermark_callbacks_on_clear(
+        self,
+    ) -> List[Tuple[LowWatermarkCallback, BoundedQueueState]]:
+        pending: List[Tuple[LowWatermarkCallback, BoundedQueueState]] = []
+        if self._in_high_watermark:
+            self._in_high_watermark = False
+            state = self._build_state(is_high=False)
+            for cb in list(self._low_callbacks):
+                pending.append((cb, state))
+        return pending
+
+    @staticmethod
+    def _execute_callbacks(
+        callbacks: List[Tuple[Any, BoundedQueueState]]
+    ) -> None:
+        for cb, state in callbacks:
+            try:
+                cb(state)
+            except Exception:
+                logger.exception("Exception in watermark callback")
 
     def enqueue(
         self,
@@ -175,6 +198,7 @@ class BoundedQueue:
 
     def _enqueue_block(self, element: Any, timeout: Optional[float]) -> EnqueueResult:
         deadline = None if timeout is None else time.monotonic() + timeout
+        pending_callbacks: List = []
 
         with self._not_full:
             while len(self._queue) >= self._capacity:
@@ -189,42 +213,55 @@ class BoundedQueue:
 
             previous_size = len(self._queue)
             self._queue.append(element)
-            self._check_watermark_on_enqueue(previous_size)
+            pending_callbacks = self._collect_watermark_callbacks_on_enqueue(previous_size)
             self._not_empty.notify_all()
-            return EnqueueResult(success=True)
+
+        self._execute_callbacks(pending_callbacks)
+        return EnqueueResult(success=True)
 
     def _enqueue_drop(self, element: Any) -> EnqueueResult:
-        with self._not_empty:
+        pending_callbacks: List = []
+
+        with self._not_full:
             if len(self._queue) >= self._capacity:
                 self._dropped_count += 1
                 return EnqueueResult(success=False, dropped=True, element=element)
 
             previous_size = len(self._queue)
             self._queue.append(element)
-            self._check_watermark_on_enqueue(previous_size)
+            pending_callbacks = self._collect_watermark_callbacks_on_enqueue(previous_size)
             self._not_empty.notify_all()
-            return EnqueueResult(success=True)
+
+        self._execute_callbacks(pending_callbacks)
+        return EnqueueResult(success=True)
 
     def _enqueue_reject(self, element: Any) -> EnqueueResult:
-        with self._not_empty:
+        pending_callbacks: List = []
+
+        with self._not_full:
             if len(self._queue) >= self._capacity:
                 self._rejected_count += 1
                 raise RejectedError(element=element)
 
             previous_size = len(self._queue)
             self._queue.append(element)
-            self._check_watermark_on_enqueue(previous_size)
+            pending_callbacks = self._collect_watermark_callbacks_on_enqueue(previous_size)
             self._not_empty.notify_all()
-            return EnqueueResult(success=True)
+
+        self._execute_callbacks(pending_callbacks)
+        return EnqueueResult(success=True)
 
     def dequeue(self, *, timeout: Optional[float] = None, block: bool = True) -> Any:
         deadline = None if timeout is None else time.monotonic() + timeout
+        pending_callbacks: List = []
+        element: Any = None
 
         with self._not_empty:
             if not block:
                 if len(self._queue) == 0:
                     return None
             else:
+                start_epoch = self._clear_epoch
                 while len(self._queue) == 0:
                     if timeout is None:
                         self._not_empty.wait()
@@ -233,20 +270,30 @@ class BoundedQueue:
                         if remaining <= 0:
                             raise DequeueTimeoutError("dequeue timed out")
                         self._not_empty.wait(timeout=remaining)
+                    if self._clear_epoch != start_epoch and len(self._queue) == 0:
+                        return None
 
             previous_size = len(self._queue)
             element = self._queue.popleft()
-            self._check_watermark_on_dequeue(previous_size)
+            pending_callbacks = self._collect_watermark_callbacks_on_dequeue(previous_size)
             self._not_full.notify_all()
-            return element
+
+        self._execute_callbacks(pending_callbacks)
+        return element
 
     def clear(self) -> None:
+        pending_callbacks: List = []
+
         with self._not_full:
             self._queue.clear()
             self._dropped_count = 0
             self._rejected_count = 0
-            self._in_high_watermark = False
+            self._clear_epoch += 1
+            pending_callbacks = self._collect_watermark_callbacks_on_clear()
             self._not_full.notify_all()
+            self._not_empty.notify_all()
+
+        self._execute_callbacks(pending_callbacks)
 
     def __len__(self) -> int:
         return self.size

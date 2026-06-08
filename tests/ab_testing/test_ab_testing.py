@@ -254,12 +254,38 @@ class TestUserAllocation:
 
         counts = {"exp_a": 0, "exp_b": 0, None: 0}
         for i in range(10000):
-            alloc = manager.get_user_allocation(f"user-{i}")
+            alloc = manager.record_user_allocation(f"user-{i}")
             counts[alloc.experiment_name] += 1
 
         assert 2500 <= counts["exp_a"] <= 3500
         assert 2500 <= counts["exp_b"] <= 3500
         assert 3000 <= counts[None] <= 5000
+
+    def test_get_user_allocation_is_read_only_no_side_effects(self):
+        manager = ABTestManager()
+        manager.create_experiment("exp", traffic_percentage=100)
+        manager.start_experiment("exp")
+
+        for _ in range(100):
+            manager.get_user_allocation("user-readonly")
+
+        report = manager.get_traffic_report()
+        assert report.control_user_count == 0
+        for e in report.experiments:
+            assert e.actual_user_count == 0
+
+    def test_record_user_allocation_counts(self):
+        manager = ABTestManager()
+        manager.create_experiment("exp", traffic_percentage=100)
+        manager.start_experiment("exp")
+
+        for i in range(50):
+            manager.record_user_allocation(f"user-{i}")
+
+        report = manager.get_traffic_report()
+        exp_stat = next(e for e in report.experiments if e.experiment_name == "exp")
+        assert exp_stat.actual_user_count == 50
+        assert report.control_user_count == 0
 
 
 class TestBoundaryConditions:
@@ -382,7 +408,7 @@ class TestMutexGroup:
 
         counts = {"exp_1": 0, "exp_2": 0, None: 0}
         for i in range(10000):
-            alloc = manager.get_user_allocation(f"u-{i}")
+            alloc = manager.record_user_allocation(f"u-{i}")
             counts[alloc.experiment_name] += 1
 
         assert 1500 <= counts["exp_1"] <= 2500
@@ -421,6 +447,87 @@ class TestMutexGroup:
         occupancy = manager.get_bucket_occupancy()
         for occ in occupancy:
             assert occ.experiment_name is None
+
+
+class TestMutexGroupNonContiguousBuckets:
+    def test_mutex_group_noncontiguous_release_does_not_hurt_others(self):
+        manager = ABTestManager()
+
+        manager.create_experiment("independent", traffic_percentage=20)
+        manager.start_experiment("independent")
+
+        manager.create_experiment("mutex_a", traffic_percentage=30, mutex_group="mg")
+        manager.start_experiment("mutex_a")
+
+        manager.create_experiment("mutex_b", traffic_percentage=30, mutex_group="mg")
+        manager.start_experiment("mutex_b")
+
+        occupancy_before = manager.get_bucket_occupancy()
+        independent_buckets_before = [
+            o.bucket for o in occupancy_before if o.experiment_name == "independent"
+        ]
+        assert len(independent_buckets_before) == 20
+
+        manager.stop_experiment("mutex_a")
+        manager.stop_experiment("mutex_b")
+
+        occupancy_after = manager.get_bucket_occupancy()
+        independent_buckets_after = [
+            o.bucket for o in occupancy_after if o.experiment_name == "independent"
+        ]
+        assert len(independent_buckets_after) == 20
+        assert independent_buckets_before == independent_buckets_after
+
+        for b in independent_buckets_after:
+            assert manager._bucket_owner[b] == {"type": "experiment", "name": "independent"}
+
+    def test_mutex_group_noncontiguous_bucket_occupancy_correct(self):
+        manager = ABTestManager()
+
+        manager.create_experiment("filler1", traffic_percentage=20)
+        manager.start_experiment("filler1")
+
+        manager.create_experiment("mutex_a", traffic_percentage=20, mutex_group="g")
+        manager.start_experiment("mutex_a")
+
+        manager.create_experiment("filler2", traffic_percentage=20)
+        manager.start_experiment("filler2")
+
+        manager.create_experiment("mutex_b", traffic_percentage=20, mutex_group="g")
+        manager.start_experiment("mutex_b")
+
+        occupancy = manager.get_bucket_occupancy()
+        mutex_buckets = [o for o in occupancy if o.experiment_name in {"mutex_a", "mutex_b"}]
+        assert len(mutex_buckets) == 40
+
+        for occ in mutex_buckets:
+            assert occ.experiment_name in {"mutex_a", "mutex_b"}
+
+        mutex_a_count = sum(1 for o in mutex_buckets if o.experiment_name == "mutex_a")
+        mutex_b_count = sum(1 for o in mutex_buckets if o.experiment_name == "mutex_b")
+        assert mutex_a_count == 20
+        assert mutex_b_count == 20
+
+    def test_mutex_group_noncontiguous_user_allocation_in_all_group_buckets(self):
+        manager = ABTestManager()
+
+        manager.create_experiment("filler", traffic_percentage=40)
+        manager.start_experiment("filler")
+
+        manager.create_experiment("ma", traffic_percentage=30, mutex_group="x")
+        manager.start_experiment("ma")
+
+        manager.create_experiment("mb", traffic_percentage=30, mutex_group="x")
+        manager.start_experiment("mb")
+
+        for i in range(5000):
+            alloc = manager.get_user_allocation(f"u-{i}")
+            assert alloc.experiment_name in {"filler", "ma", "mb", None}
+
+        occupancy = manager.get_bucket_occupancy()
+        for occ in occupancy:
+            if occ.experiment_name in {"ma", "mb"}:
+                assert occ.experiment_name is not None
 
 
 class TestBucketOccupancy:
@@ -481,7 +588,7 @@ class TestTrafficReport:
         manager.start_experiment("exp1")
 
         for i in range(1000):
-            manager.get_user_allocation(f"u-{i}")
+            manager.record_user_allocation(f"u-{i}")
 
         report = manager.get_traffic_report()
         assert report.control_user_count + sum(e.actual_user_count for e in report.experiments) == 1000
@@ -496,12 +603,25 @@ class TestTrafficReport:
         manager.create_experiment("exp", traffic_percentage=100)
         manager.start_experiment("exp")
         for i in range(100):
-            manager.get_user_allocation(f"u-{i}")
+            manager.record_user_allocation(f"u-{i}")
         manager.reset_stats()
         report = manager.get_traffic_report()
         assert report.control_user_count == 0
         for e in report.experiments:
             assert e.actual_user_count == 0
+
+    def test_get_user_allocation_does_not_affect_report(self):
+        manager = ABTestManager()
+        manager.create_experiment("exp", traffic_percentage=100)
+        manager.start_experiment("exp")
+
+        for i in range(1000):
+            manager.get_user_allocation(f"u-{i}")
+
+        report = manager.get_traffic_report()
+        exp_stat = next(e for e in report.experiments if e.experiment_name == "exp")
+        assert exp_stat.actual_user_count == 0
+        assert report.control_user_count == 0
 
 
 class TestExperimentStopFallbackToControl:

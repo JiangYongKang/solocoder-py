@@ -25,6 +25,10 @@ class TransactionError(LedgerError):
     pass
 
 
+class TransactionNotFoundError(TransactionError):
+    pass
+
+
 class TransactionStateError(TransactionError):
     pass
 

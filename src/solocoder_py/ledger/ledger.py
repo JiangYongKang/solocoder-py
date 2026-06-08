@@ -12,6 +12,7 @@ from .exceptions import (
     DuplicatePostError,
     OverdraftError,
     TransactionBalanceError,
+    TransactionNotFoundError,
     TransactionStateError,
 )
 from .models import (
@@ -31,6 +32,7 @@ class Ledger:
     _accounts: Dict[str, Account] = field(default_factory=dict)
     _transactions: Dict[str, Transaction] = field(default_factory=dict)
     _account_entries: Dict[str, List[Entry]] = field(default_factory=dict)
+    _entry_to_transaction: Dict[str, str] = field(default_factory=dict)
     _account_locks: Dict[str, threading.RLock] = field(default_factory=dict)
     _global_lock: threading.RLock = field(default_factory=threading.RLock)
     _next_transaction_seq: int = 1
@@ -87,26 +89,27 @@ class Ledger:
                 account_type=account_type,
                 allow_overdraft=allow_overdraft,
                 balance=initial_balance,
+                initial_balance=initial_balance,
             )
             self._accounts[account_id] = account
             self._account_entries[account_id] = []
-            return account
+            return account.copy()
 
     def get_account(self, account_id: str) -> Account:
         with self._global_lock:
             if account_id not in self._accounts:
                 raise AccountNotFoundError(f"Account {account_id} not found")
-            return self._accounts[account_id]
+            return self._accounts[account_id].copy()
 
     def get_balance(self, account_id: str) -> int:
-        account = self.get_account(account_id)
-        lock = self._get_or_create_account_lock(account_id)
-        with lock:
-            return account.balance
+        with self._global_lock:
+            if account_id not in self._accounts:
+                raise AccountNotFoundError(f"Account {account_id} not found")
+            return self._accounts[account_id].balance
 
     def list_accounts(self) -> List[Account]:
         with self._global_lock:
-            return list(self._accounts.values())
+            return [a.copy() for a in self._accounts.values()]
 
     def get_account_entries(
         self,
@@ -118,31 +121,23 @@ class Ledger:
         self.get_account(account_id)
 
         with self._global_lock:
-            entries = list(self._account_entries.get(account_id, []))
-            transactions = dict(self._transactions)
-
-        results: List[Tuple[Entry, Transaction]] = []
-        for entry in entries:
-            txn = transactions.get(self._find_transaction_for_entry(entry, transactions))
-            if txn is None:
-                continue
-            if status is not None and txn.status != status:
-                continue
-            if start_time is not None and txn.created_at < start_time:
-                continue
-            if end_time is not None and txn.created_at > end_time:
-                continue
-            results.append((entry, txn))
+            entries = [e.copy() for e in self._account_entries.get(account_id, [])]
+            results: List[Tuple[Entry, Transaction]] = []
+            for entry in entries:
+                txn_id = self._entry_to_transaction.get(entry.entry_id)
+                if txn_id is None:
+                    continue
+                txn = self._transactions.get(txn_id)
+                if txn is None:
+                    continue
+                if status is not None and txn.status != status:
+                    continue
+                if start_time is not None and txn.created_at < start_time:
+                    continue
+                if end_time is not None and txn.created_at > end_time:
+                    continue
+                results.append((entry, txn.copy()))
         return results
-
-    def _find_transaction_for_entry(
-        self, entry: Entry, transactions: Dict[str, Transaction]
-    ) -> str:
-        for txn_id, txn in transactions.items():
-            for e in txn.entries:
-                if e.entry_id == entry.entry_id:
-                    return txn_id
-        return ""
 
     def create_transaction(
         self,
@@ -180,7 +175,8 @@ class Ledger:
             self._transactions[txn.transaction_id] = txn
             for entry in txn.entries:
                 self._account_entries.setdefault(entry.account_id, []).append(entry)
-        return txn
+                self._entry_to_transaction[entry.entry_id] = txn.transaction_id
+        return txn.copy()
 
     def create_multi_entry_transaction(
         self,
@@ -206,19 +202,24 @@ class Ledger:
             self._transactions[txn.transaction_id] = txn
             for entry in txn.entries:
                 self._account_entries.setdefault(entry.account_id, []).append(entry)
-        return txn
+                self._entry_to_transaction[entry.entry_id] = txn.transaction_id
+        return txn.copy()
 
     def get_transaction(self, transaction_id: str) -> Transaction:
         with self._global_lock:
             if transaction_id not in self._transactions:
-                raise ValueError(f"Transaction {transaction_id} not found")
-            return self._transactions[transaction_id]
+                raise TransactionNotFoundError(
+                    f"Transaction {transaction_id} not found"
+                )
+            return self._transactions[transaction_id].copy()
 
     def post_transaction(self, transaction_id: str) -> Transaction:
         with self._global_lock:
             txn = self._transactions.get(transaction_id)
             if txn is None:
-                raise ValueError(f"Transaction {transaction_id} not found")
+                raise TransactionNotFoundError(
+                    f"Transaction {transaction_id} not found"
+                )
 
             if txn.is_posted:
                 raise DuplicatePostError(
@@ -279,7 +280,7 @@ class Ledger:
                 raise
 
             txn.mark_posted()
-            return txn
+            return txn.copy()
 
     def transfer(
         self,
@@ -307,21 +308,57 @@ class Ledger:
                     balances[aid] = account.balance
         return balances
 
-    def get_trial_balance(self) -> Tuple[int, int, bool]:
-        total_debits = 0
-        total_credits = 0
+    def get_trial_balance(
+        self,
+    ) -> Tuple[int, int, bool, Dict[str, Tuple[int, int, int, int, bool]]]:
+        account_details: Dict[str, Tuple[int, int, int, int, bool]] = {}
 
         with self._global_lock:
-            for txn in self._transactions.values():
-                if not txn.is_posted:
-                    continue
-                for entry in txn.entries:
-                    if entry.entry_type == EntryType.DEBIT:
-                        total_debits += entry.amount
-                    else:
-                        total_credits += entry.amount
+            account_entries: Dict[str, List[Entry]] = {
+                aid: list(es) for aid, es in self._account_entries.items()
+            }
+            transactions = dict(self._transactions)
+            accounts = {aid: a.copy() for aid, a in self._accounts.items()}
 
-        return total_debits, total_credits, total_debits == total_credits
+        total_debit_balances = 0
+        total_credit_balances = 0
+
+        for account_id, account in accounts.items():
+            total_debits = 0
+            total_credits = 0
+            for entry in account_entries.get(account_id, []):
+                txn_id = self._entry_to_transaction.get(entry.entry_id)
+                if txn_id is None:
+                    continue
+                txn = transactions.get(txn_id)
+                if txn is None or not txn.is_posted:
+                    continue
+                if entry.entry_type == EntryType.DEBIT:
+                    total_debits += entry.amount
+                else:
+                    total_credits += entry.amount
+
+            expected_balance = account.initial_balance + total_debits - total_credits
+            integrity_ok = expected_balance == account.balance
+
+            account_details[account_id] = (
+                total_debits,
+                total_credits,
+                account.balance,
+                expected_balance,
+                integrity_ok,
+            )
+
+            if account.balance > 0:
+                total_debit_balances += account.balance
+            elif account.balance < 0:
+                total_credit_balances += abs(account.balance)
+
+        balanced = total_debit_balances == total_credit_balances and all(
+            d[4] for d in account_details.values()
+        )
+
+        return total_debit_balances, total_credit_balances, balanced, account_details
 
     def list_transactions(
         self,
@@ -338,5 +375,5 @@ class Ledger:
                     continue
                 if end_time is not None and txn.created_at > end_time:
                     continue
-                results.append(txn)
+                results.append(txn.copy())
         return results

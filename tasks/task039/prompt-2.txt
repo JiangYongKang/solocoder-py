@@ -1,0 +1,8 @@
+你实现的双分录记账账本存在几个问题，需要修复：
+1. get_transaction 和 post_transaction 找不到交易时抛出通用 ValueError，而 get_account 用的是自定义的 AccountNotFoundError。异常类型不统一，调用方无法用同一个自定义异常类型捕获账户和交易不存在的错误。
+2. get_account_entries 中的 _find_transaction_for_entry 每次查找都遍历所有交易做 O(N) 比对，没有建立 entry_id 到 transaction 的映射索引。当账本积累大量分录后，每次查询分录都要扫全量交易，性能会随数据量增长线性退化。
+3. list_accounts、list_transactions、get_account_entries 等方法直接返回内部可变的 Account、Transaction 对象引用。调用方拿到返回值后可以随意修改 balance 或 status 等字段，绕过了账本的状态保护。
+4. get_trial_balance 只统计了所有已过账交易各自内部的 DEBIT/CREDIT 是否相等。由于过账时已保证了每笔交易借贷平衡，这个方法永远返回 True，试算平衡表实际上没有提供任何有意义的账本级完整性验证。
+5. 修复后需要为该模块补充 entry 索引机制的性能对比测试、封装保护的测试，以及一个有实际校验能力的试算平衡表实现并写对应的测试。
+6. 更新 README.md，说明异常类型约定和试算平衡表的校验逻辑（应该验证的是账户余额层面的借贷平衡，而非单笔交易内部平衡）。
+7. 重新运行 poetry run pytest tests/ledger/ -q，需要让所有测试通过。

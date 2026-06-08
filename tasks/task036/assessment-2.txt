@@ -1,0 +1,10 @@
+产物不满意：
+1. test_custom_max_paths_explored_triggers_earlier 测试只包裹了 try/except pass，没有任何断言，无论 PathExplosionError 是否真的触发测试都能通过，没有实际验证可配置阈值的行为，等同于空测试。
+2. test_larger_max_paths_explored_allows_more_exploration 的断言 assert small_raised or not large_raised 逻辑太弱，当两个阈值都没触发爆炸时 small_raised=False 且 large_raised=False，not False=True 使断言直接通过，无法证明更大的阈值确实允许了更多探索。如果 two converters 行为一致（都炸或都不炸），测试也会误判为通过。正确写法应该是 assert small_raised and not large_raised。
+3. test_same_hop_with_inverse_edges_compares_product 中两条路径 S→A→T（2.0/0.4=5.0）和 S→B→T（3.0/0.6=5.0）的汇率乘积相等，无法覆盖不同乘积的比较场景，测试设计无法验证同跳数下选择更优汇率乘积的逻辑。
+4. test_two_hops_two_paths_picks_higher_product 测试中设置了货币 C 的精度 fx.set_precision("C", 4)，但测试路径 S→A→T 和 S→B→T 都不涉及 C，多余精度设置是测试残留，产物不干净。
+
+过程不满意：
+1. 模型收到任务后未经分析就直接创建了 TodoList，然后立即逐文件操作，与第一轮标注指出的"未经分析直接创建 TodoList"模式一致，没有先审视代码和问题之间的关联后再规划。
+2. 模型选择了重写整个 engine.py 来修复 BFS 逻辑，而不是做精确的最小修改。一次性替换整个文件移除了原有 import（CircularPathDetectedError 等），虽然功能没出问题，但全量重写的方式增加了意外引入回归的风险，修复策略不够克制。
+3. 最终输出回复中大量使用了 Markdown 标题、file:// 协议链接和表格格式，正文中残留了格式化表达，与第一轮标注指出的问题一致但未纠正。

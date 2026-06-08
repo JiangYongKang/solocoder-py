@@ -32,7 +32,7 @@
 | `Coupon` | 优惠券抽象基类，包含 `coupon_id`、`name`、`valid_from`、`valid_until`、`mutex_groups`、`priority`、`max_discount`（单券封顶）等通用字段 |
 | `FixedAmountCoupon` | 满减券：达到 `threshold` 门槛后减免 `discount_amount` |
 | `PercentageCoupon` | 折扣券：达到 `threshold` 门槛后按 `discount_rate`（0~1）比例打折 |
-| `TieredCoupon` | 阶梯券：根据订单金额匹配不同 `tiers` 区间，按区间对应规则优惠 |
+| `TieredCoupon` | 阶梯券：根据订单金额匹配不同 `tiers` 区间，按区间对应规则优惠。阶梯区间必须严格连续（不重叠、无缺口） |
 | `CouponDetail` | 单张券计算明细：包含应用状态、排除原因、优惠金额、计算前后金额、是否封顶等 |
 | `CalculationResult` | 整体计算结果：包含原始金额、最终应付金额、总优惠金额、是否触发全局封顶、各券明细列表 |
 
@@ -103,9 +103,43 @@
 
 全局封顶截断时，从**优先级最低**的已应用券开始往回扣减，直至总优惠不超过封顶值，被扣减的券明细中 `capped` 也会被标记为 `True`。
 
+**金额链一致性保证**：全局封顶回退完成后，引擎会以第一张券的 `amount_before` 为起点，按优先级顺序重新推导所有已应用券的 `amount_before` 和 `amount_after`，确保相邻两张券之间前一张的 `amount_after` 恒等于后一张的 `amount_before`，最后一张券的 `amount_after` 等于 `CalculationResult.final_amount`，各阶段金额形成完整无断裂的链条。
+
 ### 金额下限保护
 
 无论何种优惠组合，最终应付金额不会低于 0，单张券优惠也不会超过当前计算阶段的剩余金额。
+
+### 入参不可变性
+
+`calculate()` 方法在执行过程中**不会修改调用方传入的优惠券对象**。若优惠券未指定互斥组需要补默认值，引擎使用 `dataclasses.replace()` 创建副本处理，原始对象的所有字段（包括 `mutex_groups`）在调用前后保持一致。
+
+## 阶梯券连续性校验
+
+`TieredCoupon` 在构造时会对 `tiers` 列表执行严格的连续性校验，校验失败会抛出 `InvalidCouponError`。校验规则包括：
+
+1. **非空性**：`tiers` 至少包含 1 个区间
+2. **末位开放**：只有最后一个区间的 `max_amount` 可以为 `None`（表示无上限），其余区间必须指定明确上限
+3. **无重叠**：排序后相邻区间中，后一区间的 `min_amount` 不得小于前一区间的 `max_amount`
+4. **无缺口**：排序后相邻区间中，后一区间的 `min_amount` 必须等于前一区间的 `max_amount`
+
+通过连续性校验后，所有区间按 `min_amount` 升序排列并覆盖从首个区间起点到无穷大的完整金额范围，任意非负订单金额必然落入且仅落入一个区间。
+
+合法示例：
+```python
+tiers = [
+    Tier(0,   100,  TierDiscountType.FIXED_AMOUNT, 5),
+    Tier(100, 300,  TierDiscountType.FIXED_AMOUNT, 20),
+    Tier(300, None, TierDiscountType.FIXED_AMOUNT, 50),
+]
+```
+
+非法示例（存在 50~100 的缺口）：
+```python
+tiers = [
+    Tier(0,   50,  TierDiscountType.FIXED_AMOUNT, 5),
+    Tier(100, 200, TierDiscountType.FIXED_AMOUNT, 20),  # ❌ 与上一区间不连续
+]
+```
 
 ## 使用示例
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from contextlib import contextmanager
-from typing import Any, Callable, Deque, Dict, Iterator, Optional
+from typing import Any, Callable, Deque, Dict, Iterator, Optional, Union
 from uuid import uuid4
 
 from .clock import Clock, SystemClock
@@ -19,8 +19,11 @@ from .models import (
     GroupStats,
     TaskResult,
     TaskStatus,
+    _AcquireWaiter,
     _TaskWrapper,
 )
+
+_QueueEntry = Union[_TaskWrapper, _AcquireWaiter]
 
 
 class _GroupState:
@@ -29,7 +32,7 @@ class _GroupState:
         self.current_concurrency: int = 0
         self.success_count: int = 0
         self.failure_count: int = 0
-        self.queue: Deque[_TaskWrapper] = deque()
+        self.queue: Deque[_QueueEntry] = deque()
         self.condition = threading.Condition()
 
     def get_stats(self) -> GroupStats:
@@ -150,14 +153,16 @@ class BulkheadExecutor:
 
                     while True:
                         if state.current_concurrency < state.config.max_concurrency:
-                            state.queue.remove(task)
+                            if task in state.queue:
+                                state.queue.remove(task)
                             break
 
                         wait_timeout: Optional[float] = None
                         if deadline is not None:
                             wait_timeout = deadline - self._clock.now()
                             if wait_timeout <= 0:
-                                state.queue.remove(task)
+                                if task in state.queue:
+                                    state.queue.remove(task)
                                 queue_wait = self._clock.now() - queue_start
                                 rejected_result = TaskResult(
                                     task_id=task.task_id,
@@ -179,17 +184,17 @@ class BulkheadExecutor:
                         ):
                             if task in state.queue:
                                 state.queue.remove(task)
-                                queue_wait = self._clock.now() - queue_start
-                                rejected_result = TaskResult(
-                                    task_id=task.task_id,
-                                    group_name=group_name,
-                                    status=TaskStatus.QUEUE_TIMEOUT,
-                                    exception=BulkheadQueueTimeoutError(
-                                        task.task_id, group_name
-                                    ),
-                                    queue_wait_time=queue_wait,
-                                )
-                                break
+                            queue_wait = self._clock.now() - queue_start
+                            rejected_result = TaskResult(
+                                task_id=task.task_id,
+                                group_name=group_name,
+                                status=TaskStatus.QUEUE_TIMEOUT,
+                                exception=BulkheadQueueTimeoutError(
+                                    task.task_id, group_name
+                                ),
+                                queue_wait_time=queue_wait,
+                            )
+                            break
 
                     if rejected_result is not None:
                         return rejected_result
@@ -243,22 +248,25 @@ class BulkheadExecutor:
             return self._groups[group_name]
 
     @contextmanager
-    def acquire(self, group_name: str, task_id: Optional[str] = None) -> Iterator[None]:
+    def acquire(
+        self,
+        group_name: str,
+        *,
+        task_id: Optional[str] = None,
+    ) -> Iterator[None]:
         if task_id is None:
             task_id = uuid4().hex
 
         state = self._get_group_state(group_name)
         acquired = False
+        waiter: Optional[_AcquireWaiter] = None
+        submitted_at = self._clock.now()
 
         with state.condition:
             if state.current_concurrency >= state.config.max_concurrency:
                 if state.config.full_strategy == FullStrategy.REJECT:
                     raise BulkheadFullError(task_id, group_name)
                 else:
-                    deadline: Optional[float] = None
-                    if state.config.queue_timeout > 0:
-                        deadline = self._clock.now() + state.config.queue_timeout
-
                     if (
                         state.config.max_queue_size > 0
                         and len(state.queue) >= state.config.max_queue_size
@@ -270,19 +278,32 @@ class BulkheadExecutor:
                             f"task '{task_id}' rejected",
                         )
 
+                    deadline: Optional[float] = None
+                    if state.config.queue_timeout > 0:
+                        deadline = submitted_at + state.config.queue_timeout
+
+                    waiter = _AcquireWaiter(task_id=task_id, submitted_at=submitted_at)
+                    state.queue.append(waiter)
+
                     while True:
                         if state.current_concurrency < state.config.max_concurrency:
+                            if waiter in state.queue:
+                                state.queue.remove(waiter)
                             break
 
                         wait_timeout: Optional[float] = None
                         if deadline is not None:
                             wait_timeout = deadline - self._clock.now()
                             if wait_timeout <= 0:
+                                if waiter in state.queue:
+                                    state.queue.remove(waiter)
                                 raise BulkheadQueueTimeoutError(task_id, group_name)
 
                         state.condition.wait(timeout=wait_timeout)
 
                         if deadline is not None and self._clock.now() >= deadline:
+                            if waiter in state.queue:
+                                state.queue.remove(waiter)
                             raise BulkheadQueueTimeoutError(task_id, group_name)
 
             state.current_concurrency += 1

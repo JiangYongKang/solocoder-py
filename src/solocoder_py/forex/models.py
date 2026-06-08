@@ -31,8 +31,8 @@ class ExchangeRate:
             )
         if self.rate <= 0:
             raise InvalidExchangeRateError("rate must be positive")
-        if self.version <= 0:
-            raise InvalidExchangeRateError("version must be positive")
+        if self.version < 0:
+            raise InvalidExchangeRateError("version cannot be negative")
 
 
 @dataclass
