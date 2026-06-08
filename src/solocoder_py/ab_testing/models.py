@@ -16,8 +16,6 @@ class Experiment:
     mutex_group: Optional[str] = None
     bucket_start: Optional[int] = None
     bucket_end: Optional[int] = None
-    group_bucket_start: Optional[int] = None
-    group_bucket_end: Optional[int] = None
 
 
 @dataclass

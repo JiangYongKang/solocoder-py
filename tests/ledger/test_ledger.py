@@ -577,6 +577,34 @@ class TestTrialBalance:
         assert details["c"][2] == details["c"][3]
         assert details["d"][2] == details["d"][3]
 
+    def test_trial_balance_integrity_detects_mismatched_balance(self):
+        ledger = make_ledger()
+        ledger.create_account("a", "A", initial_balance=500)
+        ledger.create_account("b", "B", initial_balance=500)
+
+        ledger.transfer("a", "b", 50)
+
+        td, tc, balanced, details = ledger.get_trial_balance()
+        assert all(d[4] for d in details.values())
+
+        debit = make_entry("a", EntryType.DEBIT, 30, "injected")
+        credit = make_entry("b", EntryType.CREDIT, 30, "injected")
+        fake_txn = make_transaction([debit, credit], "injected posted")
+        fake_txn.mark_posted()
+        _add_raw_transaction(ledger, fake_txn)
+
+        td, tc, balanced, details = ledger.get_trial_balance()
+        assert balanced is False
+
+        assert details["a"][4] is False
+        assert details["b"][4] is False
+
+        assert details["a"][2] == 550
+        assert details["a"][3] == 580
+
+        assert details["b"][2] == 450
+        assert details["b"][3] == 420
+
     def test_trial_balance_details_structure(self):
         ledger = make_ledger()
         ledger.create_account("a", "A", initial_balance=500)
@@ -765,6 +793,80 @@ class TestEntryIndex:
             assert linked_txns == set(txn_ids)
             for entry, txn in entries:
                 assert any(e.entry_id == entry.entry_id for e in txn.entries)
+
+    def test_indexed_lookup_constant_ops_vs_scan_linear_ops(self):
+        ledger_small = make_ledger()
+        ledger_small.create_account("a", "A", initial_balance=1000000)
+        ledger_small.create_account("b", "B", initial_balance=1000000)
+
+        ledger_large = make_ledger()
+        ledger_large.create_account("a", "A", initial_balance=1000000)
+        ledger_large.create_account("b", "B", initial_balance=1000000)
+
+        N_SMALL_TXNS = 10
+        N_LARGE_TXNS = 500
+
+        for _ in range(N_SMALL_TXNS):
+            ledger_small.transfer("a", "b", 1)
+            ledger_small.transfer("b", "a", 1)
+
+        for _ in range(N_LARGE_TXNS):
+            ledger_large.transfer("a", "b", 1)
+            ledger_large.transfer("b", "a", 1)
+
+        class CountingDict(dict):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.get_count = 0
+
+            def get(self, key, default=None):
+                self.get_count += 1
+                return super().get(key, default)
+
+        def count_indexed_ops(ledger_obj, account):
+            orig_entry = ledger_obj._entry_to_transaction
+            orig_txn = ledger_obj._transactions
+            counting_entry = CountingDict(orig_entry)
+            counting_txn = CountingDict(orig_txn)
+            ledger_obj._entry_to_transaction = counting_entry
+            ledger_obj._transactions = counting_txn
+            try:
+                ledger_obj.get_account_entries(account)
+            finally:
+                ledger_obj._entry_to_transaction = orig_entry
+                ledger_obj._transactions = orig_txn
+            return counting_entry.get_count + counting_txn.get_count
+
+        def count_scan_ops(ledger_obj, account):
+            entry_list = list(ledger_obj._account_entries.get(account, []))
+            txn_items = list(ledger_obj._transactions.items())
+            counter = 0
+            for entry in entry_list:
+                for txn_id, txn in txn_items:
+                    counter += 1
+                    if any(e.entry_id == entry.entry_id for e in txn.entries):
+                        break
+            return counter
+
+        small_indexed_ops = count_indexed_ops(ledger_small, "a")
+        large_indexed_ops = count_indexed_ops(ledger_large, "a")
+        small_scan_ops = count_scan_ops(ledger_small, "a")
+        large_scan_ops = count_scan_ops(ledger_large, "a")
+
+        SMALL_ENTRIES = N_SMALL_TXNS * 2
+        LARGE_ENTRIES = N_LARGE_TXNS * 2
+
+        assert small_indexed_ops == 2 * SMALL_ENTRIES
+        assert large_indexed_ops == 2 * LARGE_ENTRIES
+
+        assert large_indexed_ops - small_indexed_ops == 2 * (
+            LARGE_ENTRIES - SMALL_ENTRIES
+        )
+
+        assert large_scan_ops >= small_scan_ops * (N_LARGE_TXNS / N_SMALL_TXNS) * 0.8
+
+        assert small_indexed_ops < small_scan_ops
+        assert large_indexed_ops < large_scan_ops
 
 
 class TestConcurrency:

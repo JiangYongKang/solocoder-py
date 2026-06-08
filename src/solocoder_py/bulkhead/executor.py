@@ -25,6 +25,8 @@ from .models import (
 
 _QueueEntry = Union[_TaskWrapper, _AcquireWaiter]
 
+_POLL_INTERVAL: float = 0.01
+
 
 class _GroupState:
     def __init__(self, config: GroupConfig) -> None:
@@ -205,24 +207,14 @@ class BulkheadExecutor:
                     state.queue.remove(entry)
                     return self._clock.now() - queue_start
 
-                wait_timeout: Optional[float] = None
-                if deadline is not None:
-                    wait_timeout = deadline - self._clock.now()
-                    if wait_timeout <= 0:
-                        state.queue.remove(entry)
-                        wait = self._clock.now() - queue_start
-                        raise BulkheadQueueTimeoutError(
-                            entry.task_id, state.config.name, queue_wait_time=wait
-                        )
-
-                state.condition.wait(timeout=wait_timeout)
-
                 if deadline is not None and self._clock.now() >= deadline:
                     state.queue.remove(entry)
                     wait = self._clock.now() - queue_start
                     raise BulkheadQueueTimeoutError(
                         entry.task_id, state.config.name, queue_wait_time=wait
                     )
+
+                state.condition.wait(timeout=_POLL_INTERVAL)
         except BaseException:
             if entry in state.queue:
                 state.queue.remove(entry)

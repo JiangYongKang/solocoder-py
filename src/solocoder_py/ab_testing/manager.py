@@ -89,13 +89,8 @@ class ABTestManager:
                 experiment.status = ExperimentStatus.RUNNING
                 return
 
-            previous_status = experiment.status
+            self._allocate_buckets(experiment)
             experiment.status = ExperimentStatus.RUNNING
-            try:
-                self._allocate_buckets(experiment)
-            except Exception:
-                experiment.status = previous_status
-                raise
 
     def stop_experiment(self, name: str) -> None:
         with self._lock:
@@ -291,7 +286,6 @@ class ABTestManager:
                 group.total_traffic += extra_needed
 
         group.experiments.append(experiment.name)
-        self._recalc_group_experiment_bucket_ranges(group_name)
 
     def _release_buckets(self, experiment: Experiment) -> None:
         if experiment.mutex_group:
@@ -302,8 +296,6 @@ class ABTestManager:
                     self._bucket_owner[i] = None
         experiment.bucket_start = None
         experiment.bucket_end = None
-        experiment.group_bucket_start = None
-        experiment.group_bucket_end = None
 
     def _release_mutex_group_buckets(self, experiment: Experiment) -> None:
         group_name = experiment.mutex_group
@@ -323,26 +315,6 @@ class ABTestManager:
                 ):
                     self._bucket_owner[bucket] = None
             del self._mutex_groups[group_name]
-        else:
-            self._recalc_group_experiment_bucket_ranges(group_name)
-
-    def _recalc_group_experiment_bucket_ranges(self, group_name: str) -> None:
-        group = self._mutex_groups[group_name]
-        sorted_experiments = sorted(
-            group.experiments,
-            key=lambda n: (-self._experiments[n].priority, self._experiments[n].created_at),
-        )
-
-        offset = 0
-        for exp_name in sorted_experiments:
-            exp = self._experiments[exp_name]
-            if exp.status == ExperimentStatus.RUNNING:
-                exp.group_bucket_start = offset
-                exp.group_bucket_end = offset + exp.traffic_percentage - 1
-                offset += exp.traffic_percentage
-            else:
-                exp.group_bucket_start = None
-                exp.group_bucket_end = None
 
     def _get_used_traffic(self) -> int:
         used = 0

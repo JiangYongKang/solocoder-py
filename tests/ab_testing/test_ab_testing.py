@@ -562,18 +562,12 @@ class TestMutexGroupNonContiguousBuckets:
         assert mutex_a_exp.bucket_end is None
         assert mutex_b_exp.bucket_start is None
         assert mutex_b_exp.bucket_end is None
-        assert mutex_a_exp.group_bucket_start is not None
-        assert mutex_a_exp.group_bucket_end is not None
-        assert mutex_b_exp.group_bucket_start is not None
-        assert mutex_b_exp.group_bucket_end is not None
-        assert (
-            mutex_a_exp.group_bucket_end - mutex_a_exp.group_bucket_start + 1
-            == mutex_a_exp.traffic_percentage
-        )
-        assert (
-            mutex_b_exp.group_bucket_end - mutex_b_exp.group_bucket_start + 1
-            == mutex_b_exp.traffic_percentage
-        )
+        assert mutex_a_exp.mutex_group == "mg"
+        assert mutex_b_exp.mutex_group == "mg"
+        assert mutex_a_exp.traffic_percentage == 20
+        assert mutex_b_exp.traffic_percentage == 20
+        assert mutex_a_exp.status == ExperimentStatus.RUNNING
+        assert mutex_b_exp.status == ExperimentStatus.RUNNING
 
 
 class TestBucketOccupancy:

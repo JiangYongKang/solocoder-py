@@ -812,30 +812,38 @@ class TestConcurrency:
 class TestCalculationImmutability:
     def test_tier_calculation_details_not_mutated_by_engine(self):
         from .conftest import DEFAULT_EFFECTIVE_FROM
-        from solocoder_py.billing import TieredPricing
 
         engine = BillingEngine()
-        pricing = TieredPricing(
-            resource_type=RES,
-            tiers=make_simple_tier(1.5),
+        engine.configure_tiered_pricing(
+            RES,
+            make_simple_tier(1.5),
             effective_from=DEFAULT_EFFECTIVE_FROM,
         )
-        engine._pricing_configs[RES] = [(DEFAULT_EFFECTIVE_FROM, pricing)]
         _, period = open_standard_period(engine)
 
+        pricing = engine.get_pricing_at(RES, in_period(period, 1))
+        assert pricing is not None
+
         _, original_details = pricing.calculate_cost(100)
-        original_costs = [d.tier_cost for d in original_details]
-        original_units = [d.units_applied for d in original_details]
+        original_costs_snapshot = [d.tier_cost for d in original_details]
+        original_units_snapshot = [d.units_applied for d in original_details]
+        original_objects_id = [id(d) for d in original_details]
 
         engine.report_usage(ACC, RES, 100, reported_at=in_period(period, 1))
         bills = engine.settle_period()
 
-        _, fresh_details = pricing.calculate_cost(100)
-        fresh_costs = [d.tier_cost for d in fresh_details]
-        fresh_units = [d.units_applied for d in fresh_details]
-
-        assert fresh_costs == original_costs, "Pricing.calculate_cost original results should not be mutated"
-        assert fresh_units == original_units, "Pricing.calculate_cost original units should not be mutated"
+        for i, d in enumerate(original_details):
+            assert id(d) == original_objects_id[i], (
+                "Test should be checking the same original objects"
+            )
+            assert d.tier_cost == original_costs_snapshot[i], (
+                f"Original TierCalculationDetail[{i}].tier_cost was mutated: "
+                f"expected {original_costs_snapshot[i]}, got {d.tier_cost}"
+            )
+            assert d.units_applied == original_units_snapshot[i], (
+                f"Original TierCalculationDetail[{i}].units_applied was mutated: "
+                f"expected {original_units_snapshot[i]}, got {d.units_applied}"
+            )
 
         bill = bills[0]
         line = bill.line_items[0]
@@ -843,3 +851,9 @@ class TestCalculationImmutability:
             for td in split.tier_details:
                 assert td.tier_cost == pytest.approx(150.0)
                 assert td.units_applied == pytest.approx(100.0)
+
+            for td in split.tier_details:
+                assert id(td) not in original_objects_id, (
+                    "Engine should return new TierCalculationDetail instances, "
+                    "not the ones returned by pricing.calculate_cost()"
+                )

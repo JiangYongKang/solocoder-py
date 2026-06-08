@@ -1,0 +1,3 @@
+你修复的舱壁隔离执行器还有两个遗留问题，需要修正：
+1. 超时测试把 ManualClock 换成了 SystemClock + 0.1s 真实超时，使 Clock 抽象在整个集成测试中变成了死代码。0.1s 超时配 queue_wait_time >= 0.08 的断言在 CI 高负载下线程调度稍慢就可能低于阈值。需要让超时测试回归 ManualClock 控制，或者用不依赖 condition.wait 真实超时的替代方案来验证 deadline 计算。
+2. 重新运行 poetry run pytest tests/bulkhead/ -q，需要让所有测试通过。

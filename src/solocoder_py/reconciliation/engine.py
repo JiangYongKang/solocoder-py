@@ -95,7 +95,7 @@ class ReconciliationEngine:
     def _content_key(txn: Transaction) -> Tuple:
         return (
             round(txn.amount, 6),
-            txn.txn_time.replace(microsecond=0),
+            txn.txn_time,
             txn.status.value,
             txn.side.value,
             txn.order_id or "",
@@ -180,13 +180,7 @@ class ReconciliationEngine:
                 if txn.txn_id not in seen:
                     seen[txn.txn_id] = txn
             else:
-                ck = (
-                    round(txn.amount, 6),
-                    txn.txn_time.replace(microsecond=0),
-                    txn.status.value,
-                    txn.side.value,
-                    txn.order_id or "",
-                )
+                ck = ReconciliationEngine._content_key(txn)
                 if ck not in seen_content:
                     seen_content.add(ck)
                     key = f"__no_id_{no_id_counter}"
@@ -252,7 +246,7 @@ class ReconciliationEngine:
                     internal_txn=itxn,
                     channel_txn=ctxn,
                     match_type=MatchType.EXACT,
-                    diff_amount=0.0,
+                    diff_amount=itxn.amount - ctxn.amount,
                 ))
                 internal_matched.add(i_key)
                 channel_matched.add(c_key)
