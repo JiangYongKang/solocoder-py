@@ -1,0 +1,15 @@
+产物不满意：
+1. get_transaction 和 post_transaction 找不到交易时抛出通用 ValueError，与 get_account 使用 AccountNotFoundError 的异常处理风格不一致，调用方无法用统一的自定义异常类型捕获"交易不存在"错误。
+2. get_account_entries 方法中 _find_transaction_for_entry 每次查找都遍历所有交易做 O(N) 比对，没有建立 entry_id 到 transaction_id 的索引映射，当账本积累大量分录和交易后查询性能会急剧退化。
+3. get_balance 方法内部连续两次获取全局锁（get_account 一次校验账户存在、_get_or_create_account_lock 一次获取账户锁），虽然功能正确但存在不必要的锁争用开销，可以优化为一次全局锁完成账户校验和锁获取。
+4. list_accounts、list_transactions、get_account_entries 等方法直接返回内部可变对象引用，调用方拿到返回值后可以随意修改 Account 的 balance 或 Transaction 的 status 等字段，绕过了账本的状态保护机制，违反了封装性原则。
+5. get_trial_balance 的实现只是统计所有已过账交易的 DEBIT/CREDIT 分录总额是否相等，由于过账时已保证每笔交易借贷平衡，这个方法永远返回 True，试算平衡表实际上没有提供任何有意义的账本完整性验证能力。
+6. 创建 Account 模型设计 allow_overdraft 字段但没有包含 overdraft_limit（透支额度上限）概念，可透支账户意味着可以有任意负余额，与现实业务场景差距过大，提示词要求"允许透支"但应有限额。
+
+过程不满意：
+1. 模型一收到任务就直接创建了 10 项 TodoList（第 4 行），没有先阅读需求文档和提示词再规划，违反了标注规范中"不能刚收到任务时就立即创建 TodoList，应先分析问题再规划"的要求。
+2. 模型一开始把借贷语义写反了（DEBIT/CREDIT 分别倾向于增减的对应关系搞错，第 313 行），双分录记账的借贷方向是最基础的概念，说明在动手编码前没有充分理解业务语义就匆匆开写。
+3. 模型使用 python -m pytest 和 pip install pytest 运行测试（第 285/299 行），而不是项目约定的 poetry run pytest，命令选取与项目规范不一致。
+4. 并发测试失败后模型连续两次修改测试代码来适应代码实现（第 473 行"让我修复这个测试"、第 527 行"等等测试还有问题"），这是测试向生产代码妥协的典型表现，说明对并发正确性的设计信心不足。
+5. 遇到死锁后模型选择重写整个 ledger.py 核心引擎（第 583/630 行）而非定位具体是哪两个方法的锁顺序冲突做最小修正，存在试错式调试的信号。
+6. 模型多次在同一个文件上反复查看-修改-重写（ledger.py 被查看至少 3 次、test_ledger.py 被完整重写），过程中频繁推翻之前的逻辑，推理效率较低。

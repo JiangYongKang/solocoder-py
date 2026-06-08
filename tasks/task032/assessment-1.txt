@@ -1,0 +1,16 @@
+产物不满意：
+1. TaskStatus 枚举定义了 PENDING 和 RUNNING 两个值，但在整个模块中从来没有被赋值给任何 TaskResult，属于纯粹的无效代码。
+2. _TaskWrapper 内部定义了 timeout_deadline 和 result 两个字段但从未使用，deadline 在 _execute_task 里又从 task.submitted_at 重新算了一遍，result 全程保持 None，字段纯属冗余。
+3. acquire() 上下文管理器在 QUEUE 策略下等待槽位时没有将自己加入 state.queue，导致队列统计看不到 acquire 的等待任务，max_queue_size 限制也对 acquire 调用者完全无效，提交任务和执行代码块两种入口行为不一致。
+4. _execute_task 释放槽位时只在 state.queue 非空时才调用 notify_all()，如果 acquire() 的等待者在排队（又不入队列），且释放时队列恰好为空，那 acquire() 等待者永远不会被唤醒，只能干等超时。
+5. acquire() 搭配 QUEUE 策略和超时的场景完全没有任何测试覆盖，现有测的是直接拿到槽位和直接拒绝，排队等待后获得槽位或排队超时这两种关键路径在 acquire 上没有被验证过。
+6. README 里写 BaseException 子类（如 KeyboardInterrupt）会被区分处理，但 _execute_task 只 catch 了 Exception，BaseException 类异常直接往上抛，README 的描述跟实际代码行为对不上。
+7. submit() 的 **kwargs 和 task_id 参数存在命名冲突风险，如果用户的任务函数碰巧有一个叫 task_id 的关键字参数，就会收到框架自动生成的 task_id 值而不是函数本身预期的参数。
+
+过程不满意：
+1. 模型在查看项目结构后很快就创建了 TodoList 开始写代码，没有先分析舱壁模式的并发模型和 state.condition 的锁语义，导致第一版 acquire() 把 yield 放在 with state.condition: 内造成死锁，后面才回头修。
+2. 测试失败后模型采用逐個测试运行逐一修改的方式调试，反复查看 test_bulkhead.py 同一文件多达 9 次，定位问题效率低，没有先梳理清楚哪些是代码缺陷哪些是测试竞态条件。
+3. 首次运行测试命令末尾带了 undefined 参数，随后又用 StopCommand 提前终止还在跑的测试，没有等结果出来再判断，过程操作很毛躁。
+4. 模型修复了 acquire 的死锁问题后就直接去改测试代码了，没有再检查 acquire 和 submit 两条路径在队列管理和通知机制上的一致性，漏掉了 acquire 不入队列这个结构性缺陷。
+5. 模型总结里写 "finally 块都会确保释放槽位并通过条件变量通知等待队列"，实际 notify_all 只在队列非空时才执行，acquire 的等待者根本不触发通知，这句话是脑子里想当然的结论，没有代码验证。
+6. 整个过程没有使用过一次 poetry run pytest，全部用的 python -m pytest，跟项目约定的运行方式不一致。

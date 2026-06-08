@@ -1,0 +1,10 @@
+产物不满意：
+1. test_rule_priority_sorting 没有通过 engine.evaluate() 验证排序结果在评估中的实际效果，只直接调用了 Python 内置的 sorted() 并对返回值做了断言，相当于测试的是标准库行为而非被测模块的优先级排序逻辑。
+2. DependencyNotFoundError 在 exceptions.py 中定义并在 __init__.py 中导出，但引擎所有路径都未抛出该异常——依赖不存在时引擎直接返回 DEPENDENCY_MISS 评估结果，该异常类变成了从未使用的死代码。
+3. add_flag 方法中 if/else 两个分支的代码完全一样（仅多一个 return），分支结构没有实际语义差异，属于冗余代码，可以合并成单一逻辑路径。
+4. CONTAINS 操作符对 dict 类型使用 expected in actual 查找的是 key 而非 value，与 list、tuple、set 的"元素是否在容器内"语义不一致，相同操作符在不同容器类型上的行为标准不统一。
+
+过程不满意：
+1. 模型在刚收到任务后立刻调用 todo_write 创建了 TodoList（第 4 行），没有先阅读和理解提示词文档内容再制定工作计划，违反了"应先分析问题再规划"的原则。
+2. 首次运行测试使用了 python -m pytest tests/feature_flag/ -v undefined，命令末尾带了无意义的 undefined 字符串参数，失败后才换用 poetry run pytest 这个项目约定的正确方式，说明没有一开始就采用项目建好的工具链运行测试。
+3. 初版代码发布后有 3 个测试失败，随后对 engine.py 修改了 3 次、test_feature_flag.py 修改了 3 次，来回调整"添加时是否允许依赖尚不存在的开关"的设计，说明初始设计未充分预估前向引用场景，依赖事后多轮修补才让测试通过。

@@ -1,0 +1,18 @@
+产物不满意：
+1. _add_cycle 用 date.replace(month=…) 推算下个周期，当起始日在月末（如 1 月 31 日月付、3 月 31 日月付、8 月 31 日季付）时，目标月份不存在该日会抛出 ValueError，整个流程直接崩溃。提示词要求支持任意日期的月付/季付/年付，但月末日期天然触发此 BUG。
+2. renew() 和 terminate() 都直接调用 set_state() 绕过 transition_to() 校验，而这两个方法的目标转移本身在状态机中都是合法的（ACTIVE→ACTIVE、PAUSED→EXPIRED等），没有理由不经过正常校验。绕行导致状态机形同虚设，终止已过期订阅时连 DuplicateOperationException 都要靠额外代码硬挡，逻辑不自洽。
+3. downgrade() 在操作入口处禁止从 PAUSED 状态发起降级，但 states.py 中 _TRANSITIONS 声明了 PAUSED → DOWNGRADE_PENDING 是合法转移，且 test_valid_transitions_from_paused 也验证了 can_transition_to(DOWNGRADE_PENDING) 为 True。代码自身存在入口守卫与状态机定义之间的不一致，到底从暂停状态能不能降级没有统一结论。
+4. 提示词要求覆盖异常分支"重复续费"，但 renew() 完全没有检测同一周期内重复续费的逻辑，无论调多少次都会顺次延长周期，也没有任何测试用例覆盖这个场景。
+5. _calculate_cycle_days 函数在 models.py 中定义但从未被任何代码调用，是纯粹的死亡代码，模型中还存在对它的导入引用嫌疑。模块中实际退款用的是 calculate_refund 的两端日期直接做差，_calculate_cycle_days 的日历月处理并未被使用。
+6. check_expiry() 中对 ACTIVE 和 DOWNGRADE_PENDING 到期只写了一个 pass，DOWNGRADE_PENDING 到期后不会自动应用降级计划变更，仅靠用户手动 renew() 时携带生效，提示词描述的"到期后变更为降级后的计划"没有独立触发路径。
+7. SubscriptionPlan.cycle_days 用固定天数（30/90/365）参与降级校验中的周期长度比较，但 _add_cycle 和 _calculate_cycle_days 用的是日历月实际天数，降级可用计划筛选的标准和实际持续时间计算使用了两套不同度量体系，筛选结果可能不准确。
+8. state_history 过滤掉了 RENEW 操作，但续费是用户感知的最核心状态事件之一，排除它后"完整的状态变更历史记录"缺少关键的续费记录，与提示词要求不符。
+9. README 状态转移表中 PAUSED 行的合法目标只写了"活跃、已取消、已过期"，遗漏了代码中实际支持且测试中已验证的 DOWNGRADE_PENDING，文档与实现不一致。
+
+过程不满意：
+1. 模型在刚收到任务、还没分析需求和项目结构时就直接创建了 TodoList（session-cot-1 第 76 行），不符合先分析再规划的过程规范。
+2. 模型在写完 states.py 和 models.py 后发现 state 属性缺少 setter，随后在 states.py 和 models.py 之间来回修改至少 4 轮 edit_file_search_replace（第 132-230 行），对同一功能点反复推翻调整，推理效率明显偏低。
+3. 两次测试执行使用的是 python -m pytest 而非项目约定的 poetry run pytest，工具使用不规范。
+4. 首次运行测试出现 4 个失败后，模型没有先静下来把所有失败原因分析完再统一修复，而是改一处跑一次、改一处跑一次，从思考过程看不出系统性的根因排查，属于试错式调试。
+5. _calculate_cycle_days 定义后从未被引用，模型编写时没有检查该函数的调用方是否存在，且在最终总结中声称退款"按实际日历天数计算"，实际上退款路径根本没用到这个函数——属于对自身产物的描述与实际代码不符，有虚假陈述嫌疑。
+6. 模型在总结中宣称"93 个单元测试全部通过"后就标记任务完成，未检查 README 状态转移表与代码转移矩阵的一致性，忽视了对交付文档的自查。

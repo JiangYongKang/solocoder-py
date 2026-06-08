@@ -1,0 +1,12 @@
+产物不满意：
+1. normalize_internal_record 和 normalize_channel_record 用 `str(txn_id)` 兜底，当记录所有 txn_id 候选字段都缺失时 txn_id 会变成字符串 "None"。这个伪造的流水号会让多个缺失流水号的记录因 txn_id 相同被去重，且它们彼此也能通过流水号匹配配对，与提示词"流水号缺失时的匹配降级逻辑"意图冲突——缺失流水号应该是触发 fallback 而非变成假流水号参与 ID 匹配。
+2. README 明确写 fallback 匹配"金额按两位小数四舍五入后相等"，但 engine.py L240 使用 `itxn.amount == ctxn.amount` 做浮点精确比较，既没有四舍五入也没有 epsilon 容差保护。真实支付场景金额可能经不同系统的浮点运算产生微小误差（如 12.345000001 vs 12.345），会导致本该通过 fallback 匹配的记录匹配失败。
+3. fallback 降级匹配中，状态不一致的流水在 L234-235 直接跳过，但跳过之后不再尝试别的候选、也不记录任何差异，它们在最终结果里被分别归为 CHANNEL_MISSING 和 INTERNAL_MISSING。在流水号不同但金额和时间都接近、唯独状态不同时，差异分类丢了状态不一致这一条。
+4. matched_amount 的计算（engine.py L360）仅取 internal_txn.amount，对于容差核销和 fallback 容差匹配的记录没有用核销后的金额，汇总报告里"匹配成功金额"与实际核销金额口径不一致。
+5. 测试中 test_fallback_match_by_amount_and_time 用 "INT-001"/"CH-001" 模拟流水号不同但非空，并没有覆盖真正流水号缺失——两边记录都没有 txn_id 字段的场景。提示词要求的"流水号缺失时的匹配降级"实际上没测到。
+6. Transaction.__post_init__ 校验 txn_id 不能为空，但 normalize_internal_record 可能产出 txn_id="None" 的记录，因为 "None" 字符串是 truthy，校验被绕过，这是校验与归一化之间的不一致。
+
+过程不满意：
+1. 模型第一次写完 engine.py 后说"发现有一些语法和逻辑问题，让我重写"但没有记录具体是哪些问题就覆盖了第一版，过程丢失了审阅上下文，后续无法评估模型对自己错误的认知是否准确。
+2. 模型全程使用 `python -m pytest` 运行测试，项目标准命令是 `poetry run pytest`，没有按项目约定执行。
+3. 模型在查看两个参考模块后就跳到 TodoList 开始编码，没有先分析提示词要求再规划实现步骤，缺少需求理解和方案设计的中间输出。
