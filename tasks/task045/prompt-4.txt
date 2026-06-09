@@ -1,0 +1,3 @@
+上一轮修复后，节假日判定代码中遗留了一段无操作死代码，需要清理：
+1. engine.py 的 _split_non_holiday_ranges 方法中存在一段 `if result and result[-1][1] == segment_start: pass` 的无操作分支，无论条件成立与否执行路径完全相同，属于逻辑残留。需要清理这段死代码或补充被遗漏的相邻段合并逻辑。
+2. 重新运行 poetry run pytest tests/booking/ -q，确保所有测试仍然通过。

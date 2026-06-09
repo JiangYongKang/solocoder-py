@@ -1,0 +1,3 @@
+上一轮新增的策略对比测试中，有一处断言不够精确，需要修复：
+1. test_best_fit_succeeds_where_first_fit_fails 测试中，对 First-Fit 未装箱物品名称的断言使用了 `ff_result.unpacked_items[0].name in ("C", "D")` 这种成员关系检查。该测试的输入是确定性的，通过手工追踪 First-Fit 装箱序列可以确认未装箱的物品具体是哪一个，不需要使用模糊断言。
+2. 重新运行 poetry run pytest tests/packing/ -q，确保所有测试仍然通过。

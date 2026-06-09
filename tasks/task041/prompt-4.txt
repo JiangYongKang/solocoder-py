@@ -1,0 +1,4 @@
+你上一轮修复后，README.md 仍然完全未更新，与当前代码实际行为不一致，需要修复：
+1. README.md 的文档内容仍然是第 2 轮的状态，完全不包含第 3 轮新增的部分拒付（PARTIALLY_CHARGED_BACK）相关状态和转移规则。状态枚举表缺少部分拒付节点，状态转移表缺少审核中/已退款到部分拒付、部分拒付到已拒付的转移路径，拒付处理规则也未区分全额拒付和部分拒付。
+2. README.md 的使用示例中多处引用了已废弃的 chargeback_id（单数 str 类型），但当前 models.py 已将字段改为 chargeback_ids（list 类型），示例代码与实际 API 不兼容。
+3. 更新后重新运行 poetry run pytest tests/refund/ -q，确保所有测试仍然通过。

@@ -40,9 +40,6 @@ class BookingEngine:
     def is_holiday(self, check_date: date) -> bool:
         return check_date in self._holidays
 
-    def _datetime_falls_on_holiday(self, dt: datetime) -> bool:
-        return dt.date() in self._holidays
-
     def _split_non_holiday_ranges(
         self, start: datetime, end: datetime
     ) -> List[Tuple[datetime, datetime]]:
@@ -61,12 +58,13 @@ class BookingEngine:
             seg_end_in_day = min(end, day_end)
 
             if current_date in self._holidays:
-                if result and result[-1][1] == segment_start:
-                    pass
                 segment_start = seg_end_in_day
             else:
                 if segment_start < seg_end_in_day:
-                    result.append((segment_start, seg_end_in_day))
+                    if result and result[-1][1] == segment_start:
+                        result[-1] = (result[-1][0], seg_end_in_day)
+                    else:
+                        result.append((segment_start, seg_end_in_day))
                 segment_start = seg_end_in_day
 
             current_date = current_date + timedelta(days=1)

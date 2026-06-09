@@ -950,8 +950,8 @@ class TestStageCounterConsistency:
             f"success({s2.success_count})+failed({s2.failed_count})+cancelled({s2.cancelled_count})"
         )
 
-        assert s1.success_count + s1.cancelled_count >= s1.processed_count
-        assert s2.success_count + s2.cancelled_count >= s2.processed_count
+        assert s1.success_count + s1.cancelled_count + s1.failed_count == s1.processed_count
+        assert s2.success_count + s2.cancelled_count + s2.failed_count == s2.processed_count
 
     def test_every_stage_counter_consistency_three_stages(self):
         def s1_fail_div3(x):

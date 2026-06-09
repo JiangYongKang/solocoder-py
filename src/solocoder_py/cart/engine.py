@@ -85,9 +85,7 @@ class CartEngine:
             except CartNotFoundError:
                 return self.create_user_cart(user_id)
 
-    def _validate_and_clip_quantity(
-        self, product_id: str, quantity: int
-    ) -> tuple[int, Optional[TrimNotification]]:
+    def _validate_product_available(self, product_id: str) -> Product:
         product = self.get_product(product_id)
         if not product.is_online:
             raise ProductOfflineError(f"Product is offline: {product_id}")
@@ -95,6 +93,12 @@ class CartEngine:
             raise InsufficientStockError(
                 f"Product {product_id} is out of stock"
             )
+        return product
+
+    def _validate_and_clip_quantity(
+        self, product_id: str, quantity: int
+    ) -> tuple[int, Optional[TrimNotification], Product]:
+        product = self._validate_product_available(product_id)
         if quantity > product.stock:
             trimmed = quantity - product.stock
             notification = TrimNotification(
@@ -105,8 +109,8 @@ class CartEngine:
                 trimmed_quantity=trimmed,
                 reason="Exceeds available stock",
             )
-            return product.stock, notification
-        return quantity, None
+            return product.stock, notification, product
+        return quantity, None, product
 
     def add_to_anonymous_cart(
         self, cart_id: str, product_id: str, quantity: int
@@ -115,13 +119,7 @@ class CartEngine:
             raise InvalidQuantityError("Quantity must be positive")
         with self._lock:
             cart = self.get_anonymous_cart(cart_id)
-            product = self.get_product(product_id)
-            if not product.is_online:
-                raise ProductOfflineError(f"Product is offline: {product_id}")
-            if product.stock == 0:
-                raise InsufficientStockError(
-                    f"Product {product_id} is out of stock"
-                )
+            product = self._validate_product_available(product_id)
             existing_item = cart.get_item(product_id)
             if existing_item is not None:
                 combined = existing_item.quantity + quantity
@@ -139,13 +137,7 @@ class CartEngine:
             raise InvalidQuantityError("Quantity must be positive")
         with self._lock:
             cart = self.get_or_create_user_cart(user_id)
-            product = self.get_product(product_id)
-            if not product.is_online:
-                raise ProductOfflineError(f"Product is offline: {product_id}")
-            if product.stock == 0:
-                raise InsufficientStockError(
-                    f"Product {product_id} is out of stock"
-                )
+            product = self._validate_product_available(product_id)
             existing_item = cart.get_item(product_id)
             if existing_item is not None:
                 combined = existing_item.quantity + quantity
@@ -175,7 +167,7 @@ class CartEngine:
             raise InvalidQuantityError("Quantity must be positive")
         with self._lock:
             cart = self.get_anonymous_cart(cart_id)
-            clipped_quantity, _ = self._validate_and_clip_quantity(product_id, quantity)
+            clipped_quantity, _, _ = self._validate_and_clip_quantity(product_id, quantity)
             cart.update_quantity(product_id, clipped_quantity)
             return cart
 
@@ -186,7 +178,7 @@ class CartEngine:
             raise InvalidQuantityError("Quantity must be positive")
         with self._lock:
             cart = self.get_user_cart(user_id)
-            clipped_quantity, _ = self._validate_and_clip_quantity(product_id, quantity)
+            clipped_quantity, _, _ = self._validate_and_clip_quantity(product_id, quantity)
             cart.update_quantity(product_id, clipped_quantity)
             return cart
 

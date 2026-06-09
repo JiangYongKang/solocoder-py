@@ -272,14 +272,12 @@ class PipelineExecutor:
 
                 if out_queue is not None and item.status == ItemStatus.SUCCESS:
                     if not self._try_enqueue(out_queue, item):
-                        if item.status == ItemStatus.SUCCESS:
-                            item.mark_cancelled()
-                            stage_lock = self._stage_locks[stage_idx]
-                            stage_result = self._stage_results[stage_idx]
-                            with stage_lock:
-                                if stage_result.success_count > 0:
-                                    stage_result.success_count -= 1
-                                    stage_result.cancelled_count += 1
+                        item.mark_cancelled()
+                        stage_lock = self._stage_locks[stage_idx]
+                        stage_result = self._stage_results[stage_idx]
+                        with stage_lock:
+                            stage_result.success_count -= 1
+                            stage_result.cancelled_count += 1
 
         except Exception as exc:
             logger.exception(f"Stage worker {stage_config.name} crashed", exc_info=exc)

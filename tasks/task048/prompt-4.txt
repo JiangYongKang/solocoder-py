@@ -1,0 +1,4 @@
+你上一轮声称已修复的问题实际上并未真正解决，以下问题需要继续修复：
+1. _stage_worker 方法中，当数据项处理成功但无法入队下游队列被回滚标记为 CANCELLED 时，success_count 和 cancelled_count 被调整了，但 processed_count 没有同步回退，导致该阶段的 processed_count 不等于 success + failed + cancelled 之和。上一轮你声称已修复但代码中实际未做任何变更。
+2. test_success_rollback_to_cancelled_counters 测试中对 processed_count 的校验使用了 `>=` 不等式断言，但提示词要求的是严格的等式校验（processed_count 是否等于 success + failed + cancelled 之和），不等式降低了测试的严谨性。
+3. 修复后重新运行 poetry run pytest tests/pipeline/ -q，确保所有测试通过。

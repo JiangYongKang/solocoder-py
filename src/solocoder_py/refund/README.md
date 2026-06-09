@@ -4,7 +4,7 @@
 
 本模块实现了完整的退款与拒付（Chargeback）处理域逻辑，包括：
 
-1. **退款状态机**：管理退款申请从创建到终态的全生命周期状态流转，包括审核中、已退款、已拒绝、已拒付、已取消等状态
+1. **退款状态机**：管理退款申请从创建到终态的全生命周期状态流转，包括审核中、已退款、已拒绝、部分拒付、已拒付、已取消等状态
 2. **部分退款累计校验**：支持一笔支付发起多次部分退款，累计退款金额不得超过原始支付金额，超额退款自动拦截
 3. **拒付（Chargeback）处理**：当发生拒付时，自动回退已退款金额，重新计算可退余额，并更新对应退款单的状态
 4. **内存数据仓储**：使用内存数据结构模拟数据源，提供支付、退款、拒付的持久化操作
@@ -244,9 +244,53 @@ engine.approve_refund(new_refund.id)
 assert engine.get_available_refund_amount(payment.id) == Decimal("200.00")
 ```
 
+### 部分拒付（Partial Chargeback）
+
+当拒付金额只覆盖退款单的一部分时，退款单状态变为 `部分拒付`，可继续接受后续拒付：
+
+```python
+from decimal import Decimal
+from solocoder_py.refund import RefundEngine, RefundRepository, RefundState
+
+engine = RefundEngine(RefundRepository())
+payment = engine.create_payment(user_id="user-001", amount=Decimal("1000.00"))
+
+# 完成一笔 500 元的退款
+refund = engine.request_refund(payment.id, Decimal("500.00"))
+engine.start_review(refund.id)
+engine.approve_refund(refund.id)
+
+# 银行发起 200 元部分拒付
+cb1 = engine.process_chargeback(
+    payment_id=payment.id,
+    refund_id=refund.id,
+    amount=Decimal("200.00"),
+    reason="部分交易争议",
+)
+
+r = engine.repository.get_refund(refund.id)
+assert r.state == RefundState.PARTIALLY_CHARGED_BACK   # 部分拒付状态
+assert r.is_partially_charged_back is True
+assert r.charged_back_amount == Decimal("200.00")        # 已拒付 200
+assert r.remaining_chargeable_amount == Decimal("300.00") # 还可拒付 300
+
+# 银行再发起剩余 300 元拒付
+cb2 = engine.process_chargeback(
+    payment_id=payment.id,
+    refund_id=refund.id,
+    amount=Decimal("300.00"),
+    reason="剩余争议",
+)
+
+r = engine.repository.get_refund(refund.id)
+assert r.state == RefundState.CHARGED_BACK               # 已全额拒付（终态）
+assert r.is_fully_charged_back is True
+assert r.charged_back_amount == Decimal("500.00")
+```
+
 ### 未关联退款单的拒付（批量更新状态）
 
-当拒付不针对特定退款单时，系统按 FIFO 顺序自动更新受影响退款单的状态：
+当拒付不针对特定退款单时，系统按 FIFO 顺序自动更新受影响退款单的状态，部分覆盖的退款单标记为 `部分拒付`：
 
 ```python
 from decimal import Decimal
@@ -276,12 +320,18 @@ chargeback = engine.process_chargeback(
     reason="整笔交易争议",
 )
 
-# 按 FIFO 顺序：refund1（300）被完全覆盖，refund2（400）覆盖剩余 200
-# 两笔退款单状态均更新为已拒付
-assert engine.repository.get_refund(refund1.id).state == RefundState.CHARGED_BACK
-assert engine.repository.get_refund(refund1.id).chargeback_id == chargeback.id
-assert engine.repository.get_refund(refund2.id).state == RefundState.CHARGED_BACK
-assert engine.repository.get_refund(refund2.id).chargeback_id == chargeback.id
+# 按 FIFO 顺序：refund1（300）被完全覆盖 → 已拒付
+# refund2（400）覆盖剩余 200 → 部分拒付
+r1 = engine.repository.get_refund(refund1.id)
+r2 = engine.repository.get_refund(refund2.id)
+assert r1.state == RefundState.CHARGED_BACK               # 已全额拒付
+assert r1.charged_back_amount == Decimal("300.00")
+assert chargeback.id in r1.chargeback_ids
+
+assert r2.state == RefundState.PARTIALLY_CHARGED_BACK     # 部分拒付
+assert r2.charged_back_amount == Decimal("200.00")
+assert r2.remaining_chargeable_amount == Decimal("200.00")
+assert chargeback.id in r2.chargeback_ids
 
 # 已退款金额回退 500，剩余 200
 payment = engine.repository.get_payment(payment.id)

@@ -360,7 +360,7 @@ class TestStrategyDifference:
 
         assert ff_result.success is False
         assert len(ff_result.unpacked_items) == 1
-        assert ff_result.unpacked_items[0].name in ("C", "D")
+        assert ff_result.unpacked_items[0].name == "D"
         ff_total_packed = sum(len(b.items) for b in ff_result.packed_bins)
         assert ff_total_packed == 4
 
