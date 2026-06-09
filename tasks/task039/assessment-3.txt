@@ -1,0 +1,7 @@
+产物不满意：
+1. 提示词要求把 wall-clock 性能对比改为通过比较操作次数验证 O(1) vs O(N) 差异，但模型把 test_index_lookup_is_o1_vs_on 删掉后只写了三个纯功能正确性测试，完全没有做任何 O(1) 与 O(N) 的操作次数对比，提示词的核心要求落空了。
+2. test_trial_balance_integrity_check_detects_tampering 原来是验证篡改能被完整性检测发现，模型改成 test_trial_balance_integrity_holds_under_public_api_operations 后只验证公共 API 操作下完整性始终成立，丢失了对完整性检测机制本身的覆盖——现在没有测试能证明当余额被篡改时 integrity_ok 会正确变为 False。
+过程不满意：
+1. 模型收到任务后第一件事就是创建 TodoList，没有先逐个分析问题再规划，属于 "刚收到任务就直接创建 TodoList" 的不良模式。
+2. 首次运行测试失败，因为 transfer("b", "c", 25) 会贷记 c 但 c 初始余额为 0 且不允许透支，说明模型在写测试之前没有理解 transfer 的 debit/credit 语义，后续又因为 all accounts 余额全为正导致 balanced 断言失败再修一轮，整个测试修改过程是试出来的而不是推出来的。
+3. 面对性能测试的改造要求，模型直接绕过了提示词 "通过比较操作次数验证 O(1) vs O(N) 差异" 的明确指示，把整个测试类从性能测试换成了功能测试，属于避重就轻而非按要求解决问题。

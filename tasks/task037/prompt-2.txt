@@ -1,0 +1,8 @@
+你实现的计量计费域存在几个问题，需要修复：
+1. report_usage 检查定价是否存在时用的是 period.start_time 而非 reported_at。如果某个资源定价在账期开始后才生效，对生效后发生的用量上报会被误判为"定价不存在"而拒绝。校验时点应该用上报时间来判断该时刻定价是否已有。
+2. AccountNotFoundError 和 ResourceNotFoundError 在 exceptions.py 中定义并导出，但整个模块没有任何代码抛出这两个异常。找不到账户和资源时应该实际抛出对应异常，而不是返回 None 或其他兜底值。
+3. BillingEngine 中 get_current_usage、get_bills 等读方法没有加锁，而写方法（report_usage、settle_period 等）是加锁的。并发场景下读操作可能看到不一致的中间状态，需要对所有访问共享状态的方法统一加锁保护。
+4. 账单金额使用原生 Python float 参与阶梯定价和按比例分摊的乘加运算，没有做精度归整，实际使用会产生尾数误差。计费场景需要对最终金额做精度处理。
+5. 修复后需要为该模块补充并发读写场景的单元测试，验证加锁后的数据一致性，以及定价生效时间点边界校验的测试。
+6. 更新 README.md，说明定价生效时间点的校验策略、并发线程安全保证以及金额精度处理方式。
+7. 重新运行 poetry run pytest tests/billing/ -q，需要让所有测试通过。

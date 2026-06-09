@@ -1,0 +1,12 @@
+产物不满意：
+1. report_usage 第148行定价存在性校验用的是 period.start_time 而非 reported_at，如果某个资源定价在账期开始后才生效，对生效后发生的用量上报会被误判为 PricingNotFoundError 拒绝，但实际上报时间点定价已经生效了，校验逻辑和实际计算脱节。
+2. AccountNotFoundError 和 ResourceNotFoundError 在 exceptions.py 中定义并在 __init__.py 导出，但全模块没有任何代码抛出这两个异常，属于只定义不使用的无效代码。
+3. BillingEngine 中 get_current_usage、get_current_period、list_periods、get_bills、get_bill、list_bills 等读方法都没有加锁，而这些方法读取的 _current_period、_periods、_bills 在写方法（report_usage、configure_tiered_pricing、settle_period 等）中是加锁操作的，并发读写会读到不一致的中间状态。
+4. 账单的 total_cost 和 total_amount 用了原生 Python float，阶梯定价和按比例分摊中大量浮点乘加运算没有做小数位精度处理，实际使用会产生类似 100.00000000003 的尾数误差，计费场景需要对金额做精度归整。
+5. settle_period 结算后没有将 _current_period 置 None，导致 get_current_period 返回的是一个状态为 SETTLED 的账期。提示词要求结算后新账期用量从零开始，模型让调用方必须额外检查 is_active 才能判断是否有可用账期，语义不够直接。
+过程不满意：
+1. 模型从写完 engine.py 到所有测试通过，经历了至少四轮"跑测试→看报错→修代码"的循环：第一轮阶梯校验逻辑写反、账期时间太早，第二轮定价生效时间不匹配，第三轮结算后的 PeriodSettledError 处理不正确，第四轮 get_current_usage 返回已结算账期旧数据。这些都属于引擎核心状态转换设计的问题，模型第一次写 engine.py 时没有把各种状态路径想清楚，写完再靠测试来驱动修复。
+2. 第一次用 Write 工具写 test_billing.py 时工具返回 filePath 为 undefined 的失败状态，过程日志留下失败痕迹后模型没有给出任何说明就重新提交，处理不够干净。
+3. 写完 models.py 的 TieredPricing 后模型立刻说"当前实现有问题"并编辑修正，随后测试阶段又再次修改阶梯连续性校验逻辑，说明第一版 models.py 是在没有充分考虑校验边界的情况下仓促落笔的。
+4. 写测试前模型连续两次用 python -c 做直接导入检查，没有先确认项目的测试路径配置方式，碰壁后才改用 pytest 框架，有不必要的无效尝试。
+5. 过程中模型重复查看 engine.py 至少四次，每次都是片段式地读到某个方法就改那个方法，没有在处理结算周期状态这类跨方法依赖问题前完整重读一遍引擎各方法之间的关系，属于零散修补而非系统性修复。

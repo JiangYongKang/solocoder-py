@@ -1,0 +1,10 @@
+产物不满意：
+1. _allocate_mutex_group_buckets 在互斥组桶区间不连续时，将 experiment.bucket_start 设为 group.buckets[0]、experiment.bucket_end 设为 group.buckets[-1]。如果组实际占用 [20-29, 60-69]，experiment 的桶区间会记录为 [20, 69]，按 bucket_end - bucket_start + 1 算出来是 50，但实验只对应组内 20 个桶，桶区间元数据在非连续场景下没有准确反映实验的真实桶占用。
+2. 新增三个"非连续桶区间"测试中，test_mutex_group_noncontiguous_release_does_not_hurt_others 的互斥组实际桶区间是连续的 20-79（独立实验占 0-19，互斥组占 20-79 中间无间隙），test_mutex_group_noncontiguous_user_allocation_in_all_group_buckets 的互斥组占 40-99 也是连续的一段。这两条测试场景中不存在组内桶间隙，即使旧代码按 range 遍历释放也不会误伤，测试名称声称的非连续场景与实际的桶分布不匹配，没有有效验证提示词要求的"桶释放不误伤"能力。
+3. test_mutex_group_noncontiguous_release_does_not_hurt_others 直接访问 manager._bucket_owner 断言内部数据结构，属于测试依赖实现细节而非公共接口，后续内部结构调整会导致测试脆弱。
+
+过程不满意：
+1. 模型在收到提示词后第一件事就是创建 TodoList，完全没有先阅读和理解当前代码实现以及缺陷的根本原因。assessment-1 中已明确指出了同样的行为模式（"模型在刚看了几个无关模块的代码结构后就直接创建 TodoList"），说明模型没有从上轮标注中吸取教训，依然是"先规划再理解"的错误顺序。
+2. 模型选择用 Write 工具整体重写 manager.py 和 test_ab_testing.py 两个文件，而非对三个具体缺陷做针对性最小修改。BUG 修复任务要求精确控制变更范围，重写整个文件带来了意外改动不相关逻辑的风险，且让 diff 审查失去精确追溯能力。
+3. 模型在重写完 manager.py 和测试文件后只运行了一次全量测试，中间没有分步验证——没有在修完一个缺陷后先跑一遍测试确认无回归再修下一个。61 个测试一把过虽然结果正确，但调试粒度太粗，如果出问题只能在全文件 diff 中排查。
+4. 模型在分析非连续场景测试时没有验证桶分配是否真的形成了"间隙"——写出的三个测试中只有 test_mutex_group_noncontiguous_bucket_occupancy_correct 真正产生了组内非连续桶区间，另外两个测试的桶分布实际是连续的，说明模型对测试场景的构造没有经过仔细推演。

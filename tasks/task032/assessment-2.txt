@@ -1,0 +1,10 @@
+产物不满意：
+1. test_acquire_queue_timeout 虽然用了 ManualClock，但 condition.wait() 内部依赖系统真实时钟，clock.advance(2.0) 无法提前唤醒等待线程——测试实际是靠 condition.wait 的 1 秒真实超时触发退出，手动时钟只是事后用来校验 deadline 计算，并没有真正验证 ManualClock 集成对 acquire 超时路径的有效性。
+2. acquire() 和 _execute_task() 的排队等待循环（入队、deadline 计算、condition.wait、超时检测、出队）逻辑高度重复，模型选择在两条路径各自重写一份完整循环，没有抽取公共方法，增加后续维护负担。
+3. acquire() 排队循环中每次出队前都写 if waiter in state.queue:，而 waiter 刚被 append 且此路径下不会被其他线程移除，_execute_task 也同理。多余的防御性检查只增加了代码噪音，没有实际作用。
+
+过程不满意：
+1. 模型首次工具调用就是创建 TodoList，仅在读了一个 executor.py 和一个 models.py 后就规划了全部 6 项任务。第一轮标注已明确指出了三个跨文件缺陷，但模型没有先完整理解状态变量、condition 锁语义和各路径的交互就动手改代码，预判过浅。
+2. 模型用 Write 工具直接重写整个 executor.py，而不是针对三个具体问题进行精准修改。随后又用 edit_file_search_replace 尝试补充修改 submit 签名却失败，导致改一个文件先后用了两种替换策略且第二次还报错，操作方式粗放。
+3. edit_file_search_replace 失败后模型没有分析原因（可能因为 Write 重写后文件内容与搜索目标不匹配），直接转向"先添加测试验证 task_id 冲突问题"，把测试当作理解当前行为的调试手段，完成后才回到代码修改，过程中推理方向出现明显回调。
+4. 整个思考过程以及最终的修复总结全部使用英文输出，而提示词和所有项目文档均为中文，不符合模型应输出中文的基本语言规范。

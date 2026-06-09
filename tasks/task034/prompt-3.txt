@@ -1,0 +1,5 @@
+你修复的 A/B 实验分流域还有几个细节问题，需要修正：
+1. _allocate_mutex_group_buckets 在互斥组桶区间不连续时（比如组内桶分布在 0-19 和 80-99），将 experiment.bucket_start 设为第一个桶、experiment.bucket_end 设为最后一个桶，导致通过 end - start + 1 算出的桶数远大于实验实际占用的桶数。非连续场景下 experiment 的桶区间元数据不能靠 single-range 的假设来表达，需要换一种方式准确记录实验在互斥组内的真实桶占用信息。
+2. test_mutex_group_noncontiguous_release_does_not_hurt_others 和 test_mutex_group_noncontiguous_user_allocation_in_all_group_buckets 两个测试名称声称覆盖"非连续"场景，但实际构造的桶分布是连续的——前一个互斥组占 20-79（中间无间隙），后一个占 40-99。正确验证"非连续释放不误伤"需要确保互斥组的桶区间存在中间被其他实验占据的间隙，否则即使旧代码按 range 遍历也不会出问题。需要重新设计这两条测试的桶分配方式，构造真正的非连续场景。
+3. test_mutex_group_noncontiguous_release_does_not_hurt_others 直接访问 manager._bucket_owner 私有属性做断言，属于测试依赖实现细节。应改用公共 API 来验证独立实验的桶未被释放。
+4. 重新运行 poetry run pytest tests/ab_testing/ -q，需要让所有测试通过。

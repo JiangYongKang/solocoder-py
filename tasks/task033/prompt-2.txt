@@ -1,0 +1,7 @@
+你实现的特性开关评估引擎存在几个问题，需要修复：
+1. test_rule_priority_sorting 测试没有经过 engine.evaluate() 来验证优先级排序在评估中的实际效果，而是直接调用了 Python 内置的 sorted() 对返回值做断言，等价于在测标准库行为而非被测模块的逻辑。需要改为通过 engine.evaluate() 来验证排序是否真的影响了评估结果。
+2. add_flag 方法里 if/else 两个分支的代码完全相同（仅多了一个 return），分支结构没有实际语义差异，属于冗余代码。
+3. CONTAINS 操作符对 dict 类型用 expected in actual 查找 key，对 list/tuple/set 查找元素，同一个操作符在不同容器类型上的行为不一致。需要明确 dict 是按 key 匹配还是按 value 匹配，使语义统一。
+4. 修复后需要改写 test_rule_priority_sorting，让它通过 engine.evaluate() 来验证优先级排序的实际效果。
+5. 更新 README.md，说明 CONTAINS 操作符在各数据类型的语义约定。
+6. 重新运行 poetry run pytest tests/feature_flag/ -q，需要让所有测试通过。

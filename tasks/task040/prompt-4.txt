@@ -1,0 +1,5 @@
+你修复的支付对账引擎还有几个细节问题，需要修正：
+1. _dedup 方法手工内联构造了与 _content_key 静态方法完全相同的去重元组逻辑，既然已经提取出 _content_key 就应该复用，避免两份逻辑分叉导致未来维护不一致。
+2. _content_key 和 _dedup 中使用 txn.txn_time.replace(microsecond=0) 将时间截断到秒级，同一秒内金额、状态、方向、订单号完全相同的两笔独立交易会被误判为重复而丢弃，存在数据丢失风险。需要提高去重的时间精度或者更换区分方式。
+3. _try_match_by_id 中匹配成功时将 diff_amount 从 itxn.amount - ctxn.amount 改为硬编码的 0.0，虽然等于条件满足时结果相同，但属于超出修复范围的未授权改动，应该恢复为原计算逻辑。
+4. 重新运行 poetry run pytest tests/reconciliation/ -q，需要让所有测试通过。

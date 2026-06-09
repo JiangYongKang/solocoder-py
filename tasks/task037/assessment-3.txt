@@ -1,0 +1,7 @@
+产物不满意：
+1. README "账户与资源校验语义" 章节写 `_seen_accounts` "记录所有曾经上报过用量或生成过账单的账户（只增不减）"，但代码中只有 `report_usage` 会向 `_seen_accounts` 添加账户，`settle_period` 生成账单时并不会写入该集合。文档把 `_bills` 字典覆盖的语义也算在了 `_seen_accounts` 头上，描述范围比代码实际行为大。
+2. `TestCalculationImmutability` 测试类的验证方式有偏差：它在引擎结算前后分别独立调用 `pricing.calculate_cost(100)` 并对比两次返回值，但 `calculate_cost` 每次都构造新 `TierCalculationDetail` 实例，即使引擎仍存在原地修改 bug，两次调用的结果也不会互相影响。测试实际只验证了计费函数的幂等性，没有直接检查引擎是否修改了 `calculate_cost` 返回的原始对象。
+3. 测试代码 `test_tier_calculation_details_not_mutated_by_engine` 中通过 `engine._pricing_configs[RES] = [...]` 直接写私有属性来旁路 `configure_tiered_pricing` API，在测试里依赖生产代码内部实现细节。
+过程不满意：
+1. 模型一收到提示词就创建了 TodoList，没有先阅读和理解问题再做规划，违反了"先分析问题再规划"的过程要求。
+2. 模型选择"一次性重写 engine.py"而非对三个互不依赖的修复点分别做定向编辑，每个修复只涉及几行局部代码，整体重写增加了引入意外副作用的风险，也让代码审查对变更点的把握变得困难。

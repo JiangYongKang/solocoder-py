@@ -1,0 +1,5 @@
+你修复的计量计费域还存在几个文档准确性和测试覆盖的问题，需要修正：
+1. README "账户与资源校验语义" 章节写 _seen_accounts "记录所有曾经上报过用量或生成过账单的账户"，但代码中只有 report_usage 会向 _seen_accounts 添加账户，settle_period 生成账单时并不写入该集合。文档描述的覆盖面比代码实际行为大，需要让 README 描述与代码行为对齐。
+2. TestCalculationImmutability 测试通过两次独立调用 pricing.calculate_cost(100) 对比返回值来验证不可变性，但 calculate_cost 每次都构造新实例，即使引擎仍存在原地修改原始对象的 bug 也检测不到。需要直接检查引擎是否修改了 calculate_cost 返回的原始 TierCalculationDetail 实例，而不是对比两次独立调用的结果。
+3. 测试中通过 engine._pricing_configs[RES] = [...] 直接写私有属性来旁路 configure_tiered_pricing API，应改为通过公共 API 构造测试场景。
+4. 重新运行 poetry run pytest tests/billing/ -q，需要让所有测试通过。

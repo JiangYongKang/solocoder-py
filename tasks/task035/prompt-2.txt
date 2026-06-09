@@ -1,0 +1,7 @@
+你实现的优惠券折扣计算引擎存在几个问题，需要修复：
+1. TieredCoupon 的阶梯校验只检查了重叠（下一区间起点小于当前区间终点），没有检查间隔（下一区间起点大于当前区间终点）。比如 Tier(0, 50) 接 Tier(100, 200) 存在 50-100 的缺口，校验不会拦截但错误消息却声称 "must be contiguous"，校验逻辑与文案自相矛盾。
+2. _apply_default_mutex_groups 使用 list(coupons) 只浅拷贝了列表，列表内的元素仍然指向原始优惠券对象。调用 calculate 后，传入的优惠券对象的 mutex_groups 属性被永久修改，调用方的数据被污染了。计算过程不应该修改入参。
+3. 全局封顶回退逻辑只更新了各券的 discount_amount 和 amount_after，没有级联修正前后券的 amount_before。当需要从多张券回退时，前一张券调整后的 amount_after 与后一张券未更新的 amount_before 不一致，金额链断裂。
+4. 修复后需要为该模块补充阶梯区间间隔检测的单元测试，以及多券封顶回退的测试覆盖。
+5. 更新 README.md，说明阶梯连续性的校验规则和封顶回退的金额链一致性保证。
+6. 重新运行 poetry run pytest tests/coupon/ -q，需要让所有测试通过。

@@ -1,0 +1,8 @@
+产物不满意：
+1. clear() 方法在清空队列后只调用了 _not_full.notify_all()，没有通知 _not_empty，导致正在 dequeue() 上阻塞等待数据的消费者线程永久挂起无法唤醒。clear 作为重置操作应当同时打断所有阻塞中的生产者和消费者。
+2. _fire_high_watermark 和 _fire_low_watermark 在持有锁的情况下直接同步调用外部回调函数，没有 try/except 保护，任意一个回调抛异常会中断后续所有回调的执行。另外回调内部如果执行缓慢或尝试对同一队列执行入队/出队操作还会直接死锁。
+3. QueueFullError 异常类定义了且在 __init__.py 中导出，但 queue.py 导入后从未在任何地方实际抛出，属于死代码，增加了不必要的公开 API 表面积。
+4. _enqueue_drop 和 _enqueue_reject 用 self._not_empty 作为锁上下文管理器来保护入队路径，_enqueue_block 用的是 self._not_full，三个入队方法的锁入口不一致。虽然底层共享同一把 Lock 所以不会出功能错误，但 _not_empty 语义上对应消费者等待条件，拿它管入队非常反直觉，增加了后续维护误改出并发问题的风险。
+过程不满意：
+1. 模型首次实现 _enqueue_drop 和 _enqueue_reject 时在已经持有 self._lock 的情况下又通过 with self._not_empty 再次尝试获取同一把不可重入锁导致死锁，运行测试失败后才回头定位修复。这种嵌套获取同一锁的低级错误如果在编码阶段就理清锁所有权模型是可以提前避免的。
+2. 模型在测试命令中使用了 --timeout=10 参数，这个参数依赖 pytest-timeout 插件，在不确定项目是否安装了该插件的情况下使用不规范。应该先确认插件存在或使用标准 pytest 参数。

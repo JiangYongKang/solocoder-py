@@ -1,0 +1,6 @@
+产物不满意：
+1. count_scan_ops 去掉 early break 后改为 `_ = any(...)` 丢弃返回值，函数做了匹配检查却不利用结果做任何验证——要么去掉 any 调用改为纯循环计数，要么保留匹配结果并对匹配正确性做断言，当前写法既做无用功又逻辑不自洽。
+2. 第三层断言 `scan_scale > indexed_scale * (LARGE_TXNS / SMALL_TXNS) * 0.99` 在第二层已建立 `scan_scale == entries_scale * txns_scale` 和 `indexed_scale == entries_scale` 的前提下，退化为 `X > X * 0.99` 的恒真命题，不提供独立验证价值。看似把系数从 0.8 收紧到 0.99，实际该层断言在前两层精确值成立后已无意义。
+过程不满意：
+1. 两次 pytest 命令末尾都有 `2>&1 undefined` 残留，会在工作目录下生成名为 undefined 的垃圾文件，工具调用不干净。
+2. 思考过程中 edit_file_search_replace 工具输出显示 `changes: undefined`，返回信息异常但模型没有关注就直接进入测试步骤，缺少对工具异常输出的警觉。

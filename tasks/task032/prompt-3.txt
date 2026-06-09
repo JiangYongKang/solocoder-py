@@ -1,0 +1,5 @@
+你修复的舱壁隔离执行器还存在几个代码质量问题，需要修复：
+1. acquire() 超时测试 test_acquire_queue_timeout 用了 ManualClock 对象，但 condition.wait() 内部依赖系统真实时钟，clock.advance(2.0) 无法影响 wait 的超时计算。测试实际是靠真实时钟的 1 秒超时退出，ManualClock 没有真正参与调度。需要让 ManualClock 真正控制超时判定，或者改用不依赖 condition.wait 超时的方式来验证 deadline 计算。
+2. acquire() 中的排队等待循环（入队、deadline 计算、condition.wait、超时检测、出队）与 _execute_task() 中 submit 路径的排队循环逻辑高度重复，两条路径各自写了一遍相同的模式。应该把排队等待逻辑抽取为一个公共方法，避免代码重复。
+3. acquire() 和 _execute_task() 的排队循环中每次出队前都有 if waiter in state.queue: 和 if task in state.queue: 检查，但这里的 waiter/task 刚被 append 到这个队列且此路径下不会被其他线程移除。这些防御性检查没有实际作用，应该去掉以保持代码简洁。
+4. 重新运行 poetry run pytest tests/bulkhead/ -q，需要让所有测试通过。

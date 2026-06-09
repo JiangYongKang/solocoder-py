@@ -1,0 +1,3 @@
+你修复的计量计费域还有一个方向性问题需要修正：
+1. 上一轮混淆了修复方向：提示词说的是 _seen_accounts 的 README 描述"覆盖面比代码实际行为大，需要让 README 描述与代码行为对齐"，意思是要修改 README 文档来准确描述代码当前的行为。但你在 settle_period 中新增了 self._seen_accounts.add(account_id) 让代码去凑文档，没有修改 README。需要把 settle_period 中这次新增的代码撤销掉，然后修改 README 让描述准确反映代码的真实行为。
+2. 重新运行 poetry run pytest tests/billing/ -q，需要让所有测试通过。

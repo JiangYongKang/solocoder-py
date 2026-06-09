@@ -1,0 +1,13 @@
+产物不满意：
+1. get_balance 改为仅在全局锁下读取余额（balance 字段），但 post_transaction 修改余额时不持有全局锁只持有账户锁，两者没有互斥保护，get_balance 可能在并发过账过程中读到部分分录已应用但交易尚未标记已过账的中间态余额，打破了原来的线性一致性保证。模型在 README 中以 "int 读取为原子操作" 来论证合理性，但原子性只保证不读到撕裂值，不保证不读到中间状态。
+2. 封装保护测试 TestEncapsulation 的 test_get_account_returns_copy_not_internal_reference 等用例通过直接修改内部私有字段 `ledger._accounts["a"].balance = 99999` 来构造篡改场景，性能测试 test_index_lookup_is_o1_vs_on 遍历 `ledger._account_entries`、`ledger._transactions` 等私有字段来构造 O(N) 对照组。这些测试大量依赖内部实现细节，违背了封装保护测试应有的"仅通过公共 API 验证"的原则，且 O(N) 对照组并非原始代码的真实慢路径，测试说服力不足。
+3. 性能对比测试 test_index_lookup_is_o1_vs_on 通过 time.time() 做 wall-clock 时间比较断言 indexed_time < scan_time，时间差受 CPU 负载、GC 等外部因素影响极大，在 CI 或慢机器上可能因偶然波动导致假失败，不是可靠的性能回归测试写法。
+4. test_both_not_found_errors_inherit_from_ledger_error 测试名称说验证"继承自 LedgerError"，但实际只断言了 isinstance(e, TransactionNotFoundError) 和 isinstance(e, Exception)，并未检验 isinstance(e, LedgerError)，测试名称与实际覆盖不一致。
+5. get_account_entries 方法先调用 self.get_account(account_id) 获取全局锁校验账户存在，然后立即释放锁，再重新获取全局锁做分录查询。get_account 返回的 Account 副本在 get_account_entries 中完全未被使用，仅作为副作用校验账户存在，造成了一次多余的全局锁获取、Account 对象分配和 GC 开销。
+6. get_trial_balance 在全局锁下对 _accounts 做快照后就释放锁，与 post_transaction 的余额修改之间没有互斥，理论上在并发过账时可能捕获到部分分录余额已修改但交易尚未标记 POSTED 的中间状态，导致 integrity_ok 误判。
+过程不满意：
+1. 模型在收到任务后第 4 行就直接创建了 TodoList，没有先完整阅读代码、逐一分析各问题的根因和修改范围再做规划，与第一轮标注过的"不能刚收到任务时就立即创建 TodoList"问题完全一致，说明这个坏习惯没有改正。
+2. 模型用 Write 工具重写了 models.py（第 88 行）、ledger.py（第 124 行）、test_ledger.py（第 182 行）三个完整文件，而非对每个问题做针对性最小修改。对于添加 TransactionNotFoundError、给模型加 copy 方法和 initial_balance 字段这种简单改动，完整重写是过度操作，增加了引入新问题的风险，也增加了代码审查的 diff 噪音。
+3. 模型先写出了同时持有账户锁和全局锁的 get_balance 实现（存在死锁风险），然后自己发现后改成仅用全局锁的方案（第 133-134 行的自述），这说明在编写代码前没有先设计好锁的持有顺序和互斥策略，属于找补式的试错开发。
+4. 模型首次运行测试时用的是 `python -m pytest tests/ledger/test_ledger.py -v --tb=short 2>&1 | tail -80`（第 203 行），而非项目约定的 `poetry run pytest`，且通过 tail 截断输出可能隐藏早期的测试失败信息。最终验证虽然用了 `poetry run pytest`，但过程中首次验证的命令不规范。
+5. 模型在 README 中声称 get_balance "int 读取为原子操作" 进而推论不需要账户锁就能保证一致性，这混淆了原子性与线性一致性两个不同的并发概念——CPython 的 GIL 保证单次属性读取不产生撕裂值，但不保证读取操作与 post_transaction 的余额修改操作之间存在全局顺序。

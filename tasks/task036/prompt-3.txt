@@ -1,0 +1,6 @@
+你修复的多币种汇率换算域的新增测试存在几个质量问题，需要修正：
+1. test_custom_max_paths_explored_triggers_earlier 测试只用 try/except pass 包裹了 convert 调用，没有任何断言。无论 PathExplosionError 是否真的触发，测试都能通过，等同于空测试。需要添加断言来验证小阈值确实能在路径较少时就触发爆炸。
+2. test_larger_max_paths_explored_allows_more_exploration 断言写的是 assert small_raised or not large_raised，当两个 converter 行为一致时（比如都没触发或都触发了），这个断言会误判通过。正确语义应该是"小阈值触发了且大阈值没触发"，需要用 and 而不是 or。
+3. test_same_hop_with_inverse_edges_compares_product 测试中两条路径 S→A→T 和 S→B→T 的汇率乘积相等（都是 5.0），无法区分算法是否真的在不同乘积之间选择了更大的。需要调整为两条路径乘积不等，才能验证比较逻辑。
+4. test_two_hops_two_paths_picks_higher_product 中设置了 fx.set_precision("C", 4)，但路径 S→A→T 和 S→B→T 都不涉及货币 C，这行精度设置是多余的测试残留。清理掉不必要的设置，保持测试干净。
+5. 重新运行 poetry run pytest tests/forex/ -q，需要让所有测试通过。

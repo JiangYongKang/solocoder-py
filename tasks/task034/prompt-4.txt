@@ -1,0 +1,4 @@
+你修复的 A/B 实验分流域新增的 group_bucket_start/end 字段还存在设计问题，需要修正：
+1. group_bucket_start/end 记录的是按 priority 排序后的虚拟顺序偏移量（例如 0-19, 20-39），与实验在全局 100 个桶中的真实桶编号没关系，能推出的唯一信息 end - start + 1 == traffic_percentage，与 traffic_percentage 完全冗余。同时这两个字段从未被任何分配或路由逻辑消费，_map_within_bucket_to_experiment 独立重复计算了相同的排序和偏移逻辑。需要让这两个字段要么删除，要么改为记录真实桶占用的区间信息，并在分配路径中被实际使用。
+2. group_bucket_start/end 与 bucket_start/end 字段命名相似但语义完全不同——前者是虚拟组内偏移，后者是全局真实桶索引。这种表面一致实为分裂的命名容易让维护者混淆，需要让命名区分清楚各自的语义。
+3. 重新运行 poetry run pytest tests/ab_testing/ -q，需要让所有测试通过。
