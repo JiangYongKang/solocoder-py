@@ -6,24 +6,24 @@
 
 - **服务实例注册**：服务实例启动时向注册中心注册，包含唯一 ID、服务名、主机地址、端口、权重和自定义元数据
 - **心跳续约**：运行期间定期发送心跳以维持注册状态
-- **TTL 过期自动摘除**：超过 TTL 时间未续约的实例会被自动从可用列表中移除
-- **按权重选取实例**：支持按权重随机选取单个实例，权重越大被选中概率越高
+- **TTL 过期自动摘除**：超过 TTL 时间未续约的实例会被自动从注册中心摘除，该机制在所有核心操作入口（注册、续约、注销、查询、选取等）自动触发，无需手动调用
+- **按权重选取实例**：支持按权重随机选取单个实例，权重越大被选中概率越高；当存在正权重实例时，零权重实例永远不会被选中；当全部为零权重实例时，退化为等概率随机选择
 - **服务实例主动注销**：服务实例可主动发起注销，从可用列表中移除
 - **线程安全**：内置锁机制，支持多线程并发访问
 
 ## 核心类职责
 
 ### `ServiceRegistry`
-服务注册中心核心类，提供所有注册发现相关的操作。
+服务注册中心核心类，提供所有注册发现相关的操作。所有公共方法在执行时都会自动触发过期实例的摘除。
 
 主要方法：
 - `register(instance: ServiceInstance) -> ServiceInstance`：注册一个服务实例
 - `renew(service_name: str, instance_id: str) -> ServiceInstance`：为指定实例发送心跳续约
 - `deregister(service_name: str, instance_id: str) -> bool`：主动注销服务实例
 - `get_instances(service_name: str) -> List[ServiceInstance]`：获取指定服务的所有可用（未过期）实例列表
-- `get_all_instances(service_name: str) -> List[ServiceInstance]`：获取指定服务的所有实例（包括已过期的）
+- `get_all_instances(service_name: str) -> List[ServiceInstance]`：获取指定服务的所有实例（自动摘除过期后剩余的全部实例）
 - `select_instance(service_name: str) -> ServiceInstance`：按权重随机选取一个可用实例
-- `cleanup_expired() -> Dict[str, List[str]]`：手动清理所有已过期的实例
+- `cleanup_expired() -> Dict[str, List[str]]`：主动触发一次过期实例清理（一般无需手动调用，所有核心操作均会自动触发），返回被摘除的实例列表
 - `list_services() -> List[str]`：列出所有已注册的服务名
 - `service_count() -> int`：获取已注册服务的数量
 - `instance_count(service_name: Optional[str] = None) -> int`：获取实例总数或指定服务的实例数
@@ -61,11 +61,13 @@
 
 采用**加权随机选择算法（Weighted Random Selection）**：
 
-1. 获取服务的所有可用（未过期）实例列表
-2. 计算所有实例的权重总和 `total_weight`
-3. 如果所有权重之和 `<= 0`，退化为普通等概率随机选择
-4. 否则，在区间 `[0, total_weight)` 内生成一个随机浮点数 `pick`
-5. 遍历实例列表，累加权重，当累加值首次超过 `pick` 时，返回当前实例
+1. 从注册中心获取服务的所有实例（自动摘除已过期实例）
+2. 将实例分为两组：正权重实例（`weight > 0`）和零权重实例（`weight == 0`）
+3. 如果存在正权重实例，则仅从正权重实例中进行加权选择（零权重实例被完全排除，永远不会被选中）
+4. 如果所有实例均为零权重，则退化为等概率随机选择
+5. 计算候选实例的权重总和 `total_weight`
+6. 在区间 `[0, total_weight)` 内生成一个随机浮点数 `pick`
+7. 遍历候选实例列表，累加权重，当累加值首次超过 `pick` 时，返回当前实例
 
 ### 算法示例
 
@@ -75,6 +77,10 @@
 - `[0, 1)` → 选中 A（概率 10%）
 - `[1, 3)` → 选中 B（概率 20%）
 - `[3, 10)` → 选中 C（概率 70%）
+
+假设另有两个零权重实例 D(weight=0)、E(weight=0) 与上述实例同时注册：
+- D 和 E 永远不会被选中（因为存在正权重实例 A、B、C）
+- A、B、C 的选中概率仍保持 10% / 20% / 70%
 
 ## 异常体系
 
@@ -134,7 +140,8 @@ print(f"Selected: {selected.instance_id} at {selected.address}")
 # 主动注销
 registry.deregister("order-service", "order-service-1")
 
-# 手动清理过期实例
+# 过期实例会在任意核心操作时被自动摘除，无需手动清理
+# 如需主动触发清理（可选），可调用：
 removed = registry.cleanup_expired()
 ```
 
@@ -151,13 +158,14 @@ registry = ServiceRegistry(
 
 # 注册实例
 registry.register(ServiceInstance("inst-1", "svc-1", "127.0.0.1", 8080))
+assert registry.service_count() == 1
 
 # 手动推进时间
 clock.advance(25.0)
 registry.renew("svc-1", "inst-1")  # 续约，重置过期时间
 
 clock.advance(30.0)
-# 此时 inst-1 已过期
-removed = registry.cleanup_expired()
-# removed == {"svc-1": ["inst-1"]}
+# 此时 inst-1 已过期，调用任意核心操作会自动摘除
+assert registry.service_count() == 0
+# 服务已被自动摘除，查询会抛出 ServiceNotFoundError
 ```

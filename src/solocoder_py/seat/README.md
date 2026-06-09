@@ -45,7 +45,53 @@
 
 | 类名 | 职责 |
 |------|------|
-| `SeatReservationManager` | 座位预留管理器，线程安全，维护所有座位的内存存储，提供查询可用座位、单座预留、连座预留、取消预留、确认占用等操作，内部自动处理超时释放 |
+| `SeatReservationManager` | 座位预留管理器，线程安全，维护所有座位的内存存储，提供查询可用座位、单座预留、连座预留、取消预留、确认占用等操作，内置后台清理线程实现超时预留的主动自动释放 |
+
+## 超时自动释放机制
+
+本模块采用**双重保障**的超时自动释放策略，确保过期预留能被及时回收：
+
+### 1. 主动释放（后台清理线程）
+
+`SeatReservationManager` 在初始化时会启动一个名为 `SeatReservationManager-Cleanup` 的守护线程，按 `cleanup_interval`（默认 1 秒）的周期定期扫描所有座位：
+
+- 遍历所有处于 `RESERVED` 状态的座位
+- 通过 `clock.now()` 与 `reserved_at` 的差值判断是否超过 `default_reservation_timeout`
+- 对超时的座位调用 `force_release()` 将其重置为 `AVAILABLE`
+- 返回本次清理释放的座位数量
+
+后台线程为守护线程（`daemon=True`），会随主进程退出而自动终止。也可调用 `shutdown()` 方法主动停止清理线程。
+
+### 2. 惰性检测（外部调用触发）
+
+除了主动清理，所有外部查询和操作方法（如 `list_available_seats`、`reserve_seat`、`get_seat` 等）在访问座位时也会执行 `_expire_reservation_if_needed` 进行惰性过期检测，作为主动清理的补充。
+
+### 参数说明
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `default_reservation_timeout` | float | 300.0 | 预留超时时间（秒），超过此时间未确认占用的预留将被自动释放 |
+| `cleanup_interval` | float | 1.0 | 后台清理线程的扫描间隔（秒），必须为正数 |
+
+### 生命周期管理
+
+```python
+from solocoder_py.seat import SeatReservationManager
+
+# 创建管理器，自动启动后台清理线程
+manager = SeatReservationManager(
+    rows=5, columns=10,
+    default_reservation_timeout=60.0,   # 预留 60 秒超时
+    cleanup_interval=2.0,                # 每 2 秒扫描一次
+)
+
+try:
+    # ... 业务操作 ...
+    manager.reserve_seat(0, 0, "user-1")
+finally:
+    # 主动关闭后台线程（可选，守护线程会随进程自动退出）
+    manager.shutdown()
+```
 
 ## 座位状态生命周期
 
@@ -216,6 +262,9 @@ print(f"第 2 行可用: {manager.count_available_in_row(2)}")
 
 # 重置所有座位
 manager.clear()
+
+# 停止后台清理线程（可选，守护线程会随进程自动终止）
+manager.shutdown()
 ```
 
 ## 运行测试

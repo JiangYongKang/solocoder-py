@@ -19,6 +19,16 @@ from solocoder_py.pipeline import (
 )
 
 
+def _assert_all_items_have_terminal_state(result: PipelineResult, expected_total: int):
+    assert len(result.items) == expected_total
+    terminal_states = {ItemStatus.SUCCESS, ItemStatus.FAILED, ItemStatus.CANCELLED}
+    for item in result.items:
+        assert item.status in terminal_states, (
+            f"Item {item.item_id} has non-terminal state: {item.status}"
+        )
+    assert result.success_count + result.failed_count + result.cancelled_count == expected_total
+
+
 class TestPipelineConfigValidation:
     def test_empty_stages_raises(self):
         with pytest.raises(InvalidPipelineConfigError):
@@ -65,10 +75,12 @@ class TestPipelineConfigValidation:
 
 class TestNormalFlow:
     def test_single_stage_simple(self, simple_pipeline: PipelineExecutor):
-        result = simple_pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = simple_pipeline.execute(inputs)
 
         assert isinstance(result, PipelineResult)
         assert result.status == PipelineStatus.COMPLETED
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == 5
         assert result.failed_count == 0
         assert result.cancelled_count == 0
@@ -79,9 +91,11 @@ class TestNormalFlow:
             assert item.stage_results["double"] == item.data * 2
 
     def test_three_stage_data_flow(self, three_stage_pipeline: PipelineExecutor):
-        result = three_stage_pipeline.execute([10, 20, 30])
+        inputs = [10, 20, 30]
+        result = three_stage_pipeline.execute(inputs)
 
         assert result.status == PipelineStatus.COMPLETED
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == 3
 
         for item in result.success_items:
@@ -90,25 +104,33 @@ class TestNormalFlow:
             assert item.stage_results["wrap_dict"] == {"value": f"str_{item.data * 2}"}
 
     def test_stage_results_populated(self, three_stage_pipeline: PipelineExecutor):
-        result = three_stage_pipeline.execute([1, 2, 3])
+        inputs = [1, 2, 3]
+        result = three_stage_pipeline.execute(inputs)
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert len(result.stage_results) == 3
         for sr in result.stage_results:
             assert isinstance(sr, StageResult)
             assert sr.status == StageStatus.COMPLETED
-            assert sr.processed_count == 3
-            assert sr.success_count == 3
-            assert sr.failed_count == 0
-            assert sr.cancelled_count == 0
             assert sr.duration >= 0
 
-        assert result.stage_results[0].stage_name == "double"
-        assert result.stage_results[1].stage_name == "to_str"
-        assert result.stage_results[2].stage_name == "wrap_dict"
+        s1, s2, s3 = result.stage_results
+        assert s1.stage_name == "double"
+        assert s1.success_count == 3
+        assert s1.processed_count == 3
+
+        assert s2.stage_name == "to_str"
+        assert s2.success_count == 3
+        assert s2.processed_count == 3
+
+        assert s3.stage_name == "wrap_dict"
+        assert s3.success_count == 3
+        assert s3.processed_count == 3
 
     def test_empty_input(self, simple_pipeline: PipelineExecutor):
         result = simple_pipeline.execute([])
         assert result.status == PipelineStatus.COMPLETED
+        _assert_all_items_have_terminal_state(result, 0)
         assert result.success_count == 0
         assert result.failed_count == 0
         assert result.cancelled_count == 0
@@ -116,12 +138,14 @@ class TestNormalFlow:
 
     def test_single_item(self, simple_pipeline: PipelineExecutor):
         result = simple_pipeline.execute([42])
+        _assert_all_items_have_terminal_state(result, 1)
         assert result.success_count == 1
         assert result.success_items[0].stage_results["double"] == 84
 
     def test_preserves_input_order(self, simple_pipeline: PipelineExecutor):
         inputs = list(range(100))
         result = simple_pipeline.execute(inputs)
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert [item.data for item in result.items] == inputs
 
 
@@ -141,8 +165,10 @@ class TestItemRetry:
             max_retries=3,
         )
         pipeline = PipelineExecutor(stages=[stage])
-        result = pipeline.execute([1, 2, 3])
+        inputs = [1, 2, 3]
+        result = pipeline.execute(inputs)
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.status == PipelineStatus.COMPLETED
         assert result.success_count == 3
         for item in result.success_items:
@@ -165,8 +191,10 @@ class TestItemRetry:
             retry_delay=0.0,
         )
         pipeline = PipelineExecutor(stages=[stage])
-        result = pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == 5
         for item in result.items:
             assert item.status == ItemStatus.SUCCESS
@@ -182,8 +210,10 @@ class TestItemRetry:
             max_retries=2,
         )
         pipeline = PipelineExecutor(stages=[stage])
-        result = pipeline.execute([1, 2, 3])
+        inputs = [1, 2, 3]
+        result = pipeline.execute(inputs)
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.failed_count == 3
         for item in result.failed_items:
             assert item.attempts == 2
@@ -207,8 +237,10 @@ class TestItemRetry:
             max_retries=3,
         )
         pipeline = PipelineExecutor(stages=[stage])
-        result = pipeline.execute([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        inputs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        result = pipeline.execute(inputs)
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == 9
         assert result.failed_count == 1
         failed_item = result.failed_items[0]
@@ -223,12 +255,13 @@ class TestItemRetry:
         pipeline = PipelineExecutor(stages=[stage])
         result = pipeline.execute([1])
 
+        _assert_all_items_have_terminal_state(result, 1)
         assert result.failed_count == 1
         assert result.items[0].attempts == 0
 
 
 class TestPipelineTimeout:
-    def test_timeout_cancels_pipeline(self):
+    def test_timeout_cancels_pipeline_full_state_check(self):
         def very_slow(x):
             time.sleep(0.5)
             return x
@@ -236,30 +269,37 @@ class TestPipelineTimeout:
         stage = StageConfig(name="slow", handler=very_slow, queue_capacity=2)
         pipeline = PipelineExecutor(stages=[stage], timeout=0.3)
 
-        result = pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
 
         assert result.status == PipelineStatus.TIMED_OUT
-        assert result.cancelled_count + result.success_count >= 1
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert isinstance(result.error, Exception)
+        for item in result.items:
+            assert item.status in (ItemStatus.SUCCESS, ItemStatus.CANCELLED)
 
-    def test_timeout_preserves_completed_results(self):
-        call_log = []
-
+    def test_timeout_preserves_completed_results_full_state_check(self):
         def fast_first_then_slow(x):
-            call_log.append(x)
             if x <= 2:
                 return x * 2
             time.sleep(0.3)
             return x * 2
 
-        stage = StageConfig(name="mixed_speed", handler=fast_first_then_slow, queue_capacity=2)
+        stage = StageConfig(
+            name="mixed_speed", handler=fast_first_then_slow, queue_capacity=2
+        )
         pipeline = PipelineExecutor(stages=[stage], timeout=0.4)
 
-        result = pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
 
-        assert result.success_count >= 2
-        assert result.success_items[0].data == 1
-        assert result.success_items[1].data == 2
+        _assert_all_items_have_terminal_state(result, len(inputs))
+        successful_data = {item.data for item in result.success_items}
+        assert 1 in successful_data
+        assert 2 in successful_data
+        for item in result.success_items:
+            if item.data in (1, 2):
+                assert item.stage_results["mixed_speed"] == item.data * 2
 
     def test_long_timeout_allows_completion(self):
         def handler(x):
@@ -269,7 +309,10 @@ class TestPipelineTimeout:
         stage = StageConfig(name="quick", handler=handler, queue_capacity=10)
         pipeline = PipelineExecutor(stages=[stage], timeout=10.0)
 
-        result = pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
+
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.status == PipelineStatus.COMPLETED
         assert result.success_count == 5
 
@@ -282,6 +325,7 @@ class TestPipelineTimeout:
         pipeline = PipelineExecutor(stages=[stage], timeout=5.0)
 
         result = pipeline.execute([1])
+        _assert_all_items_have_terminal_state(result, 1)
         assert result.status == PipelineStatus.COMPLETED
         assert result.success_count == 1
 
@@ -298,9 +342,11 @@ class TestPipelineCancel:
         cancel_timer = threading.Timer(0.15, pipeline.cancel)
         cancel_timer.start()
 
-        result = pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
         cancel_timer.join()
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert pipeline.is_cancelled
         assert result.status == PipelineStatus.CANCELLED
 
@@ -332,9 +378,11 @@ class TestBackpressure:
         )
 
         start = time.monotonic()
-        result = pipeline.execute(range(10))
+        inputs = list(range(10))
+        result = pipeline.execute(inputs)
         elapsed = time.monotonic() - start
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.status == PipelineStatus.COMPLETED
         assert result.success_count == 10
         assert elapsed >= 0.4
@@ -346,7 +394,9 @@ class TestBackpressure:
         stage = StageConfig(name="s", handler=h, queue_capacity=1)
         pipeline = PipelineExecutor(stages=[stage])
 
-        result = pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == 5
 
     def test_multiple_stages_with_backpressure(self):
@@ -368,7 +418,9 @@ class TestBackpressure:
             ]
         )
 
-        result = pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == 5
         for item in result.success_items:
             expected = str((item.data + 1) * 2)
@@ -395,8 +447,10 @@ class TestFailurePropagation:
             ]
         )
 
-        result = pipeline.execute([1, 2, 3, 4, 5])
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == 3
         assert result.failed_count == 2
         assert sorted(processed["stage2"]) == [1, 3, 5]
@@ -409,8 +463,10 @@ class TestFailurePropagation:
         def fail_all(x):
             raise ValueError("all fail")
 
+        never_called_flag = {"called": False}
+
         def never_called(x):
-            pytest.fail("This stage should never run")
+            never_called_flag["called"] = True
             return x
 
         pipeline = PipelineExecutor(
@@ -421,9 +477,12 @@ class TestFailurePropagation:
             ]
         )
 
-        result = pipeline.execute([1, 2, 3])
+        inputs = [1, 2, 3]
+        result = pipeline.execute(inputs)
+
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.failed_count == 3
-        assert len(result.stage_results) == 3
+        assert never_called_flag["called"] is False
 
         s1 = result.stage_results[0]
         assert s1.failed_count == 3
@@ -440,8 +499,10 @@ class TestEdgeCases:
 
         stage = StageConfig(name="none_stage", handler=return_none)
         pipeline = PipelineExecutor(stages=[stage])
-        result = pipeline.execute([1, 2, 3])
+        inputs = [1, 2, 3]
+        result = pipeline.execute(inputs)
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == 3
         for item in result.success_items:
             assert item.stage_results["none_stage"] is None
@@ -456,31 +517,31 @@ class TestEdgeCases:
         large_input = list(range(500))
         result = pipeline.execute(large_input)
 
+        _assert_all_items_have_terminal_state(result, len(large_input))
         assert result.success_count == 500
         assert len(result.items) == 500
 
     def test_mixed_success_failure_cancel(self):
-        pipeline_cancelled = {"flag": False}
-
-        def fail_item2_cancel_item5(x):
+        def fail_item2_slow_item5(x):
             if x == 2:
                 raise ValueError("item 2 fails")
             if x == 5:
-                pipeline_cancelled["flag"] = True
                 time.sleep(0.5)
             return x
 
         stage = StageConfig(
             name="mixed",
-            handler=fail_item2_cancel_item5,
+            handler=fail_item2_slow_item5,
             max_retries=0,
             queue_capacity=10,
         )
         pipeline = PipelineExecutor(stages=[stage], timeout=0.3)
 
-        result = pipeline.execute([1, 2, 3, 4, 5, 6])
+        inputs = [1, 2, 3, 4, 5, 6]
+        result = pipeline.execute(inputs)
 
-        assert result.success_count >= 1
+        _assert_all_items_have_terminal_state(result, len(inputs))
+        assert result.success_count + result.failed_count + result.cancelled_count == 6
         assert result.failed_count == 1
         assert result.failed_items[0].data == 2
 
@@ -527,9 +588,10 @@ class TestPipelineResultProperties:
         stage = StageConfig(name="s", handler=fail_even, max_retries=0)
         pipeline = PipelineExecutor(stages=[stage])
 
-        items = [1, 2, 3, 4, 5]
-        result = pipeline.execute(items)
+        inputs = [1, 2, 3, 4, 5]
+        result = pipeline.execute(inputs)
 
+        _assert_all_items_have_terminal_state(result, len(inputs))
         assert result.success_count == len(result.success_items) == 3
         assert result.failed_count == len(result.failed_items) == 2
         assert result.cancelled_count == len(result.cancelled_items) == 0
@@ -548,3 +610,122 @@ class TestStageResult:
             cancelled_count=1,
         )
         assert sr.total_count == 8
+
+
+class TestNoOrphanItems:
+    def test_timeout_no_pending_items(self):
+        def slow(x):
+            time.sleep(0.3)
+            return x
+
+        stage = StageConfig(name="slow", handler=slow, queue_capacity=2)
+        pipeline = PipelineExecutor(stages=[stage], timeout=0.2)
+
+        inputs = list(range(10))
+        result = pipeline.execute(inputs)
+
+        terminal = {ItemStatus.SUCCESS, ItemStatus.FAILED, ItemStatus.CANCELLED}
+        for item in result.items:
+            assert item.status in terminal, (
+                f"Found orphan item id={item.item_id} data={item.data} status={item.status}"
+            )
+
+    def test_cancel_no_pending_items(self):
+        def slow(x):
+            time.sleep(0.2)
+            return x
+
+        stage = StageConfig(name="slow", handler=slow, queue_capacity=3)
+        pipeline = PipelineExecutor(stages=[stage])
+
+        def cancel_after_delay():
+            time.sleep(0.15)
+            pipeline.cancel()
+
+        t = threading.Thread(target=cancel_after_delay)
+        t.start()
+
+        inputs = list(range(10))
+        result = pipeline.execute(inputs)
+        t.join()
+
+        terminal = {ItemStatus.SUCCESS, ItemStatus.FAILED, ItemStatus.CANCELLED}
+        for item in result.items:
+            assert item.status in terminal
+
+    def test_feeder_no_orphans_when_interrupted(self):
+        call_count = {"n": 0}
+
+        def fail_first_two(x):
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                time.sleep(0.2)
+            return x
+
+        stage = StageConfig(
+            name="s", handler=fail_first_two, queue_capacity=2, max_retries=0
+        )
+        pipeline = PipelineExecutor(stages=[stage], timeout=0.25)
+
+        inputs = list(range(20))
+        result = pipeline.execute(inputs)
+
+        terminal = {ItemStatus.SUCCESS, ItemStatus.FAILED, ItemStatus.CANCELLED}
+        for item in result.items:
+            assert item.status in terminal, (
+                f"Orphan: id={item.item_id} data={item.data} status={item.status}"
+            )
+        assert result.success_count + result.failed_count + result.cancelled_count == len(
+            inputs
+        )
+
+
+class TestEndToEndResultConsistency:
+    def test_success_failed_cancelled_sum_equals_total(self):
+        def maybe_fail_or_slow(x):
+            if x % 7 == 0:
+                raise ValueError("div by 7")
+            if x % 5 == 0:
+                time.sleep(0.3)
+            return x * 2
+
+        stage = StageConfig(
+            name="mixed", handler=maybe_fail_or_slow, max_retries=0, queue_capacity=5
+        )
+        pipeline = PipelineExecutor(stages=[stage], timeout=0.5)
+
+        inputs = list(range(1, 21))
+        result = pipeline.execute(inputs)
+
+        total = result.success_count + result.failed_count + result.cancelled_count
+        assert total == len(inputs), f"{total} != {len(inputs)}"
+
+    def test_multistage_all_items_accounted_for(self):
+        def s1_fail_mod3(x):
+            if x % 3 == 0:
+                raise ValueError("mod 3 fails")
+            return x + 1
+
+        def s2_slow_mod5(x):
+            if x % 5 == 0:
+                time.sleep(0.25)
+            return x * 2
+
+        pipeline = PipelineExecutor(
+            stages=[
+                StageConfig(name="s1", handler=s1_fail_mod3, max_retries=0, queue_capacity=3),
+                StageConfig(name="s2", handler=s2_slow_mod5, max_retries=0, queue_capacity=3),
+            ],
+            timeout=0.5,
+        )
+
+        inputs = list(range(1, 16))
+        result = pipeline.execute(inputs)
+
+        terminal = {ItemStatus.SUCCESS, ItemStatus.FAILED, ItemStatus.CANCELLED}
+        for item in result.items:
+            assert item.status in terminal
+        assert (
+            result.success_count + result.failed_count + result.cancelled_count
+            == len(inputs)
+        )

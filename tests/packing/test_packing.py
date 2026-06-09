@@ -2,7 +2,6 @@ import pytest
 
 from solocoder_py.packing import (
     Bin,
-    InsufficientCapacityError,
     InvalidBinError,
     InvalidItemError,
     Item,
@@ -81,32 +80,66 @@ class TestBinModel:
 class TestFirstFitStrategy:
     def test_first_fit_picks_first_available_bin(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
-        items = [make_item(size=3)]
+        items = [make_item(size=3, name="A")]
         bins = [make_bin(capacity=10), make_bin(capacity=10)]
 
         result = scheduler.first_fit(items, bins)
 
         assert result.success is True
         assert len(result.packed_bins[0].items) == 1
+        assert result.packed_bins[0].items[0].name == "A"
         assert len(result.packed_bins[1].items) == 0
 
     def test_first_fit_skips_full_bin(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
         bins = [make_bin(capacity=5), make_bin(capacity=10)]
-        bins[0].add_item(make_item(size=5))
-        items = [make_item(size=3)]
+        prefilled = make_item(size=5, name="prefilled")
+        bins[0].add_item(prefilled)
+        items = [make_item(size=3, name="new")]
 
         result = scheduler.first_fit(items, bins)
 
         assert result.success is True
         assert len(result.packed_bins[0].items) == 1
+        assert result.packed_bins[0].items[0].name == "prefilled"
         assert len(result.packed_bins[1].items) == 1
+        assert result.packed_bins[1].items[0].name == "new"
+
+    def test_first_fit_exact_assignment(self, make_scheduler, make_item, make_bin):
+        scheduler = make_scheduler()
+        items = [
+            make_item(size=8, name="A"),
+            make_item(size=7, name="B"),
+            make_item(size=5, name="C"),
+            make_item(size=4, name="D"),
+            make_item(size=3, name="E"),
+            make_item(size=2, name="F"),
+        ]
+        bins = [
+            make_bin(capacity=10),
+            make_bin(capacity=10),
+            make_bin(capacity=10),
+        ]
+
+        result = scheduler.first_fit(items, bins)
+
+        assert result.success is True
+        bin1_names = [i.name for i in result.packed_bins[0].items]
+        bin2_names = [i.name for i in result.packed_bins[1].items]
+        bin3_names = [i.name for i in result.packed_bins[2].items]
+        assert bin1_names == ["A", "F"]
+        assert result.packed_bins[0].used_space == 10
+        assert bin2_names == ["B", "E"]
+        assert result.packed_bins[1].used_space == 10
+        assert bin3_names == ["C", "D"]
+        assert result.packed_bins[2].used_space == 9
+        assert pytest.approx(result.fragmentation_rate) == 1 / 30
 
 
 class TestBestFitStrategy:
     def test_best_fit_picks_tightest_bin(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
-        items = [make_item(size=3)]
+        items = [make_item(size=3, name="A")]
         bins = [make_bin(capacity=10), make_bin(capacity=5)]
 
         result = scheduler.best_fit(items, bins)
@@ -114,19 +147,52 @@ class TestBestFitStrategy:
         assert result.success is True
         assert len(result.packed_bins[0].items) == 0
         assert len(result.packed_bins[1].items) == 1
+        assert result.packed_bins[1].items[0].name == "A"
 
     def test_best_fit_compares_remaining_space(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
         bins = [make_bin(capacity=10), make_bin(capacity=10)]
-        bins[0].add_item(make_item(size=2))
-        bins[1].add_item(make_item(size=5))
-        items = [make_item(size=3)]
+        bins[0].add_item(make_item(size=2, name="pre1"))
+        bins[1].add_item(make_item(size=5, name="pre2"))
+        items = [make_item(size=3, name="new")]
 
         result = scheduler.best_fit(items, bins)
 
         assert result.success is True
-        assert len(result.packed_bins[0].items) == 1
-        assert len(result.packed_bins[1].items) == 2
+        bin0_names = [i.name for i in result.packed_bins[0].items]
+        bin1_names = [i.name for i in result.packed_bins[1].items]
+        assert "pre1" in bin0_names
+        assert "pre2" in bin1_names
+        assert "new" in bin1_names
+        assert result.packed_bins[0].used_space == 2
+        assert result.packed_bins[1].used_space == 8
+        assert result.packed_bins[1].remaining_space == 2
+
+    def test_best_fit_exact_assignment(self, make_scheduler, make_item, make_bin):
+        scheduler = make_scheduler()
+        items = [
+            make_item(size=8, name="A"),
+            make_item(size=7, name="B"),
+            make_item(size=5, name="C"),
+            make_item(size=4, name="D"),
+            make_item(size=3, name="E"),
+            make_item(size=2, name="F"),
+        ]
+        bins = [
+            make_bin(capacity=10),
+            make_bin(capacity=10),
+            make_bin(capacity=10),
+        ]
+
+        result = scheduler.best_fit(items, bins)
+
+        assert result.success is True
+        total_packed = sum(len(b.items) for b in result.packed_bins)
+        assert total_packed == 6
+        total_size = sum(
+            i.size for b in result.packed_bins for i in b.items
+        )
+        assert total_size == 29
 
 
 class TestPackingSchedulerNormalFlow:
@@ -212,6 +278,69 @@ class TestPackingResultStats:
         assert utilizations[1][1] == 0.0
 
 
+class TestStrategyDifference:
+    def test_first_fit_vs_best_fit_different_assignment(self, make_scheduler, make_item, make_bin):
+        scheduler = make_scheduler()
+        bins = [make_bin(capacity=5), make_bin(capacity=4)]
+        items = [
+            make_item(size=3, name="X"),
+            make_item(size=2, name="Y"),
+            make_item(size=2, name="Z"),
+        ]
+
+        ff_result = scheduler.first_fit(items, bins)
+        bf_result = scheduler.best_fit(items, bins)
+
+        assert ff_result.success is True
+        assert bf_result.success is True
+
+        ff_bin0_names = sorted(i.name for i in ff_result.packed_bins[0].items)
+        ff_bin1_names = sorted(i.name for i in ff_result.packed_bins[1].items)
+        assert ff_bin0_names == ["X", "Y"]
+        assert ff_bin1_names == ["Z"]
+
+        bf_bin0_names = sorted(i.name for i in bf_result.packed_bins[0].items)
+        bf_bin1_names = sorted(i.name for i in bf_result.packed_bins[1].items)
+        assert bf_bin0_names == ["Y", "Z"]
+        assert bf_bin1_names == ["X"]
+
+    def test_first_fit_vs_best_fit_fragmentation_difference(self, make_scheduler, make_item, make_bin):
+        scheduler = make_scheduler()
+        bins = [
+            make_bin(capacity=10),
+            make_bin(capacity=8),
+            make_bin(capacity=5),
+        ]
+        items = [make_item(size=2, name="A"), make_item(size=3, name="B")]
+
+        ff_result = scheduler.first_fit(items, bins)
+        bf_result = scheduler.best_fit(items, bins)
+
+        assert ff_result.success is True
+        assert bf_result.success is True
+
+        ff_bin0_names = sorted(i.name for i in ff_result.packed_bins[0].items)
+        ff_bin2_names = sorted(i.name for i in ff_result.packed_bins[2].items)
+        assert ff_bin0_names == ["A", "B"]
+        assert ff_bin2_names == []
+        assert ff_result.packed_bins[0].used_space == 5
+        assert ff_result.packed_bins[2].used_space == 0
+
+        bf_bin0_names = sorted(i.name for i in bf_result.packed_bins[0].items)
+        bf_bin2_names = sorted(i.name for i in bf_result.packed_bins[2].items)
+        assert bf_bin0_names == []
+        assert bf_bin2_names == ["A", "B"]
+        assert bf_result.packed_bins[0].used_space == 0
+        assert bf_result.packed_bins[2].used_space == 5
+
+        ff_utils = dict(ff_result.bin_utilizations())
+        bf_utils = dict(bf_result.bin_utilizations())
+        assert ff_utils[ff_result.packed_bins[0].id] == 0.5
+        assert ff_utils[ff_result.packed_bins[2].id] == 0.0
+        assert bf_utils[bf_result.packed_bins[0].id] == 0.0
+        assert bf_utils[bf_result.packed_bins[2].id] == 1.0
+
+
 class TestEdgeCases:
     def test_item_exactly_fills_bin(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
@@ -236,38 +365,50 @@ class TestEdgeCases:
         assert len(result.packed_bins) == 1
         assert len(result.packed_bins[0].items) == 2
 
-    def test_first_fit_vs_best_fit_difference(self, make_scheduler, make_item, make_bin):
+    def test_single_item_exactly_fills_single_bin(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
-        bins = [
-            make_bin(capacity=10),
-            make_bin(capacity=8),
-            make_bin(capacity=5),
-        ]
-        items = [make_item(size=2), make_item(size=3)]
+        items = [make_item(size=10)]
+        bins = [make_bin(capacity=10)]
 
-        ff_result = scheduler.first_fit(items, bins)
-        bf_result = scheduler.best_fit(items, bins)
+        result = scheduler.first_fit(items, bins)
 
-        assert ff_result.success is True
-        assert bf_result.success is True
-
-        assert len(ff_result.packed_bins[0].items) == 2
-        assert len(ff_result.packed_bins[2].items) == 0
-        assert ff_result.packed_bins[2].remaining_space == 5
-
-        assert len(bf_result.packed_bins[2].items) == 2
-        assert bf_result.packed_bins[2].remaining_space == 0
-        assert bf_result.packed_bins[0].remaining_space == 10
+        assert result.success is True
+        assert result.total_used_space == 10
+        assert result.total_remaining_space == 0
+        assert result.fragmentation_rate == 0.0
 
 
 class TestErrorCases:
-    def test_item_size_exceeds_all_bins(self, make_scheduler, make_item, make_bin):
+    def test_item_size_exceeds_all_bins_returns_unpacked_not_exception(
+        self, make_scheduler, make_item, make_bin
+    ):
         scheduler = make_scheduler()
-        items = [make_item(size=100)]
+        items = [make_item(size=100, name="huge")]
         bins = [make_bin(capacity=10), make_bin(capacity=20)]
 
-        with pytest.raises(InsufficientCapacityError):
-            scheduler.first_fit(items, bins)
+        result = scheduler.first_fit(items, bins)
+
+        assert result.success is False
+        assert len(result.unpacked_items) == 1
+        assert result.unpacked_items[0].name == "huge"
+        assert sum(len(b.items) for b in result.packed_bins) == 0
+
+    def test_multiple_items_some_exceed_capacity(self, make_scheduler, make_item, make_bin):
+        scheduler = make_scheduler()
+        items = [
+            make_item(size=3, name="small"),
+            make_item(size=100, name="huge"),
+            make_item(size=2, name="tiny"),
+        ]
+        bins = [make_bin(capacity=10)]
+
+        result = scheduler.first_fit(items, bins)
+
+        assert result.success is False
+        assert len(result.unpacked_items) == 1
+        assert result.unpacked_items[0].name == "huge"
+        packed_names = sorted(i.name for b in result.packed_bins for i in b.items)
+        assert packed_names == ["small", "tiny"]
 
     def test_empty_items_list(self, make_scheduler, make_bin):
         scheduler = make_scheduler()
@@ -300,7 +441,7 @@ class TestErrorCases:
 
     def test_not_enough_total_capacity(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
-        items = [make_item(size=5), make_item(size=5)]
+        items = [make_item(size=5, name="A"), make_item(size=5, name="B")]
         bins = [make_bin(capacity=8)]
 
         result = scheduler.first_fit(items, bins)
@@ -320,15 +461,15 @@ class TestErrorCases:
 
 
 class TestFullScenarios:
-    def test_classic_bin_packing_first_fit(self, make_scheduler, make_item, make_bin):
+    def test_classic_bin_packing_first_fit_detailed(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
         items = [
-            make_item(size=8),
-            make_item(size=7),
-            make_item(size=5),
-            make_item(size=4),
-            make_item(size=3),
-            make_item(size=2),
+            make_item(size=8, name="A"),
+            make_item(size=7, name="B"),
+            make_item(size=5, name="C"),
+            make_item(size=4, name="D"),
+            make_item(size=3, name="E"),
+            make_item(size=2, name="F"),
         ]
         bins = [
             make_bin(capacity=10),
@@ -339,17 +480,43 @@ class TestFullScenarios:
         result = scheduler.first_fit(items, bins)
 
         assert result.success is True
-        assert result.fragmentation_rate >= 0.0
 
-    def test_classic_bin_packing_best_fit(self, make_scheduler, make_item, make_bin):
+        bin1_items = sorted(i.name for i in result.packed_bins[0].items)
+        bin2_items = sorted(i.name for i in result.packed_bins[1].items)
+        bin3_items = sorted(i.name for i in result.packed_bins[2].items)
+
+        assert bin1_items == ["A", "F"]
+        assert result.packed_bins[0].used_space == 10
+        assert result.packed_bins[0].remaining_space == 0
+
+        assert bin2_items == ["B", "E"]
+        assert result.packed_bins[1].used_space == 10
+        assert result.packed_bins[1].remaining_space == 0
+
+        assert bin3_items == ["C", "D"]
+        assert result.packed_bins[2].used_space == 9
+        assert result.packed_bins[2].remaining_space == 1
+
+        assert result.total_capacity == 30
+        assert result.total_used_space == 29
+        assert result.total_remaining_space == 1
+        assert pytest.approx(result.fragmentation_rate) == 1 / 30
+        assert pytest.approx(result.overall_utilization) == 29 / 30
+
+        utilizations = dict(result.bin_utilizations())
+        assert pytest.approx(utilizations[result.packed_bins[0].id]) == 1.0
+        assert pytest.approx(utilizations[result.packed_bins[1].id]) == 1.0
+        assert pytest.approx(utilizations[result.packed_bins[2].id]) == 0.9
+
+    def test_classic_bin_packing_best_fit_detailed(self, make_scheduler, make_item, make_bin):
         scheduler = make_scheduler()
         items = [
-            make_item(size=8),
-            make_item(size=7),
-            make_item(size=5),
-            make_item(size=4),
-            make_item(size=3),
-            make_item(size=2),
+            make_item(size=8, name="A"),
+            make_item(size=7, name="B"),
+            make_item(size=5, name="C"),
+            make_item(size=4, name="D"),
+            make_item(size=3, name="E"),
+            make_item(size=2, name="F"),
         ]
         bins = [
             make_bin(capacity=10),
@@ -362,3 +529,8 @@ class TestFullScenarios:
         assert result.success is True
         total_packed = sum(len(b.items) for b in result.packed_bins)
         assert total_packed == 6
+
+        total_size = sum(i.size for b in result.packed_bins for i in b.items)
+        assert total_size == 29
+        assert result.total_used_space == 29
+        assert result.total_remaining_space == 1

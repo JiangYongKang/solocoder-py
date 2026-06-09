@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import threading
 import uuid
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from datetime import date, datetime, timedelta
+from typing import Dict, List, Optional, Set, Tuple
 
 from .models import (
     Booking,
@@ -23,7 +23,32 @@ class BookingEngine:
     def __init__(self) -> None:
         self._slots: Dict[str, TimeSlot] = {}
         self._bookings: Dict[str, Booking] = {}
+        self._holidays: Set[date] = set()
         self._lock = threading.RLock()
+
+    def add_holiday(self, holiday_date: date) -> None:
+        with self._lock:
+            self._holidays.add(holiday_date)
+
+    def remove_holiday(self, holiday_date: date) -> None:
+        with self._lock:
+            self._holidays.discard(holiday_date)
+
+    def list_holidays(self) -> List[date]:
+        return sorted(self._holidays)
+
+    def is_holiday(self, check_date: date) -> bool:
+        return check_date in self._holidays
+
+    def _slot_is_on_holiday(self, slot: TimeSlot) -> bool:
+        start_date = slot.start_time.date()
+        end_date = slot.end_time.date()
+        current = start_date
+        while current <= end_date:
+            if current in self._holidays:
+                return True
+            current = current + timedelta(days=1)
+        return False
 
     def create_time_slot(
         self,
@@ -71,13 +96,18 @@ class BookingEngine:
                 slot
                 for slot in self._slots.values()
                 if slot.overlaps(start_time, end_time)
+                and slot.available_capacity > 0
+                and not self._slot_is_on_holiday(slot)
             ]
 
     def _find_overlapping_slots(
         self, start_time: datetime, end_time: datetime
     ) -> List[TimeSlot]:
         slots = [
-            slot for slot in self._slots.values() if slot.overlaps(start_time, end_time)
+            slot
+            for slot in self._slots.values()
+            if slot.overlaps(start_time, end_time)
+            and not self._slot_is_on_holiday(slot)
         ]
         slots.sort(key=lambda s: s.start_time)
         return slots
@@ -153,13 +183,6 @@ class BookingEngine:
         with self._lock:
             overlapping_slots = self._find_overlapping_slots(start_time, end_time)
             self._validate_no_gaps(start_time, end_time, overlapping_slots)
-
-            for slot in overlapping_slots:
-                if slot.available_capacity < quantity:
-                    raise InsufficientCapacityError(
-                        f"Insufficient capacity in slot {slot.id}: "
-                        f"requested {quantity}, available {slot.available_capacity}"
-                    )
 
             sub_bookings = self._split_into_sub_bookings(
                 start_time, end_time, quantity, overlapping_slots

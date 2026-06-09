@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import List
 
-from .exceptions import InsufficientCapacityError
 from .models import Bin, Item, PackingResult, PackingStrategyType
 from .strategies import BestFitStrategy, FirstFitStrategy, PackingStrategy
 
@@ -38,13 +37,13 @@ class PackingScheduler:
 
         packing_strategy = self._strategies[strategy]
         bins_copy = [Bin(id=b.id, capacity=b.capacity, items=list(b.items), name=b.name) for b in bins]
+        max_bin_capacity = max(b.capacity for b in bins_copy)
         unpacked: List[Item] = []
 
         for item in items:
-            if item.size > max(b.capacity for b in bins_copy):
-                raise InsufficientCapacityError(
-                    f"Item size {item.size} exceeds maximum bin capacity {max(b.capacity for b in bins_copy)}"
-                )
+            if item.size > max_bin_capacity:
+                unpacked.append(item)
+                continue
 
             target_bin = packing_strategy.find_bin(item, bins_copy)
             if target_bin is not None:

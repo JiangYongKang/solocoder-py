@@ -26,7 +26,7 @@
 | `RefundError` | 退款模块基础异常 |
 | `PaymentError` / `PaymentNotFoundError` / `PaymentExistsError` | 支付相关异常 |
 | `RefundAmountError` / `ExcessRefundError` / `InvalidRefundAmountError` | 退款金额校验异常 |
-| `RefundStateError` / `RefundNotFoundError` / `RefundExistsError` | 退款状态与存在性异常 |
+| `RefundStateError` / `RefundOwnershipError` / `RefundNotFoundError` / `RefundExistsError` | 退款状态、归属关系与存在性异常 |
 | `ChargebackError` / `ChargebackExistsError` / `ChargebackAmountError` | 拒付处理异常 |
 
 ### models.py
@@ -107,8 +107,14 @@
 - 可针对特定退款单发起拒付（传入 `refund_id`），或不关联具体退款单（`refund_id=None`）
 - 拒付金额不得超过对应退款单金额（关联退款单时）或累计已退款金额（不关联时）
 - 关联退款单且状态为 `已退款` 时，自动回退支付的已退款金额
-- 关联退款单时，自动将退款单状态流转为 `已拒付`
+- 关联退款单时，自动将该退款单状态流转为 `已拒付`
+- **不关联退款单（`refund_id=None`）时**：
+  - 回退支付的累计已退款金额
+  - 按时间顺序（FIFO，先创建先处理）遍历该支付下所有处于 `已退款` 状态的退款单
+  - 依次将受影响的退款单状态流转为 `已拒付`，并关联该拒付记录 ID，直至拒付金额被完全覆盖
+  - 处于 `已拒绝`、`已取消` 等非 `已退款` 状态的退款单不受影响
 - 拒付完成后，可退余额自动恢复（已退款金额减少），允许重新发起退款
+- 若传入的 `refund_id` 对应的退款单不属于目标 `payment_id`，抛出 `RefundOwnershipError`（归属关系异常，区别于状态异常 `RefundStateError`）
 
 ## 使用示例
 
@@ -236,6 +242,94 @@ new_refund = engine.request_refund(payment.id, Decimal("800.00"))
 engine.start_review(new_refund.id)
 engine.approve_refund(new_refund.id)
 assert engine.get_available_refund_amount(payment.id) == Decimal("200.00")
+```
+
+### 未关联退款单的拒付（批量更新状态）
+
+当拒付不针对特定退款单时，系统按 FIFO 顺序自动更新受影响退款单的状态：
+
+```python
+from decimal import Decimal
+from solocoder_py.refund import RefundEngine, RefundRepository, RefundState
+
+engine = RefundEngine(RefundRepository())
+payment = engine.create_payment(user_id="user-001", amount=Decimal("1000.00"))
+
+# 完成多笔部分退款
+refund1 = engine.request_refund(payment.id, Decimal("300.00"))
+engine.start_review(refund1.id)
+engine.approve_refund(refund1.id)
+
+refund2 = engine.request_refund(payment.id, Decimal("400.00"))
+engine.start_review(refund2.id)
+engine.approve_refund(refund2.id)
+
+# 累计已退款 700，可退余额 300
+assert engine.get_total_refunded_amount(payment.id) == Decimal("700.00")
+assert engine.get_available_refund_amount(payment.id) == Decimal("300.00")
+
+# 银行发起拒付 500，不关联具体退款单
+chargeback = engine.process_chargeback(
+    payment_id=payment.id,
+    refund_id=None,
+    amount=Decimal("500.00"),
+    reason="整笔交易争议",
+)
+
+# 按 FIFO 顺序：refund1（300）被完全覆盖，refund2（400）覆盖剩余 200
+# 两笔退款单状态均更新为已拒付
+assert engine.repository.get_refund(refund1.id).state == RefundState.CHARGED_BACK
+assert engine.repository.get_refund(refund1.id).chargeback_id == chargeback.id
+assert engine.repository.get_refund(refund2.id).state == RefundState.CHARGED_BACK
+assert engine.repository.get_refund(refund2.id).chargeback_id == chargeback.id
+
+# 已退款金额回退 500，剩余 200
+payment = engine.repository.get_payment(payment.id)
+assert payment.refunded_amount == Decimal("200.00")
+assert payment.charged_back_amount == Decimal("500.00")
+assert payment.available_refund_amount == Decimal("800.00")
+```
+
+### 归属关系异常与状态异常的区别
+
+```python
+from decimal import Decimal
+from solocoder_py.refund import (
+    RefundEngine, RefundRepository,
+    RefundStateError, RefundOwnershipError,
+)
+
+engine = RefundEngine(RefundRepository())
+payment1 = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
+payment2 = engine.create_payment(user_id="user-2", amount=Decimal("500.00"))
+refund = engine.request_refund(payment1.id, Decimal("300.00"))
+engine.start_review(refund.id)
+engine.approve_refund(refund.id)
+
+# RefundOwnershipError：退款单不属于目标支付（归属关系错误）
+try:
+    engine.process_chargeback(
+        payment_id=payment2.id,  # 错误的支付 ID
+        refund_id=refund.id,
+        amount=Decimal("300.00"),
+        reason="fraud",
+    )
+except RefundOwnershipError as e:
+    print(f"归属关系错误: {e}")
+
+# RefundStateError：退款单自身状态不允许拒付（状态合法性错误）
+refund2 = engine.request_refund(payment1.id, Decimal("100.00"))
+engine.start_review(refund2.id)
+engine.reject_refund(refund2.id)  # 状态变为已拒绝
+try:
+    engine.process_chargeback(
+        payment_id=payment1.id,
+        refund_id=refund2.id,
+        amount=Decimal("100.00"),
+        reason="fraud",
+    )
+except RefundStateError as e:
+    print(f"状态错误: {e}")
 ```
 
 ### 非法状态转移拦截

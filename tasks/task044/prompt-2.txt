@@ -1,0 +1,7 @@
+你之前实现的座位预留域模块存在一些问题，需要修复：
+1. test_system_clock_monotonic 测试不稳定（flaky），在多次运行时出现间歇性失败。原因是 time.sleep(0.01) 在 Windows 平台上不能保证 time.monotonic() 的返回值一定会增加，导致断言 t2 > t1 偶尔失败。
+2. 当前超时自动释放的实现是惰性检测——仅在外部调用（如 list_available_seats、reserve_seat 等）时检查并释放过期预留。提示词第3条要求"系统自动释放"，但如果没有外部操作触发，过期预留将一直保留在内存中，不是真正的自动释放。
+3. reserve_consecutive_seats_in_row 方法在 _find_consecutive_available_block 内部已经对每个座位执行了过期检测，但在找到候选座位后又对同一个座位重复调用了 _expire_reservation_if_needed，存在冗余操作。
+4. 修复后需要补充超时自动释放的单元测试，验证系统能主动检测并释放过期预留。
+5. 更新 README.md，说明修复后的超时自动释放机制。
+6. 重新运行 poetry run pytest tests/seat/ -q，需要让所有测试稳定通过。

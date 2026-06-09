@@ -1,0 +1,7 @@
+你之前实现的购物车合并域模块存在一些问题，需要修复：
+1. merge_anonymous_to_user_cart 方法在合并后直接操作了 user_cart.items 字典来修改和插入购物车项，绕过了 Cart 类自身的封装方法，导致合并完成后 user_cart.updated_at 没有被更新，购物车的时间戳停留在合并前的旧值。
+2. Cart.update_quantity 方法对不在购物车中的商品做了静默忽略，不抛异常也不返回任何错误标识。引擎层方法在执行修改数量操作时虽然校验了商品存在，但最终 cart.update_quantity 静默返回后引擎也无法感知操作被忽略。这导致调用方在要求修改一个不在购物车中的商品数量时得不到任何反馈。
+3. merge_anonymous_to_user_cart 方法将"商品未注册""商品已下架""商品库存为零"三种不同业务场景统一归入 removed_offline_products 列表，调用方无法区分商品被移除的具体原因。
+4. 修复后需要补充相关的单元测试，覆盖合并时间戳更新、修改不存在商品数量的报错路径、三种移除场景的区分。
+5. 更新 README.md，说明修复后的行为变更。
+6. 重新运行 poetry run pytest tests/cart/ -q，需要让所有测试通过。

@@ -605,9 +605,19 @@ class TestSystemClock:
 
         clock = SystemClock()
         t1 = clock.now()
-        time.sleep(0.01)
         t2 = clock.now()
-        assert t2 > t1
+        assert t2 >= t1
+        t3 = clock.now()
+        assert t3 >= t2
+
+    def test_system_clock_sleep_advances_time(self):
+        from solocoder_py.seat import SystemClock
+
+        clock = SystemClock()
+        t1 = clock.now()
+        clock.sleep(0.05)
+        t2 = clock.now()
+        assert t2 >= t1
 
     def test_system_clock_with_manager(self):
         from solocoder_py.seat import SystemClock
@@ -615,9 +625,146 @@ class TestSystemClock:
         manager = SeatReservationManager(
             rows=2, columns=3,
             default_reservation_timeout=0.05,
+            cleanup_interval=0.02,
             clock=SystemClock(),
         )
+        try:
+            manager.reserve_seat(0, 0, "user-1")
+            assert manager.count_available() == 5
+            time.sleep(0.15)
+            assert manager.count_available() == 6
+        finally:
+            manager.shutdown()
+
+
+class TestManagerConfiguration:
+    def test_zero_cleanup_interval_rejected(self):
+        with pytest.raises(ValueError, match="cleanup_interval must be positive"):
+            SeatReservationManager(rows=5, columns=5, cleanup_interval=0)
+
+    def test_negative_cleanup_interval_rejected(self):
+        with pytest.raises(ValueError, match="cleanup_interval must be positive"):
+            SeatReservationManager(rows=5, columns=5, cleanup_interval=-1)
+
+
+class TestActiveAutoRelease:
+    def test_cleanup_expired_reservations_direct(self):
+        clock = ManualClock()
+        manager = make_manager(
+            rows=3, columns=5,
+            default_reservation_timeout=60.0,
+            clock=clock,
+        )
         manager.reserve_seat(0, 0, "user-1")
-        assert manager.count_available() == 5
-        time.sleep(0.1)
-        assert manager.count_available() == 6
+        manager.reserve_seat(0, 1, "user-2")
+        manager.reserve_seat(1, 0, "user-3")
+        assert manager._cleanup_expired_reservations() == 0
+
+        clock.advance(61.0)
+        released = manager._cleanup_expired_reservations()
+        assert released == 3
+        assert manager.count_available() == 15
+
+    def test_cleanup_expired_reservations_partial(self):
+        clock = ManualClock()
+        manager = make_manager(
+            rows=3, columns=5,
+            default_reservation_timeout=60.0,
+            clock=clock,
+        )
+        manager.reserve_seat(0, 0, "user-1")
+        clock.advance(30.0)
+        manager.reserve_seat(0, 1, "user-2")
+        clock.advance(31.0)
+        released = manager._cleanup_expired_reservations()
+        assert released == 1
+        assert manager.get_seat(0, 0).state == SeatState.AVAILABLE
+        assert manager.get_seat(0, 1).state == SeatState.RESERVED
+
+    def test_cleanup_does_not_touch_occupied(self):
+        clock = ManualClock()
+        manager = make_manager(
+            rows=2, columns=3,
+            default_reservation_timeout=60.0,
+            clock=clock,
+        )
+        manager.reserve_seat(0, 0, "user-1")
+        manager.confirm_occupancy(0, 0, "user-1")
+        manager.reserve_seat(0, 1, "user-2")
+        clock.advance(100.0)
+        released = manager._cleanup_expired_reservations()
+        assert released == 1
+        assert manager.get_seat(0, 0).state == SeatState.OCCUPIED
+        assert manager.get_seat(0, 1).state == SeatState.AVAILABLE
+
+    def test_active_auto_release_with_system_clock(self):
+        from solocoder_py.seat import SystemClock
+
+        manager = SeatReservationManager(
+            rows=2, columns=3,
+            default_reservation_timeout=0.05,
+            cleanup_interval=0.02,
+            clock=SystemClock(),
+        )
+        try:
+            manager.reserve_seat(0, 0, "user-1")
+            manager.reserve_seat(0, 1, "user-2")
+            with manager._lock:
+                count_reserved = sum(
+                    1 for s in manager._seats.values()
+                    if s.state == SeatState.RESERVED
+                )
+            assert count_reserved == 2
+            time.sleep(0.2)
+            with manager._lock:
+                count_reserved = sum(
+                    1 for s in manager._seats.values()
+                    if s.state == SeatState.RESERVED
+                )
+            assert count_reserved == 0
+        finally:
+            manager.shutdown()
+
+    def test_active_auto_release_without_external_calls(self):
+        from solocoder_py.seat import SystemClock
+
+        manager = SeatReservationManager(
+            rows=1, columns=5,
+            default_reservation_timeout=0.05,
+            cleanup_interval=0.02,
+            clock=SystemClock(),
+        )
+        try:
+            manager.reserve_seat(0, 0, "user-1")
+            time.sleep(0.2)
+            with manager._lock:
+                seat = manager._seats[SeatId(row=0, column=0)]
+                assert seat.state == SeatState.AVAILABLE
+        finally:
+            manager.shutdown()
+
+    def test_shutdown_stops_cleanup_thread(self):
+        from solocoder_py.seat import SystemClock
+
+        manager = SeatReservationManager(
+            rows=2, columns=3,
+            cleanup_interval=0.01,
+            clock=SystemClock(),
+        )
+        assert manager._cleanup_thread is not None
+        assert manager._cleanup_thread.is_alive() is True
+        manager.shutdown()
+        assert manager._cleanup_thread is None
+        assert manager._stop_cleanup.is_set() is True
+
+    def test_shutdown_idempotent(self):
+        from solocoder_py.seat import SystemClock
+
+        manager = SeatReservationManager(
+            rows=2, columns=3,
+            cleanup_interval=0.01,
+            clock=SystemClock(),
+        )
+        manager.shutdown()
+        manager.shutdown()
+        assert manager._cleanup_thread is None

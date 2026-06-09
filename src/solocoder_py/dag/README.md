@@ -94,6 +94,33 @@ PENDING → READY → RUNNING → SUCCESS
 | `CycleDetectedError` | 添加依赖会形成环路 |
 | `TaskNotReadyError` | 在任务未就绪时尝试执行 |
 
+## 环检测与路径报告机制
+
+模块在 `register_task()` 和 `add_dependency()` 两个入口进行环检测，采用基于 DFS 三色标记的算法（WHITE/GRAY/BLACK）。环路路径的报告使用 **DFS 递归栈** 而非遍历树 parent 指针，确保报错信息中的每一条边都对应图中的真实依赖关系，避免误导开发者排查问题。
+
+### 算法原理
+
+1. 每个节点初始为 WHITE（未访问），DFS 进入时标记为 GRAY（访问中），递归返回时标记为 BLACK（已完成）
+2. DFS 递归过程中维护 `recursion_stack`，记录当前遍历路径上的所有节点
+3. 当遍历某节点的邻居时，若发现该邻居处于 GRAY 状态，说明找到了一条回边（back edge），即形成了环
+4. 此时环路起点为该 GRAY 邻居在 `recursion_stack` 中的索引位置，环路路径即为从该索引到栈顶的子序列
+5. 由于 `recursion_stack` 的每一步推进都沿着图的真实邻接边进行，因此提取出的环路路径中每一对相邻节点都必然存在真实的依赖边
+
+### 错误信息格式
+
+当检测到环路时，`CycleDetectedError` 的消息格式为：
+
+```
+Adding dependencies for 'X' would create a cycle: A -> B -> C -> A
+Adding dependency 'C' -> 'A' would create a cycle: A -> B -> C -> A
+```
+
+路径部分形如 `N1 -> N2 -> ... -> Nk -> N1`，表示 `N1` 依赖 `N2`、`N2` 依赖 `N3`、…、`Nk` 依赖 `N1`，形成闭环。其中每一条箭头都对应图中真实存在的依赖关系。
+
+### 自环检测
+
+对于 `register_task(task_id="X", dependencies=["X"])` 或 `add_dependency("X", "X")` 这种任务依赖自身的自环场景，调度器会在 DFS 之前进行快速短路判断，直接报告 `X -> X` 的环路路径。
+
 ## DAG 调度流程图
 
 ```

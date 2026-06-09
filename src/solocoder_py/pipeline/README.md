@@ -4,19 +4,19 @@
 
 ## 模块功能
 
-1. **分阶段流水线执行**：流水线由多个阶段按顺序组成，每个阶段接收前一阶段的输出作为输入，依次处理数据。
-2. **阶段间背压控制**：当后一阶段处理速度慢于前一阶段时，前一阶段通过有界队列阻塞等待，防止数据在阶段间无限堆积。
+1. **分阶段流水线执行**：流水线由多个阶段并行运行，每个阶段在独立线程中工作，前一阶段成功处理完成的数据项立即流入后一阶段，无需等待当前阶段全部完成。
+2. **阶段间背压控制**：当后一阶段处理速度慢于前一阶段时，前一阶段的产出线程在向有界队列写入数据时会被阻塞等待，防止数据在阶段间无限堆积，实现真正的跨阶段限速。
 3. **单阶段重试机制**：单个数据项在某阶段处理失败时，可按配置的最大重试次数自动重试，不影响同阶段其他数据项的处理。
-4. **整体超时取消**：为整个流水线设置总体超时时间，超时后立即取消执行，已处理结果保留，未处理数据项标记为取消。
+4. **整体超时取消**：为整个流水线设置总体超时时间，超时后立即停止新数据的启动，已处理结果保留，所有未完成数据项均会被标记为 CANCELLED，结果中不存在 PENDING/PROCESSING/RETRYING 等中间状态。
 
 ## 核心类职责
 
 ### `PipelineExecutor`（流水线执行器）
 
-核心执行引擎，负责编排多阶段流水线的执行流程。
+核心执行引擎，采用阶段间并行流水线架构。每个阶段运行在独立线程中，阶段之间通过有界队列传递数据，形成可背压的流式处理链。
 
 **构造参数**：
-- `stages: List[StageConfig]`：流水线阶段配置列表，按顺序执行
+- `stages: List[StageConfig]`：流水线阶段配置列表，按顺序连接各阶段的输入输出
 - `timeout: Optional[float] = None`：整个流水线的超时时间（秒），`None` 表示不超时
 
 **核心方法**：
@@ -24,6 +24,7 @@
 - `cancel() -> None`：主动取消正在运行的流水线
 - `status: PipelineStatus`（属性）：获取流水线当前状态
 - `is_cancelled: bool`（属性）：流水线是否已被取消
+- `is_timed_out: bool`（属性）：流水线是否因超时被取消
 
 ### `StageConfig`（阶段配置）
 
@@ -59,6 +60,8 @@
 
 封装整个流水线的执行结果。
 
+**结果完整性保证**：返回结果中每个数据项的 `status` 必为三种终态之一（`SUCCESS`、`FAILED`、`CANCELLED`），且满足 `success_count + failed_count + cancelled_count == len(items)`，不存在遗漏的孤儿数据项。
+
 **字段**：
 - `status: PipelineStatus`：流水线最终状态
 - `items: List[PipelineItem]`：所有数据项（含成功、失败、取消）
@@ -84,12 +87,12 @@
 ### 状态枚举
 
 **`ItemStatus`**（数据项状态）：
-- `PENDING`：待处理
-- `PROCESSING`：处理中
-- `SUCCESS`：成功
-- `FAILED`：失败
-- `RETRYING`：重试中
-- `CANCELLED`：已取消
+- `PENDING`：待处理（仅在处理过程中的临时状态，不会出现在最终结果中）
+- `PROCESSING`：处理中（仅在处理过程中的临时状态）
+- `SUCCESS`：成功（终态）
+- `FAILED`：失败（终态）
+- `RETRYING`：重试中（仅在处理过程中的临时状态）
+- `CANCELLED`：已取消（终态）
 
 **`PipelineStatus`**（流水线状态）：
 - `CREATED`：已创建
@@ -113,28 +116,94 @@
 - `ItemRetryExhaustedError`：单数据项重试耗尽，包含 `stage_name`、`item_id`、`attempts`、`last_error` 属性
 - `InvalidPipelineConfigError`：流水线配置无效
 
+## 架构说明
+
+### 阶段间并行流水线架构
+
+```
+输入数据
+    │
+    ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Feeder 线程（将输入数据写入 Stage 0 的输入队列          │
+└───────────────────────┬───────────────────────────────────┘
+                        │ queue_capacity = N0
+                        ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Stage 0 Worker 线程 ──► handler 处理 ──► 写入下一个队列   │
+└───────────────────────┬───────────────────────────────────┘
+                        │ queue_capacity = N1
+                        ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Stage 1 Worker 线程 ──► handler 处理 ──► ...              │
+└───────────────────────┬───────────────────────────────────┘
+                        │
+                        ▼
+                  最终结果收集
+```
+
+**关键特性**：
+- 每个 Stage Worker 同时运行，处理各自队列中的数据
+- 某一阶段产出数据成功后立即写入下一阶段，无需等待当前阶段全部完成
+- 下游慢时上游因队列满而阻塞，实现跨阶段背压
+
 ## 背压机制描述
 
 ### 工作原理
 
-每个阶段都配备一个有界队列（`BoundedQueue`），使用 **BLOCK（阻塞）** 策略作为背压控制：
+阶段间通过有界队列（`BoundedQueue`）使用 **BLOCK（阻塞）** 策略实现跨阶段背压控制：
 
-1. **生产者（前一阶段）**：将处理完成的数据项放入当前阶段的输入队列。
-2. **队列满时**：如果队列已满，生产者线程会阻塞等待，直到队列有空位或超时。
-3. **消费者（当前阶段）**：从队列中取出数据项进行处理，处理完成后通知队列有空位。
-4. **超时联动**：如果设置了流水线整体超时，阻塞等待也会受超时限制，避免无限等待。
+1. **上游阶段**：处理成功的数据项需要写入下游阶段的输入队列。
+2. **队列满时**：如果下游队列已满，上游 Worker 在 `enqueue()` 调用会阻塞等待，直到队列有空位或流水线停止。
+3. **下游阶段**：从上游队列取出数据项进行 handler 处理，处理完成后队列腾出空间，上游被唤醒继续写入。
+4. **超时联动**：阻塞等待受流水线整体超时限制，达到超时后立即放弃入队并标记取消。
 
 ### 关键参数
 
-- `StageConfig.queue_capacity`：每个阶段的输入队列容量，默认 100。根据处理速度差异合理设置：
+- `StageConfig.queue_capacity`：每个阶段的输入队列容量，默认 100。
   - 当前阶段处理较慢时，适当增大队列可缓冲突发流量
-  - 希望严格控制内存时，设置较小的队列容量
+  - 希望严格控制内存或需要强背压时，设置较小的队列容量
 
 ### 效果
 
 - 防止内存溢出：数据不会在阶段间无限堆积
-- 自动限速：快的生产阶段会被慢的消费阶段自然限速
-- 数据完整性：阻塞策略保证不丢数据（除非整体超时）
+- 自动限速：快的生产阶段会被慢的消费阶段自然限速，形成真正的跨阶段背压
+- 数据完整性：阻塞策略保证不丢数据（除非整体超时或被主动取消）
+
+### 限制与注意事项
+
+- 背压作用于"阶段间"边界，即上游阶段的 handler 计算本身已经启动后无法被背压暂停，只能在完成后向队列写入时被阻塞
+- 如果单个 handler 执行耗时很长（比如几秒），背压只会在该 handler 返回后生效
+- 队列容量设置过小将降低吞吐量，过大则缓冲能力减弱，需根据业务权衡
+
+## 超时取消行为
+
+### 机制说明
+
+超时取消采用**协作式中断**设计：
+
+1. **监控线程**：主线程以 50ms 轮询检查整体超时。
+2. **Handler 级检查**：每次调用 `handler` 时，在独立守护线程中运行 handler，主线程每 50ms 检查一次超时状态。
+   - 如果 handler 在超时前返回，正常处理结果
+   - 如果 handler 仍在运行时超时，主线程立即放弃等待，该数据项被标记为 `CANCELLED`
+3. **队列操作检查**：所有 `enqueue/dequeue` 操作以短超时轮询，期间持续检查全局超时。
+4. **重试间隔检查**：`retry_delay` 期间每 10ms 检查一次取消信号。
+5. **终态保证**：流水线返回前，会遍历所有数据项，将所有仍处于中间状态（PENDING/PROCESSING/RETRYING）的数据项全部标记为 `CANCELLED`，确保结果中不存在遗漏项。
+
+### 重要限制
+
+> ⚠️ **Python 无法强制杀死运行中的用户 handler**
+>
+> 由于 CPython GIL 与线程模型的限制，当 `handler` 函数本身在执行长阻塞操作（例如 `time.sleep(10)`、同步网络请求等）时，即使流水线超时信号无法立即中断 handler 线程。此时：
+>
+> - 主线程会立即停止等待该 handler 返回
+> - 该数据项被标记为 `CANCELLED` 并计入最终结果
+> - handler 线程在后台继续运行直到其自然结束（作为守护线程，进程退出时会被清理）
+> - 该 handler 的返回值或异常会被丢弃
+
+### 建议
+
+- 如果业务需要真正的严格超时控制，应在 handler 内部自行实现（如使用 `signal.alarm`、`concurrent.futures` 的超时参数等），或确保 handler 中避免执行超过流水线 timeout 时长的长阻塞操作。
 
 ## 使用示例
 
@@ -168,7 +237,7 @@ pipeline = PipelineExecutor(
 result = pipeline.execute([1, 2, 3, 4, 5])
 
 assert result.status == PipelineStatus.COMPLETED
-assert result.success_count == 5
+assert result.success_count + result.failed_count + result.cancelled_count == 5
 
 for item in result.success_items:
     print(f"Item {item.item_id}: {item.stage_results['load']}")
@@ -203,6 +272,7 @@ pipeline = PipelineExecutor(
 
 result = pipeline.execute([1, 2, 3, 4, 5])
 
+assert result.success_count + result.failed_count + result.cancelled_count == 5
 print(f"Success: {result.success_count}, Failed: {result.failed_count}")
 for item in result.failed_items:
     print(f"Failed item {item.item_id}: {item.error}")
@@ -261,5 +331,6 @@ result = pipeline.execute(range(10))
 cancel_thread.join()
 
 print(f"Status: {result.status}")
+assert result.success_count + result.failed_count + result.cancelled_count == 10
 print(f"Success: {result.success_count}, Cancelled: {result.cancelled_count}")
 ```

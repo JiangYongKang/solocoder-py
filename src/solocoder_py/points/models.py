@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Dict, Optional
 from uuid import uuid4
 
-from .exceptions import InvalidAmountError
+from .exceptions import FreezeStateError, InvalidAmountError
 
 
 class FreezeStatus(str, Enum):
@@ -99,13 +99,13 @@ class FrozenRecord:
 
     def mark_consumed(self) -> None:
         if not self.is_frozen:
-            raise InvalidAmountError(f"Cannot consume freeze in state {self.status}")
+            raise FreezeStateError(f"Cannot consume freeze in state {self.status}")
         self.status = FreezeStatus.CONSUMED
         self.consumed_at = datetime.now()
 
     def mark_unfrozen(self) -> None:
         if not self.is_frozen:
-            raise InvalidAmountError(f"Cannot unfreeze freeze in state {self.status}")
+            raise FreezeStateError(f"Cannot unfreeze freeze in state {self.status}")
         self.status = FreezeStatus.UNFROZEN
         self.unfrozen_at = datetime.now()
 

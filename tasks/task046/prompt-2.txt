@@ -1,0 +1,7 @@
+你之前实现的装箱分配调度器模块存在一些问题，需要修复：
+1. test_classic_bin_packing_first_fit 测试只断言 fragmentation_rate >= 0.0，这对策略正确性没有约束力——无论 First-Fit 实现是否正确，只要装箱成功该断言都会通过。这个测试没有验证具体的物品分配结果（每个箱子装了什么物品），无法检测策略实现的错误。
+2. 容量校验失败时存在两套不一致的处理：当物品尺寸超过所有箱子单箱容量时抛出 InsufficientCapacityError 异常，而物品因箱子已满无法装入时仅返回 success=False。调用方需要同时处理异常和检查返回值才行，两种失败信令机制让 API 使用变得复杂。
+3. test_first_fit_vs_best_fit_difference 测试使用的场景是两种策略都能成功的温和案例，没有验证 Best-Fit 优于 First-Fit 的核心场景——即 Best-Fit 能装完所有物品而 First-Fit 装不完。READMD.md 中给出的示例（箱子 [6,6]，物品 [4,3,3]）正好展示了这种差异，但测试中没有覆盖。
+4. 修复后需要改进相关测试，确保策略对比测试能证明两种策略的实际差异、核心算法测试验证具体分配结果。
+5. 更新 README.md，说明修复后的失败处理一致性约定。
+6. 重新运行 poetry run pytest tests/packing/ -q，需要让所有测试通过。

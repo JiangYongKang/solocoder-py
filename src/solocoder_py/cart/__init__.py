@@ -1,5 +1,6 @@
 from .exceptions import (
     CartError,
+    CartItemNotFoundError,
     CartNotFoundError,
     InsufficientStockError,
     InvalidQuantityError,
@@ -11,6 +12,7 @@ from .engine import CartEngine
 
 __all__ = [
     "CartError",
+    "CartItemNotFoundError",
     "CartNotFoundError",
     "InsufficientStockError",
     "InvalidQuantityError",

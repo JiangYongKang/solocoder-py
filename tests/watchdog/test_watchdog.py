@@ -164,9 +164,10 @@ class TestLeaseExpiration:
         watchdog.register_entity("e1", lease_ttl=10.0, debounce_count=3)
         clock.advance(10.0)
         expired = watchdog.check_expired()
-        assert "e1" in expired or len(expired) == 0
-        entity_before = watchdog.get_entity("e1")
-        streak_before = entity_before.inactive_streak
+        assert expired == []
+        entity = watchdog.get_entity("e1")
+        assert entity.status == EntityStatus.ACTIVE
+        assert entity.inactive_streak == 1
         watchdog.heartbeat("e1")
         entity_after = watchdog.get_entity("e1")
         assert entity_after.status == EntityStatus.ACTIVE
@@ -327,6 +328,25 @@ class TestInactiveCallback:
         expired = watchdog.check_expired()
         assert "e1" in expired
 
+    def test_first_callback_exception_does_not_block_others(self, clock: ManualClock):
+        triggered = []
+
+        def bad_callback(entity_id: str) -> None:
+            raise RuntimeError("boom from " + entity_id)
+
+        def good_callback(entity_id: str) -> None:
+            triggered.append(entity_id)
+
+        watchdog = make_watchdog(clock=clock)
+        watchdog.register_entity("e1", lease_ttl=1.0, debounce_count=1, on_inactive=bad_callback)
+        watchdog.register_entity("e2", lease_ttl=1.0, debounce_count=1, on_inactive=good_callback)
+        watchdog.register_entity("e3", lease_ttl=1.0, debounce_count=1, on_inactive=bad_callback)
+        watchdog.register_entity("e4", lease_ttl=1.0, debounce_count=1, on_inactive=good_callback)
+        clock.advance(2.0)
+        expired = watchdog.check_expired()
+        assert set(expired) == {"e1", "e2", "e3", "e4"}
+        assert set(triggered) == {"e2", "e4"}
+
     def test_multiple_entities_callbacks(self, clock: ManualClock):
         triggered = []
 
@@ -428,3 +448,93 @@ class TestNormalFlowScenarios:
         assert statuses["e1"] == EntityStatus.INACTIVE
         assert statuses["e2"] == EntityStatus.ACTIVE
         assert statuses["e3"] == EntityStatus.INACTIVE
+
+
+class TestCallbackSafety:
+    def test_callback_registers_new_entity(self, clock: ManualClock):
+        watchdog_ref: HeartbeatWatchdog | None = None
+
+        def on_inactive(entity_id: str) -> None:
+            assert watchdog_ref is not None
+            watchdog_ref.register_entity("new-entity", lease_ttl=5.0, debounce_count=2)
+
+        watchdog = make_watchdog(clock=clock)
+        watchdog_ref = watchdog
+        watchdog.register_entity("e1", lease_ttl=1.0, debounce_count=1, on_inactive=on_inactive)
+        clock.advance(2.0)
+        expired = watchdog.check_expired()
+        assert "e1" in expired
+        assert watchdog.is_registered("new-entity") is True
+        assert watchdog.get_entity("new-entity").status == EntityStatus.ACTIVE
+
+    def test_callback_unregisters_another_entity(self, clock: ManualClock):
+        watchdog_ref: HeartbeatWatchdog | None = None
+
+        def on_inactive(entity_id: str) -> None:
+            assert watchdog_ref is not None
+            watchdog_ref.unregister_entity("e2")
+
+        watchdog = make_watchdog(clock=clock)
+        watchdog_ref = watchdog
+        watchdog.register_entity("e1", lease_ttl=1.0, debounce_count=1, on_inactive=on_inactive)
+        watchdog.register_entity("e2", lease_ttl=100.0, debounce_count=1)
+        watchdog.register_entity("e3", lease_ttl=1.0, debounce_count=1)
+        clock.advance(2.0)
+        expired = watchdog.check_expired()
+        assert "e1" in expired
+        assert "e3" in expired
+        assert watchdog.is_registered("e2") is False
+        assert watchdog.is_registered("e1") is True
+        assert watchdog.is_registered("e3") is True
+
+    def test_callback_sends_heartbeat_for_another_entity(self, clock: ManualClock):
+        watchdog_ref: HeartbeatWatchdog | None = None
+
+        def on_inactive(entity_id: str) -> None:
+            assert watchdog_ref is not None
+            watchdog_ref.heartbeat("e2")
+
+        watchdog = make_watchdog(clock=clock)
+        watchdog_ref = watchdog
+        watchdog.register_entity("e1", lease_ttl=5.0, debounce_count=1, on_inactive=on_inactive)
+        watchdog.register_entity("e2", lease_ttl=1.0, debounce_count=5)
+        clock.advance(2.0)
+        watchdog.check_expired()
+        watchdog.check_expired()
+        entity_before = watchdog.get_entity("e2")
+        assert entity_before.inactive_streak == 2
+        assert entity_before.status == EntityStatus.ACTIVE
+        clock.advance(4.0)
+        expired = watchdog.check_expired()
+        assert "e1" in expired
+        entity_after = watchdog.get_entity("e2")
+        assert entity_after.inactive_streak == 0
+        assert entity_after.status == EntityStatus.ACTIVE
+
+    def test_all_entities_checked_even_if_callback_modifies_dict(self, clock: ManualClock):
+        watchdog_ref: HeartbeatWatchdog | None = None
+        triggered = []
+
+        def on_inactive_e1(entity_id: str) -> None:
+            assert watchdog_ref is not None
+            watchdog_ref.register_entity("dynamic-1", lease_ttl=5.0, debounce_count=1)
+            watchdog_ref.unregister_entity("e3")
+            triggered.append(entity_id)
+
+        def on_inactive_other(entity_id: str) -> None:
+            triggered.append(entity_id)
+
+        watchdog = make_watchdog(clock=clock)
+        watchdog_ref = watchdog
+        watchdog.register_entity("e1", lease_ttl=1.0, debounce_count=1, on_inactive=on_inactive_e1)
+        watchdog.register_entity("e2", lease_ttl=1.0, debounce_count=1, on_inactive=on_inactive_other)
+        watchdog.register_entity("e3", lease_ttl=1.0, debounce_count=1, on_inactive=on_inactive_other)
+        watchdog.register_entity("e4", lease_ttl=1.0, debounce_count=1, on_inactive=on_inactive_other)
+        clock.advance(2.0)
+        expired = watchdog.check_expired()
+        assert "e1" in expired
+        assert "e2" in expired
+        assert "e3" in expired
+        assert "e4" in expired
+        assert set(triggered) == {"e1", "e2", "e3", "e4"}
+        assert watchdog.is_registered("dynamic-1") is True

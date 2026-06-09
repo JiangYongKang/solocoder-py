@@ -46,6 +46,13 @@ class DAGScheduler:
             raise TaskAlreadyRegisteredError(f"Task already registered: {task_id}")
 
         deps = dependencies or []
+
+        if task_id in deps:
+            cycle_info = f"{task_id} -> {task_id}"
+            raise CycleDetectedError(
+                f"Adding dependencies for '{task_id}' would create a cycle: {cycle_info}"
+            )
+
         for dep_id in deps:
             if dep_id not in self._tasks:
                 raise DependencyNotFoundError(
@@ -77,6 +84,12 @@ class DAGScheduler:
         if dependency_id not in self._tasks:
             raise DependencyNotFoundError(
                 f"Dependency task not found: {dependency_id}"
+            )
+
+        if task_id == dependency_id:
+            cycle_info = f"{task_id} -> {task_id}"
+            raise CycleDetectedError(
+                f"Adding dependency '{dependency_id}' -> '{task_id}' would create a cycle: {cycle_info}"
             )
 
         task = self._tasks[task_id]
@@ -253,22 +266,23 @@ class DAGScheduler:
 
         WHITE, GRAY, BLACK = 0, 1, 2
         color: Dict[str, int] = {tid: WHITE for tid in adjacency}
-        parent: Dict[str, Optional[str]] = {tid: None for tid in adjacency}
-        cycle_start: List[Optional[str]] = [None]
+        recursion_stack: List[str] = []
+        found_cycle: List[str] = []
 
         def dfs(node: str) -> bool:
             color[node] = GRAY
+            recursion_stack.append(node)
             for neighbor in adjacency.get(node, []):
                 if neighbor not in color:
                     continue
                 if color[neighbor] == GRAY:
-                    cycle_start[0] = neighbor
-                    parent[neighbor] = node
+                    idx = recursion_stack.index(neighbor)
+                    found_cycle.extend(recursion_stack[idx:])
                     return True
                 if color[neighbor] == WHITE:
-                    parent[neighbor] = node
                     if dfs(neighbor):
                         return True
+            recursion_stack.pop()
             color[node] = BLACK
             return False
 
@@ -277,19 +291,7 @@ class DAGScheduler:
                 if dfs(node):
                     break
 
-        if cycle_start[0] is None:
-            return []
-
-        path: List[str] = []
-        current: Optional[str] = cycle_start[0]
-        visited_cycle: Set[str] = set()
-        while current is not None and current not in visited_cycle:
-            visited_cycle.add(current)
-            path.append(current)
-            current = parent[current]
-
-        path.reverse()
-        return path
+        return found_cycle
 
     def _propagate_success(self, completed_task_id: str) -> None:
         for dependent_id in self._dependents.get(completed_task_id, set()):

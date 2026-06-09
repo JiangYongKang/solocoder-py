@@ -24,9 +24,12 @@ class SeatReservationManager:
     rows: int
     columns: int
     default_reservation_timeout: float = 300.0
+    cleanup_interval: float = 1.0
     clock: Clock = field(default_factory=SystemClock)
     _seats: Dict[SeatId, Seat] = field(default_factory=dict, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _stop_cleanup: threading.Event = field(default_factory=threading.Event, init=False)
+    _cleanup_thread: Optional[threading.Thread] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.rows <= 0:
@@ -35,11 +38,50 @@ class SeatReservationManager:
             raise ValueError("columns must be positive")
         if self.default_reservation_timeout <= 0:
             raise ValueError("default_reservation_timeout must be positive")
+        if self.cleanup_interval <= 0:
+            raise ValueError("cleanup_interval must be positive")
         self._seats = {}
         for row in range(self.rows):
             for col in range(self.columns):
                 seat_id = SeatId(row=row, column=col)
                 self._seats[seat_id] = Seat(seat_id=seat_id)
+        self._start_cleanup_thread()
+
+    def _start_cleanup_thread(self) -> None:
+        self._stop_cleanup.clear()
+        self._cleanup_thread = threading.Thread(
+            target=self._cleanup_loop,
+            name="SeatReservationManager-Cleanup",
+            daemon=True,
+        )
+        self._cleanup_thread.start()
+
+    def _cleanup_loop(self) -> None:
+        while not self._stop_cleanup.is_set():
+            try:
+                self._cleanup_expired_reservations()
+            except Exception:
+                pass
+            self._stop_cleanup.wait(self.cleanup_interval)
+
+    def _cleanup_expired_reservations(self) -> int:
+        now = self.clock.now()
+        released = 0
+        with self._lock:
+            for seat in self._seats.values():
+                if (
+                    seat.state == SeatState.RESERVED
+                    and seat.is_reservation_expired(now, self.default_reservation_timeout)
+                ):
+                    seat.force_release()
+                    released += 1
+        return released
+
+    def shutdown(self) -> None:
+        self._stop_cleanup.set()
+        if self._cleanup_thread is not None:
+            self._cleanup_thread.join(timeout=5)
+            self._cleanup_thread = None
 
     def _expire_reservation_if_needed(self, seat: Seat, now: float) -> None:
         if seat.state == SeatState.RESERVED and seat.is_reservation_expired(
@@ -142,7 +184,6 @@ class SeatReservationManager:
                     seat_ids: List[SeatId] = []
                     for c in consecutive_block:
                         seat = self._seats[SeatId(row=r, column=c)]
-                        self._expire_reservation_if_needed(seat, now)
                         if seat.state != SeatState.AVAILABLE:
                             for sid in seat_ids:
                                 self._seats[sid].force_release()

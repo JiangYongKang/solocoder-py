@@ -232,16 +232,29 @@ class TestDAGSchedulerRegistration:
 
 
 class TestDAGSchedulerCycleDetection:
-    def test_simple_cycle_registration_raises(
+    def test_register_task_self_loop_raises_cycle_error(
+        self, scheduler: DAGScheduler
+    ) -> None:
+        with pytest.raises(CycleDetectedError, match="create a cycle"):
+            scheduler.register_task(task_id="A", dependencies=["A"])
+
+    def test_add_dependency_self_loop_raises_cycle_error(
+        self, scheduler: DAGScheduler
+    ) -> None:
+        scheduler.register_task(task_id="A")
+        with pytest.raises(CycleDetectedError, match="create a cycle"):
+            scheduler.add_dependency("A", "A")
+
+    def test_add_dependency_creates_simple_cycle_raises(
         self, scheduler: DAGScheduler
     ) -> None:
         scheduler.register_task(task_id="A")
         scheduler.register_task(task_id="B", dependencies=["A"])
-        with pytest.raises(CycleDetectedError):
-            scheduler.register_task(task_id="C", dependencies=["B", "A"])
+        scheduler.register_task(task_id="C", dependencies=["B", "A"])
+        with pytest.raises(CycleDetectedError, match="create a cycle"):
             scheduler.add_dependency("A", "C")
 
-    def test_add_dependency_creates_cycle_raises(
+    def test_add_dependency_creates_three_node_cycle_raises(
         self, scheduler: DAGScheduler
     ) -> None:
         scheduler.register_task(task_id="A")
@@ -250,13 +263,9 @@ class TestDAGSchedulerCycleDetection:
         with pytest.raises(CycleDetectedError, match="create a cycle"):
             scheduler.add_dependency("A", "C")
 
-    def test_self_loop_rejected(self, scheduler: DAGScheduler) -> None:
-        scheduler.register_task(task_id="A")
-        with pytest.raises(CycleDetectedError):
-            scheduler.register_task(task_id="B", dependencies=["A"])
-            scheduler.add_dependency("A", "A")
-
-    def test_multi_node_cycle_rejected(self, scheduler: DAGScheduler) -> None:
+    def test_add_dependency_creates_multi_node_cycle_raises(
+        self, scheduler: DAGScheduler
+    ) -> None:
         scheduler.register_task(task_id="A")
         scheduler.register_task(task_id="B", dependencies=["A"])
         scheduler.register_task(task_id="C", dependencies=["B"])
@@ -270,6 +279,154 @@ class TestDAGSchedulerCycleDetection:
         scheduler.register_task(task_id="C", dependencies=["A"])
         scheduler.register_task(task_id="D", dependencies=["B", "C"])
         assert scheduler.task_count == 4
+
+    def test_cycle_path_self_loop_register_matches_edges(
+        self, scheduler: DAGScheduler
+    ) -> None:
+        with pytest.raises(CycleDetectedError) as exc_info:
+            scheduler.register_task(task_id="X", dependencies=["X"])
+        assert "X -> X" in str(exc_info.value)
+
+    def test_cycle_path_self_loop_add_dep_matches_edges(
+        self, scheduler: DAGScheduler
+    ) -> None:
+        scheduler.register_task(task_id="X")
+        with pytest.raises(CycleDetectedError) as exc_info:
+            scheduler.add_dependency("X", "X")
+        assert "X -> X" in str(exc_info.value)
+
+    def test_cycle_path_three_node_chain_matches_actual_edges(
+        self, scheduler: DAGScheduler
+    ) -> None:
+        scheduler.register_task(task_id="A")
+        scheduler.register_task(task_id="B", dependencies=["A"])
+        scheduler.register_task(task_id="C", dependencies=["B"])
+
+        with pytest.raises(CycleDetectedError) as exc_info:
+            scheduler.add_dependency("A", "C")
+
+        error_msg = str(exc_info.value)
+        path_part = error_msg.split("cycle: ")[-1]
+        nodes = [n.strip() for n in path_part.split("->")]
+
+        assert len(nodes) >= 3
+        assert set(nodes) == {"A", "B", "C"}
+
+        adjacency = {
+            "A": {"C"},
+            "B": {"A"},
+            "C": {"B"},
+        }
+        for i in range(len(nodes) - 1):
+            from_node = nodes[i]
+            to_node = nodes[i + 1]
+            assert to_node in adjacency.get(from_node, set()), (
+                f"Reported path contains edge {from_node} -> {to_node}, "
+                f"but no such edge exists in the graph"
+            )
+
+    def test_cycle_path_four_node_chain_matches_actual_edges(
+        self, scheduler: DAGScheduler
+    ) -> None:
+        scheduler.register_task(task_id="A")
+        scheduler.register_task(task_id="B", dependencies=["A"])
+        scheduler.register_task(task_id="C", dependencies=["B"])
+        scheduler.register_task(task_id="D", dependencies=["C"])
+
+        with pytest.raises(CycleDetectedError) as exc_info:
+            scheduler.add_dependency("A", "D")
+
+        error_msg = str(exc_info.value)
+        path_part = error_msg.split("cycle: ")[-1]
+        nodes = [n.strip() for n in path_part.split("->")]
+
+        assert len(nodes) >= 4
+        assert set(nodes) == {"A", "B", "C", "D"}
+
+        adjacency = {
+            "A": {"D"},
+            "B": {"A"},
+            "C": {"B"},
+            "D": {"C"},
+        }
+        for i in range(len(nodes) - 1):
+            from_node = nodes[i]
+            to_node = nodes[i + 1]
+            assert to_node in adjacency.get(from_node, set()), (
+                f"Reported path contains edge {from_node} -> {to_node}, "
+                f"but no such edge exists in the graph"
+            )
+
+    def test_cycle_path_in_diamond_graph_matches_edges(
+        self, scheduler: DAGScheduler
+    ) -> None:
+        scheduler.register_task(task_id="A")
+        scheduler.register_task(task_id="B", dependencies=["A"])
+        scheduler.register_task(task_id="C", dependencies=["A"])
+        scheduler.register_task(task_id="D", dependencies=["B", "C"])
+
+        with pytest.raises(CycleDetectedError) as exc_info:
+            scheduler.add_dependency("A", "D")
+
+        error_msg = str(exc_info.value)
+        path_part = error_msg.split("cycle: ")[-1]
+        nodes = [n.strip() for n in path_part.split("->")]
+
+        assert len(nodes) >= 3
+        for node in nodes:
+            assert node in {"A", "B", "C", "D"}
+
+        adjacency = {
+            "A": ["D"],
+            "B": ["A"],
+            "C": ["A"],
+            "D": ["B", "C"],
+        }
+        adjacency_set = {k: set(v) for k, v in adjacency.items()}
+        for i in range(len(nodes) - 1):
+            from_node = nodes[i]
+            to_node = nodes[i + 1]
+            assert to_node in adjacency_set.get(from_node, set()), (
+                f"Reported path contains edge {from_node} -> {to_node}, "
+                f"but no such edge exists in the graph"
+            )
+
+    def test_cycle_path_with_unrelated_nodes_matches_edges(
+        self, scheduler: DAGScheduler
+    ) -> None:
+        scheduler.register_task(task_id="X")
+        scheduler.register_task(task_id="Y", dependencies=["X"])
+        scheduler.register_task(task_id="Z", dependencies=["Y"])
+        scheduler.register_task(task_id="A")
+        scheduler.register_task(task_id="B", dependencies=["A"])
+        scheduler.register_task(task_id="C", dependencies=["B"])
+
+        with pytest.raises(CycleDetectedError) as exc_info:
+            scheduler.add_dependency("A", "C")
+
+        error_msg = str(exc_info.value)
+        path_part = error_msg.split("cycle: ")[-1]
+        nodes = [n.strip() for n in path_part.split("->")]
+
+        assert len(nodes) >= 3
+        assert set(nodes) == {"A", "B", "C"}
+
+        adjacency = {
+            "A": ["C"],
+            "B": ["A"],
+            "C": ["B"],
+            "X": [],
+            "Y": ["X"],
+            "Z": ["Y"],
+        }
+        adjacency_set = {k: set(v) for k, v in adjacency.items()}
+        for i in range(len(nodes) - 1):
+            from_node = nodes[i]
+            to_node = nodes[i + 1]
+            assert to_node in adjacency_set.get(from_node, set()), (
+                f"Reported path contains edge {from_node} -> {to_node}, "
+                f"but no such edge exists in the graph"
+            )
 
 
 class TestDAGSchedulerTopologicalSort:

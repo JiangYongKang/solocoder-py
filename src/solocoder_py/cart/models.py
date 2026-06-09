@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Dict, List, Optional
 
-from .exceptions import InvalidQuantityError
+from .exceptions import CartItemNotFoundError, InvalidQuantityError
 
 
 @dataclass
@@ -73,7 +73,9 @@ class Cart:
         if quantity <= 0:
             raise InvalidQuantityError("Quantity must be positive")
         if product_id not in self.items:
-            return
+            raise CartItemNotFoundError(
+                f"Product {product_id} not found in cart"
+            )
         self.items[product_id].quantity = quantity
         self.updated_at = datetime.now()
 
@@ -99,4 +101,6 @@ class TrimNotification:
 class MergeResult:
     cart: Cart
     trims: List[TrimNotification] = field(default_factory=list)
+    removed_unregistered_products: List[str] = field(default_factory=list)
     removed_offline_products: List[str] = field(default_factory=list)
+    removed_out_of_stock_products: List[str] = field(default_factory=list)

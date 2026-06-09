@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import threading
 import uuid
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from .exceptions import (
     CartError,
+    CartItemNotFoundError,
     CartNotFoundError,
     InsufficientStockError,
     InvalidQuantityError,
     ProductNotFoundError,
     ProductOfflineError,
 )
-from .models import Cart, CartItem, MergeResult, Product, TrimNotification
+from .models import Cart, MergeResult, Product, TrimNotification
 
 
 class CartEngine:
@@ -193,18 +195,20 @@ class CartEngine:
             user_cart = self.get_or_create_user_cart(user_id)
 
             trims: List[TrimNotification] = []
+            removed_unregistered: List[str] = []
             removed_offline: List[str] = []
+            removed_out_of_stock: List[str] = []
 
             for product_id, anon_item in list(anonymous_cart.items.items()):
                 product = self._products.get(product_id)
                 if product is None:
-                    removed_offline.append(product_id)
+                    removed_unregistered.append(product_id)
                     continue
                 if not product.is_online:
                     removed_offline.append(product_id)
                     continue
                 if product.stock == 0:
-                    removed_offline.append(product_id)
+                    removed_out_of_stock.append(product_id)
                     continue
 
                 existing_item = user_cart.get_item(product_id)
@@ -229,12 +233,12 @@ class CartEngine:
                 else:
                     final_quantity = combined_quantity
 
-                if product_id in user_cart.items:
-                    user_cart.items[product_id].quantity = final_quantity
+                if existing_item is not None:
+                    user_cart.update_quantity(product_id, final_quantity)
                 else:
-                    user_cart.items[product_id] = CartItem(
-                        product_id=product_id, quantity=final_quantity
-                    )
+                    user_cart.add_item(product_id, final_quantity)
+
+            user_cart.updated_at = datetime.now()
 
             anonymous_cart.clear()
             del self._anonymous_carts[anonymous_cart_id]
@@ -242,5 +246,7 @@ class CartEngine:
             return MergeResult(
                 cart=user_cart,
                 trims=trims,
+                removed_unregistered_products=removed_unregistered,
                 removed_offline_products=removed_offline,
+                removed_out_of_stock_products=removed_out_of_stock,
             )

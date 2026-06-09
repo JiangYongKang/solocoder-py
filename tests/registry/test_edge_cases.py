@@ -69,8 +69,9 @@ class TestWeightedSelection:
             inst = registry.select_instance("svc-1")
             counts[inst.instance_id] += 1
 
-        assert counts["inst-heavy"] > counts["inst-zero-1"]
-        assert counts["inst-heavy"] > counts["inst-zero-2"]
+        assert counts["inst-heavy"] == 5000
+        assert counts["inst-zero-1"] == 0
+        assert counts["inst-zero-2"] == 0
 
     def test_select_instance_single_zero_weight(self, registry: ServiceRegistry):
         registry.register(make_instance("inst-1", "svc-1", weight=0))
@@ -113,7 +114,7 @@ class TestWeightedSelection:
         registry.register(make_instance("inst-1", "svc-1"))
         clock.advance(100.0)
 
-        with pytest.raises(NoAvailableInstanceError, match="No available instances"):
+        with pytest.raises(ServiceNotFoundError):
             registry.select_instance("svc-1")
 
     def test_select_instance_returns_clone(self, registry: ServiceRegistry):
@@ -224,7 +225,7 @@ class TestEdgeCases:
     def test_register_instance_to_removed_service(self, registry: ServiceRegistry, clock: ManualClock):
         registry.register(make_instance("inst-1", "svc-1"))
         clock.advance(100.0)
-        registry.cleanup_expired()
+        registry.service_count()
         assert registry.service_count() == 0
 
         registry.register(make_instance("inst-2", "svc-1"))
@@ -251,18 +252,17 @@ class TestEdgeCases:
         with pytest.raises(ServiceNotFoundError):
             registry.select_instance("svc-1")
 
-    def test_cleanup_after_partial_deregister(self, registry: ServiceRegistry, clock: ManualClock):
+    def test_auto_evict_after_partial_deregister(self, registry: ServiceRegistry, clock: ManualClock):
         registry.register(make_instance("inst-1", "svc-1"))
         registry.register(make_instance("inst-2", "svc-1"))
         registry.register(make_instance("inst-3", "svc-1"))
 
         registry.deregister("svc-1", "inst-2")
+        assert registry.instance_count("svc-1") == 2
 
         clock.advance(100.0)
-        removed = registry.cleanup_expired()
+        registry.service_count()
 
-        assert "svc-1" in removed
-        assert set(removed["svc-1"]) == {"inst-1", "inst-3"}
         assert registry.service_count() == 0
 
     def test_large_number_of_instances(self, registry: ServiceRegistry):
@@ -284,11 +284,144 @@ class TestEdgeCases:
         assert instances["inst-1"].metadata["tag"] == "a"
         assert instances["inst-2"].metadata["tag"] == "b"
 
-    def test_get_instances_empty_after_all_expired(self, registry: ServiceRegistry, clock: ManualClock):
+    def test_select_after_all_expired_auto_evicts_service(self, registry: ServiceRegistry, clock: ManualClock):
         registry.register(make_instance("inst-1", "svc-1"))
         clock.advance(100.0)
 
-        with pytest.raises(NoAvailableInstanceError):
+        with pytest.raises(ServiceNotFoundError):
             registry.select_instance("svc-1")
 
-        assert registry.get_all_instances("svc-1") == [] or len(registry.get_all_instances("svc-1")) == 1
+        assert registry.service_count() == 0
+
+
+class TestAutoEviction:
+    def test_get_instances_triggers_auto_evict(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        registry.register(make_instance("inst-2", "svc-1"))
+        registry.register(make_instance("inst-3", "svc-2"))
+
+        clock.advance(15.0)
+        registry.renew("svc-1", "inst-1")
+
+        clock.advance(20.0)
+
+        instances = registry.get_instances("svc-1")
+        assert len(instances) == 1
+        assert instances[0].instance_id == "inst-1"
+
+        with pytest.raises(ServiceNotFoundError):
+            registry.get_instances("svc-2")
+
+    def test_select_instance_triggers_auto_evict(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1", weight=5, port=8001))
+        registry.register(make_instance("inst-2", "svc-1", weight=5, port=8002))
+
+        clock.advance(15.0)
+        registry.renew("svc-1", "inst-1")
+
+        clock.advance(20.0)
+
+        for _ in range(50):
+            selected = registry.select_instance("svc-1")
+            assert selected.instance_id == "inst-1"
+
+        instances = registry.get_all_instances("svc-1")
+        assert len(instances) == 1
+        assert instances[0].instance_id == "inst-1"
+
+    def test_renew_triggers_auto_evict_other_instances(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        registry.register(make_instance("inst-2", "svc-1"))
+
+        clock.advance(20.0)
+        registry.renew("svc-1", "inst-1")
+
+        clock.advance(15.0)
+
+        registry.renew("svc-1", "inst-1")
+        instances = registry.get_all_instances("svc-1")
+        assert len(instances) == 1
+        assert instances[0].instance_id == "inst-1"
+
+    def test_deregister_triggers_auto_evict(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        registry.register(make_instance("inst-2", "svc-2"))
+
+        clock.advance(100.0)
+
+        with pytest.raises(ServiceNotFoundError):
+            registry.deregister("svc-1", "inst-1")
+
+        assert registry.service_count() == 0
+
+    def test_list_services_triggers_auto_evict(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        registry.register(make_instance("inst-2", "svc-2"))
+
+        clock.advance(100.0)
+        assert registry.list_services() == []
+
+    def test_register_triggers_auto_evict_other_services(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        assert len(registry.list_services()) == 1
+
+        clock.advance(100.0)
+
+        registry.register(make_instance("inst-2", "svc-2"))
+        services = registry.list_services()
+        assert len(services) == 1
+        assert "svc-1" not in services
+        assert "svc-2" in services
+
+    def test_instance_count_triggers_auto_evict(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        registry.register(make_instance("inst-2", "svc-1"))
+
+        clock.advance(100.0)
+        count = registry.instance_count()
+        assert count == 0
+        assert registry.service_count() == 0
+
+    def test_service_count_triggers_auto_evict(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        registry.register(make_instance("inst-2", "svc-2"))
+
+        clock.advance(100.0)
+        count = registry.service_count()
+        assert count == 0
+
+    def test_renew_of_expired_instance_raises(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        clock.advance(100.0)
+
+        with pytest.raises(ServiceNotFoundError):
+            registry.renew("svc-1", "inst-1")
+
+    def test_get_all_instances_triggers_auto_evict(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        registry.register(make_instance("inst-2", "svc-1"))
+
+        clock.advance(15.0)
+        registry.renew("svc-1", "inst-1")
+
+        clock.advance(20.0)
+        all_instances = registry.get_all_instances("svc-1")
+        assert len(all_instances) == 1
+        assert all_instances[0].instance_id == "inst-1"
+
+    def test_cleanup_expired_returns_removed_instances(self, registry: ServiceRegistry, clock: ManualClock):
+        registry.register(make_instance("inst-1", "svc-1"))
+        registry.register(make_instance("inst-2", "svc-1"))
+        registry.register(make_instance("inst-3", "svc-2"))
+
+        clock.advance(15.0)
+        registry.renew("svc-1", "inst-1")
+
+        clock.advance(20.0)
+
+        removed = registry.cleanup_expired()
+        assert "svc-1" in removed
+        assert "inst-2" in removed["svc-1"]
+        assert "inst-1" not in removed["svc-1"]
+        assert "svc-2" in removed
+        assert "inst-3" in removed["svc-2"]

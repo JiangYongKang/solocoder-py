@@ -47,7 +47,9 @@
 购物车合并结果数据模型：
 - `cart`: 合并后的购物车
 - `trims`: 库存裁剪通知列表
+- `removed_unregistered_products`: 被移除的未注册商品ID列表
 - `removed_offline_products`: 被移除的已下架商品ID列表
+- `removed_out_of_stock_products`: 被移除的库存为零商品ID列表
 
 ### CartEngine
 购物车引擎，核心业务逻辑类：
@@ -69,12 +71,32 @@
 - 超出部分自动裁剪，并生成 `TrimNotification` 通知用户
 - 例如：商品A库存为 10 件，合并后数量为 15 件，则裁剪为 10 件，裁剪掉 5 件
 
-### 已下架商品处理规则
-- 匿名购物车中存在已下架（`is_online=False`）或库存为0的商品时，合并时自动移除
-- 被移除的商品ID会记录在 `removed_offline_products` 列表中
+### 已下架/无库存/未注册商品处理规则
+- 匿名购物车中存在未注册商品时，合并时自动移除，记录在 `removed_unregistered_products`
+- 匿名购物车中存在已下架（`is_online=False`）商品时，合并时自动移除，记录在 `removed_offline_products`
+- 匿名购物车中存在库存为0的商品时，合并时自动移除，记录在 `removed_out_of_stock_products`
 
 ### 匿名购物车清理规则
 - 合并成功后，匿名购物车被清空并从系统中移除
+- 合并操作完成后，用户购物车的 `updated_at` 时间戳会被更新
+
+### 修改购物车商品数量规则
+- `Cart.update_quantity` 和引擎层的 `update_*_cart_quantity` 方法在修改不存在于购物车中的商品数量时，会抛出 `CartItemNotFoundError` 异常，不再静默忽略
+
+## 行为变更说明
+
+### v1.1 (当前版本)
+1. **合并时间戳更新**: `merge_anonymous_to_user_cart` 操作后，用户购物车的 `updated_at` 字段会正确更新
+2. **修改数量报错**: 修改不存在于购物车中的商品数量时抛出 `CartItemNotFoundError`，不再静默忽略
+3. **移除原因区分**: `MergeResult` 将移除商品的列表拆分为三个独立字段：
+   - `removed_unregistered_products`: 商品未注册
+   - `removed_offline_products`: 商品已下架
+   - `removed_out_of_stock_products`: 商品库存为零
+
+### v1.0 (旧版本)
+- 合并后 `updated_at` 不会更新
+- 修改不存在商品数量时静默忽略
+- 三种移除场景共用一个 `removed_offline_products` 列表，无法区分原因
 
 ## 使用示例
 

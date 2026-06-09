@@ -8,6 +8,7 @@ from solocoder_py.refund import (
     ExcessRefundError,
     InvalidRefundAmountError,
     RefundStateError,
+    RefundOwnershipError,
     ChargebackAmountError,
     PaymentNotFoundError,
 )
@@ -254,13 +255,13 @@ class TestChargeback:
         payment = engine.repository.get_payment(payment.id)
         assert payment.refunded_amount == 0
 
-    def test_chargeback_without_refund_id(self):
+    def test_chargeback_without_refund_id_updates_refund_states(self):
         engine, payment = RefundEngine(RefundRepository()), None
         engine = RefundEngine(RefundRepository())
         payment = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
-        refund = engine.request_refund(payment.id, Decimal("300.00"))
-        engine.start_review(refund.id)
-        engine.approve_refund(refund.id)
+        refund1 = engine.request_refund(payment.id, Decimal("300.00"))
+        engine.start_review(refund1.id)
+        engine.approve_refund(refund1.id)
         refund2 = engine.request_refund(payment.id, Decimal("400.00"))
         engine.start_review(refund2.id)
         engine.approve_refund(refund2.id)
@@ -276,6 +277,112 @@ class TestChargeback:
         assert payment.refunded_amount == Decimal("200.00")
         assert payment.charged_back_amount == Decimal("500.00")
         assert payment.available_refund_amount == Decimal("800.00")
+
+        r1 = engine.repository.get_refund(refund1.id)
+        r2 = engine.repository.get_refund(refund2.id)
+        assert r1.state == RefundState.CHARGED_BACK
+        assert r1.chargeback_id == cb.id
+        assert r2.state == RefundState.CHARGED_BACK
+        assert r2.chargeback_id == cb.id
+
+    def test_chargeback_without_refund_id_partial_first_refund_only(self):
+        engine, payment = RefundEngine(RefundRepository()), None
+        engine = RefundEngine(RefundRepository())
+        payment = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
+        refund1 = engine.request_refund(payment.id, Decimal("300.00"))
+        engine.start_review(refund1.id)
+        engine.approve_refund(refund1.id)
+        refund2 = engine.request_refund(payment.id, Decimal("400.00"))
+        engine.start_review(refund2.id)
+        engine.approve_refund(refund2.id)
+
+        cb = engine.process_chargeback(
+            payment_id=payment.id,
+            refund_id=None,
+            amount=Decimal("200.00"),
+            reason="partial dispute",
+        )
+
+        r1 = engine.repository.get_refund(refund1.id)
+        r2 = engine.repository.get_refund(refund2.id)
+        assert r1.state == RefundState.CHARGED_BACK
+        assert r1.chargeback_id == cb.id
+        assert r2.state == RefundState.REFUNDED
+        assert r2.chargeback_id is None
+
+    def test_chargeback_without_refund_id_covers_exactly_all_refunds(self):
+        engine, payment = RefundEngine(RefundRepository()), None
+        engine = RefundEngine(RefundRepository())
+        payment = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
+        refund1 = engine.request_refund(payment.id, Decimal("200.00"))
+        engine.start_review(refund1.id)
+        engine.approve_refund(refund1.id)
+        refund2 = engine.request_refund(payment.id, Decimal("300.00"))
+        engine.start_review(refund2.id)
+        engine.approve_refund(refund2.id)
+
+        cb = engine.process_chargeback(
+            payment_id=payment.id,
+            refund_id=None,
+            amount=Decimal("500.00"),
+            reason="full dispute",
+        )
+
+        r1 = engine.repository.get_refund(refund1.id)
+        r2 = engine.repository.get_refund(refund2.id)
+        assert r1.state == RefundState.CHARGED_BACK
+        assert r2.state == RefundState.CHARGED_BACK
+        assert engine.get_total_refunded_amount(payment.id) == 0
+
+    def test_chargeback_without_refund_id_ignores_non_refunded_states(self):
+        engine, payment = RefundEngine(RefundRepository()), None
+        engine = RefundEngine(RefundRepository())
+        payment = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
+        refund1 = engine.request_refund(payment.id, Decimal("300.00"))
+        engine.start_review(refund1.id)
+        engine.approve_refund(refund1.id)
+        refund2 = engine.request_refund(payment.id, Decimal("200.00"))
+        engine.start_review(refund2.id)
+        engine.reject_refund(refund2.id)
+        refund3 = engine.request_refund(payment.id, Decimal("100.00"))
+        engine.cancel_refund(refund3.id)
+
+        cb = engine.process_chargeback(
+            payment_id=payment.id,
+            refund_id=None,
+            amount=Decimal("300.00"),
+            reason="fraud",
+        )
+
+        r1 = engine.repository.get_refund(refund1.id)
+        r2 = engine.repository.get_refund(refund2.id)
+        r3 = engine.repository.get_refund(refund3.id)
+        assert r1.state == RefundState.CHARGED_BACK
+        assert r2.state == RefundState.REJECTED
+        assert r3.state == RefundState.CANCELLED
+
+    def test_refund_ownership_error_distinct_from_state_error(self):
+        engine, payment = RefundEngine(RefundRepository()), None
+        engine = RefundEngine(RefundRepository())
+        payment1 = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
+        payment2 = engine.create_payment(user_id="user-2", amount=Decimal("500.00"))
+        refund = engine.request_refund(payment1.id, Decimal("300.00"))
+        engine.start_review(refund.id)
+        engine.approve_refund(refund.id)
+
+        try:
+            engine.process_chargeback(
+                payment_id=payment2.id,
+                refund_id=refund.id,
+                amount=Decimal("300.00"),
+                reason="fraud",
+            )
+        except RefundOwnershipError as e:
+            assert "does not belong to payment" in str(e)
+            assert isinstance(e, RefundOwnershipError)
+            assert not isinstance(e, RefundStateError)
+        else:
+            pytest.fail("Expected RefundOwnershipError was not raised")
 
     def test_chargeback_rollback_allows_new_refund(self):
         engine, payment = RefundEngine(RefundRepository()), None
@@ -373,7 +480,7 @@ class TestChargeback:
         engine.start_review(refund.id)
         engine.approve_refund(refund.id)
 
-        with pytest.raises(RefundStateError):
+        with pytest.raises(RefundOwnershipError):
             engine.process_chargeback(
                 payment_id=payment2.id,
                 refund_id=refund.id,

@@ -31,8 +31,30 @@ class ServiceRegistry:
     def config(self) -> RegistryConfig:
         return self._config
 
+    def _evict_expired(self) -> Dict[str, List[str]]:
+        now = self._clock.now()
+        removed: Dict[str, List[str]] = {}
+
+        for service_name in list(self._services.keys()):
+            snapshot = self._services[service_name]
+            expired_ids: List[str] = []
+
+            for instance_id, instance in list(snapshot.instances.items()):
+                if instance.is_expired(now, self._config.default_ttl):
+                    expired_ids.append(instance_id)
+                    del snapshot.instances[instance_id]
+
+            if expired_ids:
+                removed[service_name] = expired_ids
+
+            if not snapshot.instances:
+                del self._services[service_name]
+
+        return removed
+
     def register(self, instance: ServiceInstance) -> ServiceInstance:
         with self._lock:
+            self._evict_expired()
             now = self._clock.now()
             service_name = instance.service_name
 
@@ -53,6 +75,7 @@ class ServiceRegistry:
 
     def renew(self, service_name: str, instance_id: str) -> ServiceInstance:
         with self._lock:
+            self._evict_expired()
             now = self._clock.now()
             self._ensure_service_exists(service_name)
 
@@ -68,6 +91,7 @@ class ServiceRegistry:
 
     def deregister(self, service_name: str, instance_id: str) -> bool:
         with self._lock:
+            self._evict_expired()
             self._ensure_service_exists(service_name)
 
             snapshot = self._services[service_name]
@@ -85,33 +109,39 @@ class ServiceRegistry:
 
     def get_instances(self, service_name: str) -> List[ServiceInstance]:
         with self._lock:
-            now = self._clock.now()
+            self._evict_expired()
             self._ensure_service_exists(service_name)
 
             snapshot = self._services[service_name]
-            available = snapshot.get_available_instances(now, self._config.default_ttl)
-            return list(available.values())
+            return [v.clone() for v in snapshot.instances.values()]
 
     def get_all_instances(self, service_name: str) -> List[ServiceInstance]:
         with self._lock:
+            self._evict_expired()
             self._ensure_service_exists(service_name)
             snapshot = self._services[service_name]
             return [v.clone() for v in snapshot.instances.values()]
 
     def select_instance(self, service_name: str) -> ServiceInstance:
         with self._lock:
-            now = self._clock.now()
+            self._evict_expired()
             self._ensure_service_exists(service_name)
 
             snapshot = self._services[service_name]
-            available = snapshot.get_available_instances(now, self._config.default_ttl)
+            all_candidates = list(snapshot.instances.values())
 
-            if not available:
+            if not all_candidates:
                 raise NoAvailableInstanceError(
                     f"No available instances for service '{service_name}'"
                 )
 
-            candidates = list(available.values())
+            positive_weight_candidates = [inst for inst in all_candidates if inst.weight > 0]
+
+            if positive_weight_candidates:
+                candidates = positive_weight_candidates
+            else:
+                candidates = all_candidates
+
             total_weight = sum(inst.weight for inst in candidates)
 
             if total_weight <= 0:
@@ -128,36 +158,21 @@ class ServiceRegistry:
 
     def cleanup_expired(self) -> Dict[str, List[str]]:
         with self._lock:
-            now = self._clock.now()
-            removed: Dict[str, List[str]] = {}
-
-            for service_name in list(self._services.keys()):
-                snapshot = self._services[service_name]
-                expired_ids: List[str] = []
-
-                for instance_id, instance in list(snapshot.instances.items()):
-                    if instance.is_expired(now, self._config.default_ttl):
-                        expired_ids.append(instance_id)
-                        del snapshot.instances[instance_id]
-
-                if expired_ids:
-                    removed[service_name] = expired_ids
-
-                if not snapshot.instances:
-                    del self._services[service_name]
-
-            return removed
+            return self._evict_expired()
 
     def list_services(self) -> List[str]:
         with self._lock:
+            self._evict_expired()
             return list(self._services.keys())
 
     def service_count(self) -> int:
         with self._lock:
+            self._evict_expired()
             return len(self._services)
 
     def instance_count(self, service_name: Optional[str] = None) -> int:
         with self._lock:
+            self._evict_expired()
             if service_name is None:
                 return sum(len(s.instances) for s in self._services.values())
             self._ensure_service_exists(service_name)

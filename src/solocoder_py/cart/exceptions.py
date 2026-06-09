@@ -23,3 +23,7 @@ class InvalidQuantityError(CartError):
 
 class CartNotFoundError(CartError):
     pass
+
+
+class CartItemNotFoundError(CartError):
+    pass

@@ -1,0 +1,8 @@
+你之前实现的心跳看门狗监控域模块存在一些问题，需要修复：
+1. check_expired 方法在对 self._entities 字典进行迭代的过程中调用用户注册的 on_inactive 回调函数，且全程持有 self._lock。如果回调函数内部调用了 register_entity 或 unregister_entity 等修改字典的方法，Python 会抛出 RuntimeError（dictionary changed size during iteration），导致 check_expired 中断，后续实体全部跳过租约检查。
+2. check_expired 方法持有锁的时间等于所有实体遍历时间加上所有回调执行时间。如果注册了大量实体或某个回调执行了耗时操作，heartbeat 方法会被长时间阻塞，正常活跃的实体无法及时上报心跳，可能因为心跳超时被误判为失活。锁粒度过粗，需要将状态判定与回调通知分离。
+3. test_heartbeat_at_exact_expiry_boundary 测试的断言写为 assert "e1" in expired or len(expired) == 0，同时接受两种互斥的结果。这个边界测试对 check_expired 的具体行为没有约束力，无论代码对边界时刻的处理是否正确测试都会通过。
+4. test_callback_exception_is_suppressed 只测试了单个实体回调抛异常的场景，没有验证当多个实体同时触发失活回调且第一个回调抛异常时，后续实体的失活判定和回调是否仍然正常执行。
+5. 修复后需要补充相关测试，覆盖回调修改内部状态的安全性、多实体异常回调的交叉场景。
+6. 更新 README.md，说明修复后的回调执行安全性保证和锁策略。
+7. 重新运行 poetry run pytest tests/watchdog/ -q，需要让所有测试通过。

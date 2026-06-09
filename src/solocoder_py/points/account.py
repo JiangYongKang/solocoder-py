@@ -109,6 +109,12 @@ class PointsAccountManager:
         with lock:
             return self._calc_frozen_points(account_id)
 
+    def _calc_remaining_points(self, account_id: str) -> int:
+        total = 0
+        for batch in self._batches[account_id]:
+            total += batch.remaining_points
+        return total
+
     def _calc_available_points(self, account_id: str, now: Optional[datetime] = None) -> int:
         check_time = now if now is not None else datetime.now()
         total = 0
@@ -144,10 +150,17 @@ class PointsAccountManager:
         now: Optional[datetime] = None,
     ) -> Dict[str, int]:
         check_time = now if now is not None else datetime.now()
+        total_remaining = self._calc_remaining_points(account_id)
         available = self._calc_available_points(account_id, check_time)
-        if available < amount:
+
+        if total_remaining < amount:
             raise InsufficientPointsError(
-                f"Insufficient available points: available={available}, requested={amount}"
+                f"Insufficient points: total_remaining={total_remaining}, requested={amount}"
+            )
+        if available < amount:
+            raise PointsExpiredError(
+                f"Points expired: available={available}, requested={amount}, "
+                f"expired_points={total_remaining - available}"
             )
 
         sorted_batches = self._get_sorted_unexpired_batches(account_id, check_time)
@@ -177,10 +190,17 @@ class PointsAccountManager:
         now: Optional[datetime] = None,
     ) -> Dict[str, int]:
         check_time = now if now is not None else datetime.now()
+        total_remaining = self._calc_remaining_points(account_id)
         available = self._calc_available_points(account_id, check_time)
-        if available < amount:
+
+        if total_remaining < amount:
             raise InsufficientPointsError(
-                f"Insufficient available points: available={available}, requested={amount}"
+                f"Insufficient points: total_remaining={total_remaining}, requested={amount}"
+            )
+        if available < amount:
+            raise PointsExpiredError(
+                f"Points expired: available={available}, requested={amount}, "
+                f"expired_points={total_remaining - available}"
             )
 
         sorted_batches = self._get_sorted_unexpired_batches(account_id, check_time)
@@ -245,7 +265,11 @@ class PointsAccountManager:
             self._frozen_records[record.freeze_id] = record
             return record.copy()
 
-    def unfreeze_points(self, freeze_id: str) -> FrozenRecord:
+    def unfreeze_points(
+        self, freeze_id: str, now: Optional[datetime] = None
+    ) -> FrozenRecord:
+        check_time = now if now is not None else datetime.now()
+
         with self._global_lock:
             if freeze_id not in self._frozen_records:
                 raise FreezeNotFoundError(f"Freeze record {freeze_id} not found")
@@ -268,7 +292,11 @@ class PointsAccountManager:
                                 f"Batch {batch_id} has insufficient frozen points"
                             )
                         batch.frozen_points -= amount
-                        batch.remaining_points += amount
+                        if batch.is_expired(check_time):
+                            log = make_expired_log(account_id, batch_id, amount)
+                            self._expired_logs[account_id].append(log)
+                        else:
+                            batch.remaining_points += amount
                         break
 
             record.mark_unfrozen()

@@ -20,6 +20,7 @@ from solocoder_py.points import (
     PointsAccountManager,
     PointsBatch,
     PointsError,
+    PointsExpiredError,
     make_batch,
 )
 from .conftest import make_manager
@@ -183,13 +184,14 @@ class TestConsumePointsFEFO:
         with pytest.raises(InsufficientPointsError):
             mgr.consume_points("user-1", 100)
 
-    def test_consume_expired_points_not_available(self):
+    def test_consume_expired_points_raises_points_expired_error(self):
         mgr = make_manager()
         mgr.create_account("user-1")
         now = datetime.now()
         mgr.add_points("user-1", 100, now - timedelta(days=1))
         assert mgr.get_available_points("user-1") == 0
-        with pytest.raises(InsufficientPointsError):
+        assert mgr.get_total_points("user-1") == 100
+        with pytest.raises(PointsExpiredError):
             mgr.consume_points("user-1", 10)
 
     def test_consume_mixed_expired_and_valid(self):
@@ -224,9 +226,9 @@ class TestConsumePointsFEFO:
 
         deductions = mgr.consume_points("user-1", 50, now=t0 + timedelta(seconds=5))
         assert sum(deductions.values()) == 50
-        assert mgr.get_available_points("user-1") == 50
+        assert mgr.get_available_points("user-1", now=t0 + timedelta(seconds=5)) == 50
 
-        with pytest.raises(InsufficientPointsError):
+        with pytest.raises(PointsExpiredError):
             mgr.consume_points("user-1", 50, now=expiry + timedelta(seconds=1))
 
 
@@ -452,6 +454,30 @@ class TestModels:
         assert record.is_consumed is True
         assert record.is_frozen is False
 
+    def test_frozen_record_mark_consumed_wrong_state_raises_freeze_state_error(self):
+        now = datetime.now()
+        record = FrozenRecord(
+            freeze_id="f-1",
+            account_id="acc-1",
+            total_amount=100,
+            status=FreezeStatus.CONSUMED,
+            created_at=now,
+        )
+        with pytest.raises(FreezeStateError):
+            record.mark_consumed()
+
+    def test_frozen_record_mark_unfrozen_wrong_state_raises_freeze_state_error(self):
+        now = datetime.now()
+        record = FrozenRecord(
+            freeze_id="f-1",
+            account_id="acc-1",
+            total_amount=100,
+            status=FreezeStatus.UNFROZEN,
+            created_at=now,
+        )
+        with pytest.raises(FreezeStateError):
+            record.mark_unfrozen()
+
     def test_frozen_record_copy_is_independent(self):
         now = datetime.now()
         record = FrozenRecord(
@@ -488,11 +514,14 @@ class TestExceptionHierarchy:
         assert issubclass(InvalidAmountError, PointsError)
         assert issubclass(FreezeNotFoundError, PointsError)
         assert issubclass(FreezeStateError, PointsError)
+        assert issubclass(PointsExpiredError, PointsError)
 
     def test_all_account_errors_inherit_from_account_error(self):
         assert issubclass(AccountNotFoundError, AccountError)
         assert issubclass(AccountExistsError, AccountError)
         assert issubclass(InsufficientPointsError, AccountError)
+        assert issubclass(PointsExpiredError, AccountError)
+        assert issubclass(FreezeStateError, AccountError)
 
 
 class TestEdgeCases:
@@ -509,7 +538,7 @@ class TestEdgeCases:
         assert mgr.get_available_points("user-1", now=t_before) == 70
 
         t_after = t0 + timedelta(seconds=200)
-        with pytest.raises(InsufficientPointsError):
+        with pytest.raises(PointsExpiredError):
             mgr.consume_points("user-1", 70, now=t_after)
 
         assert mgr.get_available_points("user-1", now=t_after) == 0
@@ -553,12 +582,13 @@ class TestEdgeCases:
         assert by_id[b2.batch_id].remaining_points == 100
         assert by_id[b2.batch_id].frozen_points == 0
 
-    def test_freeze_expired_points_not_available(self):
+    def test_freeze_expired_points_raises_points_expired_error(self):
         mgr = make_manager()
         mgr.create_account("user-1")
         now = datetime.now()
         mgr.add_points("user-1", 100, now - timedelta(days=1))
-        with pytest.raises(InsufficientPointsError):
+        assert mgr.get_total_points("user-1") == 100
+        with pytest.raises(PointsExpiredError):
             mgr.freeze_points("user-1", 10)
 
     def test_get_batches_returns_copies(self):
@@ -651,3 +681,171 @@ class TestConcurrency:
         total = mgr.get_total_points("user-1")
         available = mgr.get_available_points("user-1")
         assert available <= total
+
+
+class TestPointsExpiredErrorScenarios:
+    def test_consume_partial_expired_partial_valid_uses_valid_only(self):
+        mgr = make_manager()
+        mgr.create_account("user-1")
+        now = datetime.now()
+        mgr.add_points("user-1", 100, now - timedelta(days=1))
+        mgr.add_points("user-1", 50, now + timedelta(days=10))
+
+        assert mgr.get_total_points("user-1") == 150
+        assert mgr.get_available_points("user-1") == 50
+
+        with pytest.raises(PointsExpiredError):
+            mgr.consume_points("user-1", 80)
+
+        deductions = mgr.consume_points("user-1", 50)
+        assert sum(deductions.values()) == 50
+        assert mgr.get_available_points("user-1") == 0
+
+    def test_freeze_partial_expired_partial_valid(self):
+        mgr = make_manager()
+        mgr.create_account("user-1")
+        now = datetime.now()
+        mgr.add_points("user-1", 100, now - timedelta(days=1))
+        mgr.add_points("user-1", 50, now + timedelta(days=10))
+
+        assert mgr.get_total_points("user-1") == 150
+        assert mgr.get_available_points("user-1") == 50
+
+        with pytest.raises(PointsExpiredError):
+            mgr.freeze_points("user-1", 80)
+
+        record = mgr.freeze_points("user-1", 30)
+        assert record.total_amount == 30
+        assert mgr.get_frozen_points("user-1") == 30
+        assert mgr.get_available_points("user-1") == 20
+
+    def test_consume_all_expired_raises_expired_not_insufficient(self):
+        mgr = make_manager()
+        mgr.create_account("user-1")
+        now = datetime.now()
+        mgr.add_points("user-1", 100, now - timedelta(days=1))
+        mgr.add_points("user-1", 200, now - timedelta(days=2))
+
+        assert mgr.get_total_points("user-1") == 300
+        assert mgr.get_available_points("user-1") == 0
+
+        with pytest.raises(PointsExpiredError):
+            mgr.consume_points("user-1", 100)
+
+        with pytest.raises(InsufficientPointsError):
+            mgr.consume_points("user-1", 400)
+
+    def test_points_expired_error_is_distinct_from_insufficient(self):
+        mgr = make_manager()
+        mgr.create_account("user-1")
+        now = datetime.now()
+        mgr.add_points("user-1", 100, now + timedelta(days=10))
+
+        with pytest.raises(InsufficientPointsError):
+            mgr.consume_points("user-1", 200)
+
+        mgr2 = make_manager()
+        mgr2.create_account("user-2")
+        mgr2.add_points("user-2", 500, now - timedelta(days=1))
+        with pytest.raises(PointsExpiredError):
+            mgr2.consume_points("user-2", 200)
+
+
+class TestUnfreezeWithExpiredBatches:
+    def test_unfreeze_after_batch_expired_recycles_points(self):
+        mgr = make_manager()
+        mgr.create_account("user-1")
+        t0 = datetime.now()
+        batch = mgr.add_points("user-1", 100, t0 + timedelta(days=10))
+
+        record = mgr.freeze_points("user-1", 80, now=t0)
+        assert mgr.get_available_points("user-1", now=t0) == 20
+        assert mgr.get_frozen_points("user-1") == 80
+        assert mgr.get_total_points("user-1") == 100
+
+        t_after = t0 + timedelta(days=20)
+        unfrozen = mgr.unfreeze_points(record.freeze_id, now=t_after)
+        assert unfrozen.is_unfrozen is True
+
+        assert mgr.get_frozen_points("user-1") == 0
+        assert mgr.get_available_points("user-1", now=t_after) == 0
+        assert mgr.get_total_points("user-1") == 20
+
+        logs = mgr.get_expired_logs("user-1")
+        assert len(logs) == 1
+        assert logs[0].batch_id == batch.batch_id
+        assert logs[0].recycled_points == 80
+
+    def test_unfreeze_partial_expired_partial_valid(self):
+        mgr = make_manager()
+        mgr.create_account("user-1")
+        t0 = datetime.now()
+        b1 = mgr.add_points("user-1", 50, t0 + timedelta(days=5))
+        b2 = mgr.add_points("user-1", 100, t0 + timedelta(days=30))
+
+        record = mgr.freeze_points("user-1", 80, now=t0)
+        assert record.batch_deductions[b1.batch_id] == 50
+        assert record.batch_deductions[b2.batch_id] == 30
+        assert mgr.get_frozen_points("user-1") == 80
+        assert mgr.get_available_points("user-1", now=t0) == 70
+
+        t_mid = t0 + timedelta(days=15)
+        unfrozen = mgr.unfreeze_points(record.freeze_id, now=t_mid)
+        assert unfrozen.is_unfrozen is True
+
+        assert mgr.get_frozen_points("user-1") == 0
+        assert mgr.get_available_points("user-1", now=t_mid) == 100
+        assert mgr.get_total_points("user-1") == 100
+
+        batches = mgr.get_batches("user-1")
+        by_id = {b.batch_id: b for b in batches}
+        assert by_id[b1.batch_id].remaining_points == 0
+        assert by_id[b1.batch_id].frozen_points == 0
+        assert by_id[b1.batch_id].total_points == 50
+        assert by_id[b2.batch_id].remaining_points == 100
+        assert by_id[b2.batch_id].frozen_points == 0
+        assert by_id[b2.batch_id].total_points == 100
+
+        logs = mgr.get_expired_logs("user-1")
+        assert len(logs) == 1
+        assert logs[0].batch_id == b1.batch_id
+        assert logs[0].recycled_points == 50
+
+    def test_unfreeze_before_expiry_restores_normally(self):
+        mgr = make_manager()
+        mgr.create_account("user-1")
+        t0 = datetime.now()
+        mgr.add_points("user-1", 100, t0 + timedelta(days=30))
+
+        record = mgr.freeze_points("user-1", 60, now=t0)
+        assert mgr.get_available_points("user-1", now=t0) == 40
+        assert mgr.get_frozen_points("user-1") == 60
+
+        t_early = t0 + timedelta(days=5)
+        unfrozen = mgr.unfreeze_points(record.freeze_id, now=t_early)
+        assert unfrozen.is_unfrozen is True
+
+        assert mgr.get_available_points("user-1", now=t_early) == 100
+        assert mgr.get_frozen_points("user-1") == 0
+        assert mgr.get_total_points("user-1") == 100
+
+        logs = mgr.get_expired_logs("user-1")
+        assert len(logs) == 0
+
+    def test_unfreeze_expired_batch_then_consume_restricted(self):
+        mgr = make_manager()
+        mgr.create_account("user-1")
+        t0 = datetime.now()
+        mgr.add_points("user-1", 100, t0 + timedelta(days=5))
+
+        record = mgr.freeze_points("user-1", 80, now=t0)
+
+        t_after = t0 + timedelta(days=10)
+        mgr.unfreeze_points(record.freeze_id, now=t_after)
+
+        assert mgr.get_available_points("user-1", now=t_after) == 0
+        assert mgr.get_total_points("user-1") == 20
+
+        with pytest.raises(PointsExpiredError):
+            mgr.consume_points("user-1", 10, now=t_after)
+

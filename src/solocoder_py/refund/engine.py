@@ -17,6 +17,7 @@ from .exceptions import (
     ExcessRefundError,
     InvalidRefundAmountError,
     RefundStateError,
+    RefundOwnershipError,
     ChargebackAmountError,
 )
 
@@ -110,7 +111,7 @@ class RefundEngine:
         if refund_id is not None:
             refund = self._repo.get_refund(refund_id)
             if refund.payment_id != payment_id:
-                raise RefundStateError(
+                raise RefundOwnershipError(
                     f"Refund {refund_id} does not belong to payment {payment_id}"
                 )
             if not refund.can_be_charged_back:
@@ -144,6 +145,22 @@ class RefundEngine:
                 reason=reason,
             )
             self._repo.save_chargeback(chargeback)
+
+            all_refunds = self._repo.find_refunds_by_payment_id(payment_id)
+            refunded_refunds = sorted(
+                [r for r in all_refunds if r.state == RefundState.REFUNDED],
+                key=lambda r: r.created_at,
+            )
+            remaining = amount
+            for refund in refunded_refunds:
+                if remaining <= 0:
+                    break
+                if refund.amount <= remaining:
+                    refund.apply_chargeback(chargeback.id)
+                    remaining -= refund.amount
+                else:
+                    refund.apply_chargeback(chargeback.id)
+                    remaining = Decimal("0")
 
         payment.chargeback_ids.append(chargeback.id)
         return chargeback

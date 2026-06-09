@@ -125,11 +125,14 @@ class HeartbeatWatchdog:
             return entity_id in self._entities
 
     def check_expired(self) -> List[str]:
+        pending_callbacks: List[Callable[[], None]] = []
+        newly_inactive: List[str] = []
+
         with self._lock:
             now = self._clock.now()
-            newly_inactive: List[str] = []
+            entity_snapshots = list(self._entities.values())
 
-            for entity in self._entities.values():
+            for entity in entity_snapshots:
                 if entity.status != EntityStatus.ACTIVE:
                     continue
 
@@ -139,14 +142,21 @@ class HeartbeatWatchdog:
                         entity.transition_to_inactive(now)
                         newly_inactive.append(entity.entity_id)
                         if entity.on_inactive is not None:
-                            try:
-                                entity.on_inactive(entity.entity_id)
-                            except Exception:
-                                pass
+                            callback = entity.on_inactive
+                            entity_id = entity.entity_id
+                            pending_callbacks.append(
+                                lambda cb=callback, eid=entity_id: cb(eid)
+                            )
 
-            return newly_inactive
+        for cb in pending_callbacks:
+            try:
+                cb()
+            except Exception:
+                pass
+
+        return newly_inactive
 
     def check_all(self) -> Dict[str, EntityStatus]:
+        self.check_expired()
         with self._lock:
-            self.check_expired()
             return {eid: ent.status for eid, ent in self._entities.items()}

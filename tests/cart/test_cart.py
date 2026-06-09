@@ -5,6 +5,7 @@ import pytest
 from solocoder_py.cart import (
     CartEngine,
     CartError,
+    CartItemNotFoundError,
     CartNotFoundError,
     InsufficientStockError,
     InvalidQuantityError,
@@ -12,6 +13,7 @@ from solocoder_py.cart import (
     ProductNotFoundError,
     ProductOfflineError,
 )
+from datetime import datetime, timedelta
 
 from .conftest import build_engine_with_products
 
@@ -218,11 +220,11 @@ class TestAnonymousCartOperations:
         updated = engine.update_anonymous_cart_quantity(cart.id, p1, 100)
         assert updated.get_item(p1).quantity == 10
 
-    def test_update_quantity_nonexistent_item_no_op(self):
+    def test_update_quantity_nonexistent_item_raises(self):
         engine, p1, _, _ = build_engine_with_products()
         cart = engine.create_anonymous_cart()
-        updated = engine.update_anonymous_cart_quantity(cart.id, p1, 5)
-        assert updated.get_item(p1) is None
+        with pytest.raises(CartItemNotFoundError):
+            engine.update_anonymous_cart_quantity(cart.id, p1, 5)
 
     def test_clear_anonymous_cart(self):
         engine, p1, p2, _ = build_engine_with_products()
@@ -300,7 +302,9 @@ class TestCartMergeNormalFlow:
         assert result.cart.get_item(p1).quantity == 2
         assert result.cart.get_item(p2).quantity == 3
         assert len(result.trims) == 0
+        assert len(result.removed_unregistered_products) == 0
         assert len(result.removed_offline_products) == 0
+        assert len(result.removed_out_of_stock_products) == 0
 
     def test_merge_with_same_products_quantity_accumulates(self):
         engine, p1, _, _ = build_engine_with_products()
@@ -420,7 +424,9 @@ class TestCartMergeBoundaryConditions:
 
         assert result.cart.get_item(p1).quantity == 3
         assert len(result.trims) == 0
+        assert len(result.removed_unregistered_products) == 0
         assert len(result.removed_offline_products) == 0
+        assert len(result.removed_out_of_stock_products) == 0
 
     def test_merge_into_empty_user_cart(self):
         engine, p1, _, _ = build_engine_with_products()
@@ -440,7 +446,9 @@ class TestCartMergeBoundaryConditions:
 
         assert result.cart.unique_products == 0
         assert len(result.trims) == 0
+        assert len(result.removed_unregistered_products) == 0
         assert len(result.removed_offline_products) == 0
+        assert len(result.removed_out_of_stock_products) == 0
 
     def test_merge_stock_exactly_zero_removes_product(self):
         engine, p1, _, _ = build_engine_with_products()
@@ -451,7 +459,9 @@ class TestCartMergeBoundaryConditions:
         result = engine.merge_anonymous_to_user_cart(anon_cart.id, "user-001")
 
         assert result.cart.get_item(p1) is None
-        assert p1 in result.removed_offline_products
+        assert p1 not in result.removed_unregistered_products
+        assert p1 not in result.removed_offline_products
+        assert p1 in result.removed_out_of_stock_products
 
 
 class TestCartMergeOfflineProducts:
@@ -466,7 +476,9 @@ class TestCartMergeOfflineProducts:
 
         assert result.cart.get_item(p1) is None
         assert result.cart.get_item(p2).quantity == 3
+        assert p1 not in result.removed_unregistered_products
         assert p1 in result.removed_offline_products
+        assert p1 not in result.removed_out_of_stock_products
 
     def test_merge_with_unregistered_product_removes_it(self):
         engine, p1, _, _ = build_engine_with_products()
@@ -479,7 +491,9 @@ class TestCartMergeOfflineProducts:
         result = engine.merge_anonymous_to_user_cart(anon_cart.id, "user-001")
 
         assert result.cart.get_item(p1).quantity == 2
-        assert "sku-999" in result.removed_offline_products
+        assert "sku-999" in result.removed_unregistered_products
+        assert "sku-999" not in result.removed_offline_products
+        assert "sku-999" not in result.removed_out_of_stock_products
 
     def test_merge_mixed_offline_online_products(self):
         engine, p1, p2, p3 = build_engine_with_products()
@@ -494,8 +508,34 @@ class TestCartMergeOfflineProducts:
         assert result.cart.get_item(p1).quantity == 2
         assert result.cart.get_item(p2) is None
         assert result.cart.get_item(p3).quantity == 1
+        assert len(result.removed_unregistered_products) == 0
         assert p2 in result.removed_offline_products
         assert len(result.removed_offline_products) == 1
+        assert len(result.removed_out_of_stock_products) == 0
+
+    def test_merge_distinguishes_all_three_removal_reasons(self):
+        engine, p1, p2, p3 = build_engine_with_products()
+        anon_cart = engine.create_anonymous_cart()
+        anon_cart.add_item(p1, 2)
+        anon_cart.add_item(p2, 3)
+        anon_cart.add_item(p3, 1)
+        anon_cart.items["sku-unreg"] = type("Item", (), {"product_id": "sku-unreg", "quantity": 1})()
+        anon_cart.items["sku-unreg"].product_id = "sku-unreg"
+        anon_cart.items["sku-unreg"].quantity = 1
+        engine.set_product_online(p1, False)
+        engine.update_product_stock(p3, 0)
+
+        result = engine.merge_anonymous_to_user_cart(anon_cart.id, "user-001")
+
+        assert "sku-unreg" in result.removed_unregistered_products
+        assert len(result.removed_unregistered_products) == 1
+        assert p1 in result.removed_offline_products
+        assert len(result.removed_offline_products) == 1
+        assert p3 in result.removed_out_of_stock_products
+        assert len(result.removed_out_of_stock_products) == 1
+        assert result.cart.get_item(p2).quantity == 3
+        assert result.cart.get_item(p1) is None
+        assert result.cart.get_item(p3) is None
 
 
 class TestCartDataModelValidation:
@@ -530,6 +570,12 @@ class TestCartDataModelValidation:
         with pytest.raises(InvalidQuantityError):
             cart.update_quantity("p1", 0)
 
+    def test_cart_update_quantity_nonexistent_raises(self):
+        from solocoder_py.cart import Cart
+        cart = Cart(id="cart-1", user_id=None)
+        with pytest.raises(CartItemNotFoundError):
+            cart.update_quantity("p-not-exist", 5)
+
     def test_cart_properties(self):
         from solocoder_py.cart import Cart
         cart = Cart(id="cart-1", user_id=None)
@@ -541,3 +587,77 @@ class TestCartDataModelValidation:
 
         user_cart = Cart(id="cart-2", user_id="user-1")
         assert user_cart.is_anonymous is False
+
+
+class TestMergeTimestampUpdate:
+    def test_merge_updates_user_cart_timestamp(self):
+        import time
+        engine, p1, _, _ = build_engine_with_products()
+        anon_cart = engine.create_anonymous_cart()
+        engine.add_to_anonymous_cart(anon_cart.id, p1, 2)
+
+        engine.create_user_cart("user-001")
+        user_cart = engine.get_user_cart("user-001")
+        original_updated_at = user_cart.updated_at
+        time.sleep(0.01)
+
+        result = engine.merge_anonymous_to_user_cart(anon_cart.id, "user-001")
+
+        assert result.cart.updated_at > original_updated_at
+
+    def test_merge_empty_anonymous_cart_updates_timestamp(self):
+        import time
+        engine = CartEngine()
+        anon_cart = engine.create_anonymous_cart()
+
+        engine.create_user_cart("user-001")
+        user_cart = engine.get_user_cart("user-001")
+        original_updated_at = user_cart.updated_at
+        time.sleep(0.01)
+
+        result = engine.merge_anonymous_to_user_cart(anon_cart.id, "user-001")
+
+        assert result.cart.updated_at > original_updated_at
+
+    def test_merge_with_existing_items_updates_timestamp(self):
+        import time
+        engine, p1, p2, _ = build_engine_with_products()
+        anon_cart = engine.create_anonymous_cart()
+        engine.add_to_anonymous_cart(anon_cart.id, p1, 2)
+
+        engine.create_user_cart("user-001")
+        engine.add_to_user_cart("user-001", p2, 3)
+        user_cart = engine.get_user_cart("user-001")
+        original_updated_at = user_cart.updated_at
+        time.sleep(0.01)
+
+        result = engine.merge_anonymous_to_user_cart(anon_cart.id, "user-001")
+
+        assert result.cart.updated_at > original_updated_at
+
+
+class TestUpdateQuantityNotFound:
+    def test_update_user_cart_quantity_nonexistent_raises(self):
+        engine, p1, _, _ = build_engine_with_products()
+        engine.create_user_cart("user-001")
+        with pytest.raises(CartItemNotFoundError):
+            engine.update_user_cart_quantity("user-001", p1, 5)
+
+    def test_update_user_cart_quantity_after_remove_raises(self):
+        engine, p1, _, _ = build_engine_with_products()
+        engine.create_user_cart("user-001")
+        engine.add_to_user_cart("user-001", p1, 2)
+        engine.remove_from_user_cart("user-001", p1)
+        with pytest.raises(CartItemNotFoundError):
+            engine.update_user_cart_quantity("user-001", p1, 3)
+
+
+class TestCartItemNotFoundErrorExists:
+    def test_cart_item_not_found_error_inherits_from_cart_error(self):
+        assert issubclass(CartItemNotFoundError, CartError)
+
+    def test_cart_item_not_found_error_message(self):
+        from solocoder_py.cart import Cart
+        cart = Cart(id="cart-1", user_id=None)
+        with pytest.raises(CartItemNotFoundError, match="not found in cart"):
+            cart.update_quantity("missing-product", 1)

@@ -1,0 +1,7 @@
+你之前实现的积分账户域模块存在一些问题，需要修复：
+1. exceptions.py 中定义了 PointsExpiredError 异常并在 __init__.py 中导出，但整个 account.py 和 models.py 中没有任何一行代码会抛出这个异常。提示词要求覆盖"消耗已过期积分"的异常分支，当前实现在遇到已过期批次时直接过滤掉并用 InsufficientPointsError 代替，调用方无法区分是余额不足还是积分已过期。
+2. models.py 中 FrozenRecord 的 mark_consumed() 和 mark_unfrozen() 方法在校验冻结记录状态时抛出了 InvalidAmountError（含义是"积分数额非法"），但 exceptions.py 中已经定义了语义匹配的 FreezeStateError，且 account.py 的同类型校验用的是 FreezeStateError。同一个语义场景在模型层和业务层抛出不同的异常类型，对调用方是不一致的。
+3. unfreeze_points 方法在执行解冻操作时不检查底层批次是否已过期。如果一笔积分在冻结时批次尚未过期，但在冻结期间批次过期了，解冻操作会把积分加回到已过期批次的 remaining_points 上，导致 get_total_points() 虚高，与 get_available_points() 产生不一致。
+4. 修复后需要补充相关的单元测试，覆盖 PointsExpiredError 抛出路径、冻结期间批次过期的场景。
+5. 更新 README.md，确认文档中描述的异常行为与实际代码行为一致。
+6. 重新运行 poetry run pytest tests/points/ -q，需要让所有测试通过。

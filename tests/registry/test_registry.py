@@ -165,17 +165,18 @@ class TestServiceQuery:
         assert "inst-1" in instance_ids
         assert "inst-2" not in instance_ids
 
-    def test_get_all_instances_returns_all_including_expired(self, registry: ServiceRegistry, clock: ManualClock):
+    def test_get_all_instances_auto_evicts_expired(self, registry: ServiceRegistry, clock: ManualClock):
         registry.register(make_instance("inst-1", "svc-1"))
         registry.register(make_instance("inst-2", "svc-1"))
 
+        assert registry.instance_count("svc-1") == 2
+
         clock.advance(100.0)
 
-        all_instances = registry.get_all_instances("svc-1")
-        assert len(all_instances) == 2
+        with pytest.raises(ServiceNotFoundError):
+            registry.get_all_instances("svc-1")
 
-        available = registry.get_instances("svc-1")
-        assert len(available) == 0
+        assert registry.service_count() == 0
 
     def test_get_instances_nonexistent_service_raises(self, registry: ServiceRegistry):
         with pytest.raises(ServiceNotFoundError):

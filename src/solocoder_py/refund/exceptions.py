@@ -38,6 +38,10 @@ class RefundStateError(RefundError):
     pass
 
 
+class RefundOwnershipError(RefundError):
+    pass
+
+
 class RefundNotFoundError(RefundError):
     pass
 
