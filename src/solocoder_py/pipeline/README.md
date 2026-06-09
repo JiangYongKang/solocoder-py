@@ -1,0 +1,265 @@
+# Pipeline 流水线分阶段执行器模块
+
+基于内存数据结构实现的多阶段流水线执行器，支持阶段间背压控制、单阶段数据项重试、整体超时取消等企业级特性，适用于数据处理管道、ETL 工作流等场景。
+
+## 模块功能
+
+1. **分阶段流水线执行**：流水线由多个阶段按顺序组成，每个阶段接收前一阶段的输出作为输入，依次处理数据。
+2. **阶段间背压控制**：当后一阶段处理速度慢于前一阶段时，前一阶段通过有界队列阻塞等待，防止数据在阶段间无限堆积。
+3. **单阶段重试机制**：单个数据项在某阶段处理失败时，可按配置的最大重试次数自动重试，不影响同阶段其他数据项的处理。
+4. **整体超时取消**：为整个流水线设置总体超时时间，超时后立即取消执行，已处理结果保留，未处理数据项标记为取消。
+
+## 核心类职责
+
+### `PipelineExecutor`（流水线执行器）
+
+核心执行引擎，负责编排多阶段流水线的执行流程。
+
+**构造参数**：
+- `stages: List[StageConfig]`：流水线阶段配置列表，按顺序执行
+- `timeout: Optional[float] = None`：整个流水线的超时时间（秒），`None` 表示不超时
+
+**核心方法**：
+- `execute(input_data: Iterable[Any]) -> PipelineResult`：执行流水线，接收输入数据迭代器，返回最终执行结果
+- `cancel() -> None`：主动取消正在运行的流水线
+- `status: PipelineStatus`（属性）：获取流水线当前状态
+- `is_cancelled: bool`（属性）：流水线是否已被取消
+
+### `StageConfig`（阶段配置）
+
+定义单个流水线阶段的处理行为。
+
+**字段**：
+- `name: str`：阶段名称（唯一）
+- `handler: StageHandler`：阶段处理函数，签名为 `Callable[[Any], Any]`
+- `max_retries: int = 0`：单个数据项的最大重试次数（0 表示不重试）
+- `retry_delay: float = 0.0`：重试之间的等待时间（秒）
+- `queue_capacity: int = 100`：该阶段输入队列容量（用于背压控制）
+
+### `PipelineItem`（流水线数据项）
+
+封装流经流水线的单个数据项及其处理状态。
+
+**字段**：
+- `item_id: str`：数据项唯一标识
+- `data: Any`：原始输入数据
+- `status: ItemStatus`：当前处理状态
+- `error: Optional[Exception]`：最终失败时的错误信息
+- `attempts: int`：已尝试次数
+- `stage_results: Dict[str, Any]`：各阶段的处理结果，key 为阶段名
+
+**状态流转方法**：
+- `mark_processing()`：标记为处理中
+- `mark_success(stage_name, result)`：标记为当前阶段成功
+- `mark_retrying()`：标记为重试中，尝试次数 +1
+- `mark_failed(stage_name, error)`：标记为失败
+- `mark_cancelled()`：标记为已取消
+
+### `PipelineResult`（流水线执行结果）
+
+封装整个流水线的执行结果。
+
+**字段**：
+- `status: PipelineStatus`：流水线最终状态
+- `items: List[PipelineItem]`：所有数据项（含成功、失败、取消）
+- `stage_results: List[StageResult]`：各阶段执行统计
+- `total_duration: float`：总执行时间（秒）
+- `error: Optional[Exception]`：流水线级别的错误（如超时）
+
+**便捷属性**：
+- `success_count / failed_count / cancelled_count`：各类数据项数量
+- `success_items / failed_items / cancelled_items`：各类数据项列表
+
+### `StageResult`（阶段执行结果）
+
+单个阶段的执行统计。
+
+**字段**：
+- `stage_name: str`：阶段名称
+- `status: StageStatus`：阶段状态
+- `processed_count: int`：已处理项数
+- `success_count / failed_count / cancelled_count`：成功/失败/取消项数
+- `duration: float`：阶段执行时长（秒）
+
+### 状态枚举
+
+**`ItemStatus`**（数据项状态）：
+- `PENDING`：待处理
+- `PROCESSING`：处理中
+- `SUCCESS`：成功
+- `FAILED`：失败
+- `RETRYING`：重试中
+- `CANCELLED`：已取消
+
+**`PipelineStatus`**（流水线状态）：
+- `CREATED`：已创建
+- `RUNNING`：运行中
+- `COMPLETED`：正常完成
+- `FAILED`：执行失败
+- `TIMED_OUT`：超时
+- `CANCELLED`：已取消
+
+**`StageStatus`**（阶段状态）：
+- `PENDING`：待执行
+- `RUNNING`：执行中
+- `COMPLETED`：已完成
+
+### 异常类
+
+- `PipelineError`：基类异常
+- `PipelineTimeoutError`：流水线超时异常，包含 `timeout` 属性
+- `PipelineCancelledError`：流水线被取消
+- `StageError`：阶段异常基类，包含 `stage_name` 属性
+- `ItemRetryExhaustedError`：单数据项重试耗尽，包含 `stage_name`、`item_id`、`attempts`、`last_error` 属性
+- `InvalidPipelineConfigError`：流水线配置无效
+
+## 背压机制描述
+
+### 工作原理
+
+每个阶段都配备一个有界队列（`BoundedQueue`），使用 **BLOCK（阻塞）** 策略作为背压控制：
+
+1. **生产者（前一阶段）**：将处理完成的数据项放入当前阶段的输入队列。
+2. **队列满时**：如果队列已满，生产者线程会阻塞等待，直到队列有空位或超时。
+3. **消费者（当前阶段）**：从队列中取出数据项进行处理，处理完成后通知队列有空位。
+4. **超时联动**：如果设置了流水线整体超时，阻塞等待也会受超时限制，避免无限等待。
+
+### 关键参数
+
+- `StageConfig.queue_capacity`：每个阶段的输入队列容量，默认 100。根据处理速度差异合理设置：
+  - 当前阶段处理较慢时，适当增大队列可缓冲突发流量
+  - 希望严格控制内存时，设置较小的队列容量
+
+### 效果
+
+- 防止内存溢出：数据不会在阶段间无限堆积
+- 自动限速：快的生产阶段会被慢的消费阶段自然限速
+- 数据完整性：阻塞策略保证不丢数据（除非整体超时）
+
+## 使用示例
+
+### 基础示例：三阶段数据处理
+
+```python
+from solocoder_py.pipeline import (
+    PipelineExecutor,
+    StageConfig,
+    PipelineStatus,
+    ItemStatus,
+)
+
+def stage_extract(data: int) -> int:
+    return data * 2
+
+def stage_transform(data: int) -> str:
+    return f"value_{data}"
+
+def stage_load(data: str) -> dict:
+    return {"result": data, "length": len(data)}
+
+pipeline = PipelineExecutor(
+    stages=[
+        StageConfig(name="extract", handler=stage_extract),
+        StageConfig(name="transform", handler=stage_transform),
+        StageConfig(name="load", handler=stage_load),
+    ],
+)
+
+result = pipeline.execute([1, 2, 3, 4, 5])
+
+assert result.status == PipelineStatus.COMPLETED
+assert result.success_count == 5
+
+for item in result.success_items:
+    print(f"Item {item.item_id}: {item.stage_results['load']}")
+```
+
+### 带重试和超时的示例
+
+```python
+import random
+from solocoder_py.pipeline import PipelineExecutor, StageConfig
+
+call_count = {"fail_then_succeed": 0}
+
+def flaky_handler(data: int) -> int:
+    call_count["fail_then_succeed"] += 1
+    if call_count["fail_then_succeed"] % 3 != 0:
+        raise ValueError("temporary failure")
+    return data * 10
+
+pipeline = PipelineExecutor(
+    stages=[
+        StageConfig(
+            name="flaky_stage",
+            handler=flaky_handler,
+            max_retries=3,
+            retry_delay=0.01,
+            queue_capacity=10,
+        ),
+    ],
+    timeout=5.0,
+)
+
+result = pipeline.execute([1, 2, 3, 4, 5])
+
+print(f"Success: {result.success_count}, Failed: {result.failed_count}")
+for item in result.failed_items:
+    print(f"Failed item {item.item_id}: {item.error}")
+```
+
+### 背压效果演示
+
+```python
+import threading
+import time
+from solocoder_py.pipeline import PipelineExecutor, StageConfig
+
+def fast_producer(data: int) -> int:
+    return data
+
+def slow_consumer(data: int) -> int:
+    time.sleep(0.1)
+    return data * 2
+
+pipeline = PipelineExecutor(
+    stages=[
+        StageConfig(name="fast", handler=fast_producer, queue_capacity=5),
+        StageConfig(name="slow", handler=slow_consumer, queue_capacity=5),
+    ],
+)
+
+start = time.monotonic()
+result = pipeline.execute(range(20))
+elapsed = time.monotonic() - start
+
+print(f"Processed {result.success_count} items in {elapsed:.2f}s")
+print(f"Expected ~2s (20 items * 0.1s), 背压使生产速度匹配消费速度")
+```
+
+### 主动取消流水线
+
+```python
+import threading
+import time
+from solocoder_py.pipeline import PipelineExecutor, StageConfig
+
+def slow_handler(data: int) -> int:
+    time.sleep(0.5)
+    return data * 2
+
+pipeline = PipelineExecutor(
+    stages=[
+        StageConfig(name="slow", handler=slow_handler, queue_capacity=2),
+    ],
+)
+
+cancel_thread = threading.Timer(0.3, pipeline.cancel)
+cancel_thread.start()
+
+result = pipeline.execute(range(10))
+cancel_thread.join()
+
+print(f"Status: {result.status}")
+print(f"Success: {result.success_count}, Cancelled: {result.cancelled_count}")
+```
