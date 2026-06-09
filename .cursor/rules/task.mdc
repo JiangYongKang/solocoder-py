@@ -46,7 +46,7 @@ alwaysApply: true
 ```
 
 标注规范
-每个会话的标注放在 tasks/taskXXX/assessment-N.txt 中（N 为会话序号）。文件为纯文本格式，不使用任何 Markdown 符号。
+每个会话的标注放在 tasks/taskXXX/assessment-N.txt 中（N 为会话序号）。文件为纯文本格式，不使用任何 Markdown 符号。每一条标注内容不可以超过 150 字。
 
 段落结构：
 - 产物不满意：列出代码实现中的具体缺陷。
