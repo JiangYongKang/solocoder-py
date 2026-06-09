@@ -1,5 +1,4 @@
 产物不满意：
-1. 在 engine.py 的 add_to_anonymous_cart 和 add_to_user_cart 方法中，模型将商品在线状态检查和库存为零检查内联到了方法体内，而 _validate_and_clip_quantity 私有方法中已存在完全相同的校验逻辑（同样的 is_online 判断、同样的 ProductOfflineError 和 InsufficientStockError 抛出、同样的错误消息文本）。与此同时，update_anonymous_cart_quantity 和 update_user_cart_quantity 方法仍通过调用 _validate_and_clip_quantity 完成校验，导致 add 方法和 update 方法对同一类校验逻辑使用了两种不同的实现路径。如果未来需要修改校验规则（如增加新异常类型或调整错误消息），只修改 _validate_and_clip_quantity 不会同步到 add 方法，存在潜在的维护不一致风险。原因是模型在重写 add 方法时采用了全量内联策略，没有考虑复用已有的校验入口，解决方案是将 _validate_and_clip_quantity 调用保留在 add 方法中，仅将累加逻辑和裁剪逻辑改为通过 update_quantity 和 add_item 封装方法完成。
-
+1. engine.py add_to_anonymous_cart 和 add_to_user_cart 方法将商品在线检查和库存为零检查内联到方法体内，而 _validate_and_clip_quantity 已存在完全相同的校验逻辑，add 和 update 方法对同类校验用了两套实现路径。若未来修改校验规则只改 _validate_and_clip_quantity 不会同步到 add 方法。应在 add 方法中复用已有校验入口。
 过程不满意：
-1. 模型在会话第一步就创建了 TodoList，此时尚未读取任何源文件或测试文件。根据提示词编写规范，模型在刚收到任务时应先分析问题、阅读相关文件建立上下文，而不是直接创建 TodoList。这种前置规划不足导致模型后续出现返工——在第一次编辑 models.py 时新增了 set_item_quantity 方法，紧接着在第二步编辑中又将其删除，原因是该方法与已有的 update_quantity 功能重复。这说明模型在没有充分理解 Cart 类现有方法签名的情况下就动手编码，正确做法是先完整阅读 models.py 中 Cart 类的全部方法，确认哪些入口已存在，再决定需要新增什么。
+1. 会话第一步即创建 TodoList 尚未读取任何文件，未充分理解 Cart 类现有方法签名就开始编码。导致先新增 set_item_quantity 方法，紧接着又将其删除（与已有 update_quantity 功能重复）。应先完整阅读 Cart 类全部方法，确认已存在入口再决定新增什么。

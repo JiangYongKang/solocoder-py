@@ -1,7 +1,6 @@
 产物不满意：
-1. 在 engine.py 的 process_chargeback 方法中，当 refund_id=None 且拒付金额只部分覆盖某笔退款单时（第 158-163 行的 else 分支），模型调用了 refund.apply_chargeback(chargeback.id) 将该退款单整笔转变为已拒付状态。例如 300 元的退款单只有 200 元被拒付，但该退款单的状态被标记为已拒付，剩余 100 元的退款事实在退款单层面丢失。Refund 模型没有 charged_back_amount 字段来区分部分拒付和全额拒付，导致退款单状态与实际业务事实不一致。根本原因是模型在实现 FIFO 逐条状态更新时，没有考虑拒付金额小于退款单金额的"部分覆盖"场景下应该如何在退款单层面表达部分拒付，正确做法是在 Refund 模型上增加 charged_back_amount 字段追踪实际被拒付的金额，使 partially-covered 的退款单能在数据上与状态区分开来。测试 test_chargeback_without_refund_id_partial_first_refund_only 虽然通过了，但它验证的正是这个不一致的行为——300 元退款单只被拒付 200 元就被标记为已拒付。
-2. 在 engine.py 的 process_chargeback 方法 else 分支（第 149-163 行）中，FIFO 循环对退款单状态的批量更新放在 payment.rollback_refunded_amount(amount) 之后执行。如果 refund.apply_chargeback() 在中间某条退款单上抛出异常（例如状态机 transfer 校验失败），已退款金额已经被回退但部分退款单状态未被更新，会导致数据不一致。根本原因是模型没有将金额扣减和状态更新放在一个原子操作内考虑，也没有做事务性保护，正确做法是在 FIFO 循环前先批量校验所有退款单状态，或是在循环内部做回滚处理。
-
+1. engine.py process_chargeback 中 refund_id=None 且拒付只部分覆盖某笔退款单时，apply_chargeback 整笔标记为已拒付，Refund 无 charged_back_amount 字段区分部分拒付，退款单状态与实际业务事实不一致。需在 Refund 增加 charged_back_amount 字段追踪实际被拒付金额。
+2. engine.py process_chargeback 的 else 分支中，FIFO 状态批量更新放在 rollback_refunded_amount 之后，某条退款单状态更新失败时已退款金额已回退但状态未更新造成数据不一致。应先批量校验所有退款单状态再做原子化操作。
 过程不满意：
-1. 在读取测试文件的环节（第 199-201 行、209-211 行、229-231 行、249-251 行），模型连续四次调用了 view_files 读取 tests/refund/test_engine.py 的不同行范围，实际每次读取的内容区段高度重叠，获取到的上下文信息重复率极高。这浪费了推理时间，降低了任务执行效率。根本原因是模型没有在第一次完整读取后缓存理解，而是反复用分段方式读取同一文件的不同区域，正确做法是一次性完整读取测试文件，然后在脑袋里建立结构化的认知地图再定位修改点。
-2. 在任务启动阶段（第 3 行），模型在还没有阅读源码文件之前就创建了包含 7 个子项的 TodoList。虽然提示词已经明确指出两个问题的上下文，但模型没有先通过阅读 engine.py 和 exceptions.py 的实际代码来验证问题存在并理解上下文，就直接规划了修复步骤。根本原因是模型跳过了"先分析确认再规划"的推理前序，正确做法是先读源码定位问题代码的具体行，理解现有逻辑后再输出 TodoList。
+1. 连续四次 view_files 读取 test_engine.py 不同行范围但内容高度重叠，无意义重复读取浪费推理时间。应一次性完整读取测试文件建立结构化认知地图再定位修改点。
+2. 未阅读源码文件就创建 7 项 TodoList，跳过"先分析确认再规划"的前序。应先读源码定位问题代码行理解现有逻辑再输出 TodoList。

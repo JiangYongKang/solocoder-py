@@ -1,6 +1,6 @@
 产物不满意：
-1. 在 engine.py 的 process_chargeback 方法中，当传入 refund_id=None 时，模型只调用了 payment.rollback_refunded_amount 来回退已退款金额，但没有对任何退款单执行状态流转。提示词第3条明确要求"同时更新退款状态"，但该路径下已退款状态的退款单始终保持"已退款"，与"发生了拒付"的业务事实矛盾。原因是模型在处理无关联退款单的拒付时只考虑了金额层面的回退，忽略了退款单状态的语义一致性，解决方案是当 refund_id=None 时可遍历该支付下所有"已退款"状态的退款单将其批量更新为"已拒付"，或至少在代码注释和 README 中明确说明为何此路径不更新状态。
-2. 在 engine.py 的 process_chargeback 方法第113行，校验 refund.payment_id != payment_id 时抛出了 RefundStateError，异常信息为"Refund does not belong to payment"。这里校验的是退款单的归属关系而非退款单状态合法性，RefundStateError 的异常类型名可以误导调用方理解为"退款单状态出了问题"而实际问题是归属不匹配。原因是模型在添加归属校验时直接复用了已有的 RefundStateError 而没有定义一个语义更精确的异常类（如 PaymentError 子类），解决方案是为"退款单不属于该支付"这种场景抛出一个命名更明确的异常，如直接使用 ChargebackError 或新增一个归属异常子类。
+1. engine.py process_chargeback 中 refund_id=None 时只回退金额未更新退款单状态，提示词要求同步更新状态，但已退款退款单保持原状与拒付事实矛盾。原因是只关注金额回退忽略状态一致性，解决方法是遍历已退款退款单批量标记为已拒付，或在文档中说明原因。
+2. engine.py process_chargeback 第113行用 RefundStateError 抛出归属校验异常，异常名误导调用方理解为状态问题而实际是归属不匹配。原因是直接复用已有异常未定义语义精确的异常类，解决方案是使用 ChargebackError 或新增归属异常子类。
 过程不满意：
-1. 在首次编写 test_engine.py 测试文件时，模型写出的测试期望值是基于错误的 available_refund_amount 公式计算出来的——test_chargeback_partial_amount 中期望 900，test_chargeback_without_refund_id 中期望 1200，这两个数字恰好与错误公式（把 charged_back_amount 加回去）吻合。这说明模型在编写测试时是先按当前实现推算期望值，而不是从业务需求出发独立推导正确结果。这导致初始测试沦为对错误实现的验证，丧失了测试应有的"以需求为准绳校验实现"的核心价值。原因是模型没有先梳理"拒付发生->回退已退款金额->自动恢复可退余额"这条因果链再下笔，正确做法是根据业务规则手工推算每个场景下的正确数值，再与代码输出对比。
-2. 在首次编写 models.py 的 available_refund_amount 属性时，模型把 charged_back_amount 加入了公式，说明模型在编码前没有仔细分析"拒付发生后可退余额应如何重新计算"这一核心业务逻辑。模型直到运行 pytest 看到测试失败后才修正公式，暴露出"先写出连自己都没把握的代码，靠测试碰运气发现错误"的问题。根本原因是模型在规划阶段缺少对领域规则的静态推演——如果先问自己"拒付回退了 X 元已退款金额，charge_back_amount 只是一个统计计数器，可退余额应该是支付金额减当前已退款金额"，就不会写出带 charged_back_amount 的公式。正确做法是在编码前对每个核心属性的计算规则做一次书面推导。
+1. 编写 test_engine.py 时期望值基于错误公式推算而非业务需求推导，test_chargeback_partial_amount 期望 900 与错误公式吻合，测试沦为错误实现的验证失去以需求为准绳的价值。应先梳理因果链手工推算正确数值再对比代码输出。
+2. 首次编写 available_refund_amount 时把 charged_back_amount 加入公式，直到 pytest 失败才修正，暴露出"先写没把握的代码靠测试发现错误"的问题。应在编码前对核心属性的计算规则做书面推导再下笔。

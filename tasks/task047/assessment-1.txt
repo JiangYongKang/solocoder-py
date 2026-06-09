@@ -1,5 +1,5 @@
 产物不满意：
-1. 在 scheduler.py 的 _find_cycle_path 方法中，模型使用 DFS parent 指针重建环路路径，但 parent 指针反映的是 DFS 遍历树而非图的实际边。当环路检测点不在 DFS 根节点时，parent 回溯链会包含图中不存在的边，导致错误信息中的环路路径不准确。具体反例：A 依赖 B，B 依赖 C，调用 add_dependency("A", "C") 形成 A→C→B→A 环时，错误信息为 "C -> B -> A -> A"，最后一段 A -> A 在图中实际不存在（A 不依赖自己，A 依赖 C），正确路径应为 "A -> C -> B -> A"。这导致开发者根据错误信息排查环路时会被错误路径误导，无法快速定位形成环路的真正依赖边。根本原因是 _find_cycle_path 直接复用 DFS parent 关系来重建路径，但检测到环路时 parent[cycle_start] 被赋值为当前探测节点（parent[A]=C 当 C 发现 A 已为 GRAY），这个 parent 关系是环检测专用标记而非实际边，解决方案是在环检测时记录环入口边（探测节点到 cycle_start 的图边），再沿实际邻接表回溯构建路径。
-2. 在 test_dag_scheduler.py 的 test_simple_cycle_registration_raises 测试中，测试名称暗示 register_task 能检测环路并抛出异常，但实际测试体中 register_task("C", dependencies=["B", "A"]) 注册成功、无异常抛出，异常是由后面的 add_dependency("A", "C") 抛出的。这导致测试名称与行为不一致，阅读者会误以为 register_task 具备环检测能力，而实际上只有 add_dependency 才触发了环检测。根本原因是模型在编写测试时对"registration_raises"的命名不准确，没有反映实际环检测发生在 add_dependency 调用中这一事实，解决方案是将测试名称改为准确描述实际检测位置，如 test_add_dependency_creates_two_node_cycle。
+1. scheduler.py _find_cycle_path 使用 DFS parent 指针重建环路路径，parent 反映 DFS 遍历树而非图的实际边。A→C→B→A 环路时错误信息为"C -> B -> A -> A"，最后一段 A→A 图中不存在（A 依赖 C 非自依赖）。应记录环入口边再沿实际邻接表回溯构建路径。
+2. test_simple_cycle_registration_raises 测试名称暗示 register_task 能检测环路，但实际 register_task 注册成功无异常，环检测由 add_dependency 触发。名称与实际行为不一致，阅读者会误以为 register_task 具备环检测能力。应将测试名改为准确描述实际检测位置如 test_add_dependency_creates_cycle。
 过程不满意：
-1. 在思考过程第 6 步（创建 dag 模块目录的 shell 命令执行后），模型在输出中暴露了内部标记 think_never_used_51bce0c785ca2f68081bfa7d91973942，这是典型的使用了内部思考标签但未能正确清理输出导致的污染。该标记泄露到最终输出中既污染了 session-cot-1.md 的内容，也反映出模型在处理内部工具调用与外部输出边界时控制不严谨。根本原因是模型的思考标记与输出文本混在同一通道未做隔离，正确做法是内部工具调用标签应在输出前被过滤移除，不应出现在面向外部的回复文本中。
+1. 思考过程第6步 shell 命令执行后输出暴露了内部标记 think_never_used_51bce0c785ca2f68081bfa7d91973942，内部思考标签与输出文本混在同一通道未正确隔离。内部工具调用标签应在输出前被过滤移除，不应出现于面向外部的回复中。

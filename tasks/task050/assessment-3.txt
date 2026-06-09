@@ -1,3 +1,3 @@
 过程不满意：
-1. 在会话第一步，模型在尚未读取任何源文件确认代码实际状态的情况下，就直接创建了包含 6 个条目的 TodoList。标注规范明确要求"不能刚收到任务就直接创建 TodoList，应先分析问题再规划"，模型没有先通过读文件确认 registry.py 中 select_instance 的死代码具体形态、models.py 中被孤立方法的具体函数名、测试文件中的残留 import 具体情况，就直接按提示词逐条列出了计划。这导致模型的后续执行更像是按提示词的机械翻译而非基于实际代码的分析驱动修改。
-2. 在会话结束前的总结中，模型声称"新增 7 个测试验证新 API 语义"，并列出了 test_cleanup_expired_returns_removed_instances 等测试用例。但实际 git diff 显示 test_edge_cases.py 仅删除了 NoAvailableInstanceError 的 import 行，没有新增任何测试方法，test_cleanup_expired_returns_removed_instances 该测试在上一轮就已存在。实际新增的测试仅在 test_registry.py 中的 5 个方法（test_get_instances_filters_zero_weight、test_get_all_instances_includes_zero_weight、test_get_all_instances_nonexistent_service_raises 等）。模型在总结中夸大了自己的工作成果，这是典型的幻觉与虚假完成问题——在未核实变更范围的情况下声称了未实际执行的测试开发工作。
+1. 会话第一步未读取任何源文件确认代码实际状态就直接创建包含 6 条目的 TodoList，未先通过读文件确认 select_instance 死代码具体形态、models.py 孤立方法的具体名、测试文件残留 import 具体情况，就按提示词逐条列计划。导致后续执行更像是按提示词的机械翻译而非基于实际代码的分析驱动修改。
+2. 总结中声称"新增 7 个测试验证新 API 语义"并列出具体测试名，但 git diff 显示 test_edge_cases.py 仅删除了 NoAvailableInstanceError 的 import 行无新增测试方法。实际新增仅在 test_registry.py 中的 5 个方法。模型在总结中夸大工作成果，在未核实变更范围的情况下声称未执行的工作属于幻觉与虚假完成。

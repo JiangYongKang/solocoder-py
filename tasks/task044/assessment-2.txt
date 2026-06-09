@@ -1,9 +1,8 @@
 产物不满意：
-1. 在 test_seat_manager.py 的 TestSystemClock.test_system_clock_sleep_advances_time 方法中，模型新增了一个测试来验证 SystemClock.sleep() 是否真的推进时间，但断言写的是 `assert t2 >= t1` 而非 `t2 > t1`。这导致该测试并没有实际验证 sleep 的效果——即使 clock.sleep(0.05) 是一个空实现（什么都不做），断言也会通过。原因是模型在修复原始 flaky 测试时统一采用了 `>=` 策略，但没有区分"单调性测试"和"sleep 推进测试"的不同场景：单调性用 `>=` 是对的，但 sleep 测试在 50ms 的睡眠时间下使用 `>=` 完全无法检测 sleep 是否真的生效。解决方案是将 sleep 测试的断言改为 `assert t2 > t1`，0.05 秒远超系统时钟精度，不会引入 flaky。
-2. 在 manager.py 的 _cleanup_loop 方法中（第 63-64 行），模型使用了裸 `except Exception: pass` 来吞掉 _cleanup_expired_reservations() 调用中可能抛出的所有异常。如果 _cleanup_expired_reservations 内部因未来代码变更引入 bug（如修改了 Seat 模型导致 force_release 抛异常），后台清理线程会静默失败，所有过期预留将永远不会被主动释放，而运维人员得不到任何告警。这是典型的"静默失败"反模式——虽然初衷是想防止清理线程崩溃，但过度宽泛的异常捕获反而让问题被完全隐藏。解决方案是至少记录异常日志，或只捕获明确预期的特定异常类型。
-3. 在 test_seat_manager.py 的 TestActiveAutoRelease 类中，新增的 4 个测试方法（test_active_auto_release_with_system_clock、test_active_auto_release_without_external_calls、test_shutdown_stops_cleanup_thread、test_shutdown_idempotent）直接访问了 manager 的私有属性 `_lock`、`_seats`、`_cleanup_thread`、`_stop_cleanup`。测试通过内部实现细节来断言状态，而非通过公开 API（如 count_available、get_seat）验证行为。这使测试高度脆弱——未来任何内部重构（如将 _lock 改名、将 _seats 改为其他数据结构）都会导致测试失败，即便公开行为完全正确。根本原因是模型在编写测试时没有遵循"测试行为而非实现"的原则，解决方案是通过 manager 的公开方法（如 count_available、get_seat、list_available_seats）来间接验证清理线程的工作结果。
-
+1. test_system_clock_sleep_advances_time 断言写为 assert t2 >= t1 而非 t2 > t1，无法验证 sleep 是否真的推进时间，clock.sleep 空实现也能通过。应区分单调性测试（>=）和 sleep 推进测试（>），50ms 远超时钟精度不会引入 flaky。
+2. manager.py _cleanup_loop 中使用裸 except Exception: pass 吞掉所有异常，若 _cleanup_expired_reservations 内部因未来 bug 抛异常，后台清理静默失败导致所有过期预留永不释放。应至少记录异常日志或只捕获明确的特定异常类型。
+3. TestActiveAutoRelease 新增的4个测试直接访问 _lock、_seats 等私有属性通过实现细节断言，未来内部重构会导致测试失败。应通过公开 API（count_available、get_seat 等）间接验证行为而非实现。
 过程不满意：
-1. 模型在第 7 步（更新 todo 之后）使用 Write 工具完整重写了 manager.py 文件，而非针对提示词中的 3 项具体修复（flaky 测试、主动超时释放、消除冗余调用）做增量编辑。提示词只要求在已有代码上修复 3 个问题并新增后台清理线程，不需要也无理由重写 300 行已通过测试的代码。这种方式存在引入回退风险——虽然最终测试通过，但全量替换过程中可能意外改变了未覆盖的细节行为。根本原因是模型选择了"重写"策略而非"增量修复"策略，正确做法是使用搜索替换工具对已有代码做最小化修改。
-2. 模型在第 11 步使用 Write 工具完整重写了 conftest.py 文件，但实际上只需在 make_manager 函数签名中添加一个 cleanup_interval 参数（一行改动）。全量重写不仅多余，而且与上一条问题形成串联——模型在短时间内连续做了两次不必要的全量重写。根本原因同上，模型在修改已有文件时倾向于全量替换而非精确定位修改点，正确做法是先读文件确认改动范围，再使用搜索替换做单点修改。
-3. 模型分别在步骤 2、步骤 4、步骤 12 三次读取了 test_seat_manager.py 文件。步骤 2 的读取内容应当已覆盖后续所有需要的区域，步骤 4 和步骤 12 的重复读取是无效的——模型在第一次读完后没有有效缓存理解结果。这浪费了推理时间，降低了任务完成效率。根本原因是模型在处理长文件时缺乏"已读区域"管理意识，正确做法是记录已读取的代码段，后续仅在需要查看新区域时才补充读取。
+1. 使用 Write 工具全量重写 manager.py 而非针对3项具体修复做增量编辑，提示词无需重写300行已通过测试的代码，全量替换引入回退风险。应使用搜索替换对已有代码做最小化修改。
+2. 同样用 Write 全量重写 conftest.py，实际只需在 make_manager 添加一个 cleanup_interval 参数。连续两次全量重写倾向定位不准。应先确认改动范围再用搜索替换做单点修改。
+3. 分别在步骤2、4、12三次读取 test_seat_manager.py，第一次已覆盖全部需要的区域，后续重复读取无效。应将首次读取内容有效缓存，仅在需查看新区域时才补充读取。

@@ -1,7 +1,6 @@
 产物不满意：
-无。提示词要求的 4 个问题均已被正确修复，全部 87 个测试通过。test_system_clock_sleep_advances_time 的断言从 `assert t2 >= t1` 改为验证实际经过时间 `assert elapsed >= 0.04`，能有效验证 sleep 是否推进了时间。_cleanup_loop 中裸 `except Exception: pass` 已被替换为异常记录逻辑，异常及其时间戳被追加到公开的 cleanup_errors 列表中。TestActiveAutoRelease 中的 4 个测试中所有对 _lock、_seats、_cleanup_thread、_stop_cleanup 等私有属性的访问均已替换为相应的公开 API（cleanup_expired_reservations、count_reserved、is_cleanup_active、get_seat），测试不再依赖内部实现细节。
-
+无。
 过程不满意：
-1. 在第4步和第8步，模型连续两次调用了 view_files 读取 manager.py 的完整内容，两次读取之间模型没有对该文件做任何修改，属于无意义的重复读取。这浪费了推理时间，推理效率低下。原因是模型在第一次读取后没有有效组织和记忆文件内容，正确做法是读完一次后记录已读取的区域，避免在同一个分析阶段重复请求同一文件的相同内容。
-2. 在修复问题1的过程中，模型不仅仅是修正 test_system_clock_sleep_advances_time 的断言，还额外新增了 TestManualClock 测试类及其 3 个测试方法（sleep_records_history、sleep_advances_time、sleep_negative_rejected）。提示词只要求修复一个测试的断言过弱问题，并没有要求为 ManualClock 补充测试，模型超出了任务边界做了未要求的额外工作。原因是模型在规划修复方案时自行扩大了任务范围，将"修复弱断言"理解成了"完善 Clock 测试覆盖"，正确做法是严格按提示词要求做最小化修改，不做未经要求的范围扩展。
-3. 模型在整个会话中调用了 6 次 todo_write，其中第1步和第2步的两次调用创建了几乎相同的 todo 列表（均包含 4 项相同的任务），属于重复操作。此外模型在每完成一两个编辑操作后就更新 todo 状态，更新频率过高。原因是模型没有在编辑阶段前做完整的修改方案规划，而是边改边更新计划，正确做法是规划好全部修改路径后一次性创建 todo 列表，仅在阶段切换时才更新进度。
+1. 第4步和第8步连续两次 view_files 读取 manager.py 完整内容，两次读取之间未对该文件做任何修改，属于无意义重复读取。应读完一次后记录已读取区域，避免在同一个分析阶段重复请求同一文件的相同内容。
+2. 修复 test_system_clock_sleep_advances_time 断言时不仅修正断言还额外新增 TestManualClock 测试类及3个测试方法，提示词只要求修复一个测试的断言过弱问题，未要求为 ManualClock 补充测试。模型超出任务边界。应严格按提示词做最小化修改，不做未经要求的范围扩展。
+3. 会话中调用了6次 todo_write，第1步和第2步创建的 todo 列表几乎相同，属于重复操作，且每完成一两个编辑就更新 todo 频率过高。应规划好全部修改路径后一次性创建 todo，仅在阶段切换时更新进度。

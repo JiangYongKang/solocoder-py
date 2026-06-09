@@ -72,34 +72,34 @@ alwaysApply: true
 标注示例一
 ```
 产物不满意：
-1. 在 state_machine.py 的 transition 方法中，模型实现了待支付 -> 已支付 -> 已发货 -> 已签收 -> 已完成的正常流转，但提示词中要求的 “退款” 分支完全未实现，状态机中没有任何 refund 相关状态或转移逻辑。这导致 fulfillment.py 中调用退款流程时直接抛出 NotImplementedError，业务上无法处理售后退款场景。原因是模型在规划阶段只关注了主路径，忽略了分支流转需求，解决方案是先完整列出所有状态和转移矩阵再编码。
-2. 在 promotion.py 的 apply_promotions 函数中，满减和折扣叠加时直接相加了金额，没有做互斥校验。提示词中明确要求 “满减与折扣不能同时生效”，但实际运行时一个订单同时命中 full_reduction 和 percent_discount 两个促销，最终金额被错误地双重扣减，比正确金额少了 15%。原因是模型在实现 apply_promotions 时没有维护互斥规则表，解决方案是先按互斥规则分组，同组内只选择最优方案。
-3. 运行 poetry run pytest tests/order/test_fulfillment.py -q 后，test_partial_fulfillment 测试失败，报错 AssertionError: assert 3 == 2。原因是 fulfillment.py 的 ship_line_item 函数在部分发货时没有按 line_item 维度更新履约数量，而是错误地将发货量累加到订单整体计数器上，导致第二次发货后履约数量超出。解决方案是在 line_item 对象上维护独立的 fulfilled_qty 字段。
+1. state_machine.py 中的 transition 方法实现了正常流转但提示词要求的退款分支完全未实现，状态机无任何 refund 相关状态或转移逻辑，fulfillment.py 调用退款时抛 NotImplementedError 无法处理售后。应先列出所有状态和转移矩阵再编码。
+2. promotion.py 中的 apply_promotions 方法满减和折扣叠加时直接相加无互斥校验，同时命中两个促销时金额被双重扣减少了 15%，与提示词要求不能同时生效矛盾。模型没考虑到需要维护互斥规则表，应先按互斥规则分组同组内只选最优方案。
+3. fulfillment.py 中的 ship_line_item 方法在部分发货时将发货量累加到订单整体计数器而非按 line_item 维度更新，test_partial_fulfillment 失败报 assert 3 == 2，第二次发货后履约数超出。应在 line_item 上维护独立的 fulfilled_qty 字段。
 过程不满意：
-1. 模型连续两次读取了 state_machine.py 文件，读取的内容完全一致，属于无意义的重复读取。这浪费了推理时间，推理效率低下。原因是模型没有在第一次读取后有效缓存理解，正确做法是记录已读取的区域避免重复查看。
-2. 模型写完 promotion.py 后在回复中声称 “促销模块已全部完成”，但实际并没有运行 pytest 验证。直到在后续步骤中运行测试后才发现互斥逻辑缺失。这是典型的幻觉与虚假完成问题，在未运行测试的情况下声称功能完成，正确做法是每个模块写完后立即运行对应测试验证。
+1. 连续两次读取 state_machine.py 内容完全一致属于无意义重复读取，浪费推理时间。应记录已读取区域避免重复查看。
+2. 写完 promotion.py 后在回复中声称促销模块已全部完成但未运行 pytest 验证，直到后续才发现互斥逻辑缺失，属于幻觉与虚假完成。应每个模块写完后立即运行对应测试验证。
 ```
 
 标注示例二
 ```
 产物不满意：
-1. 提示词中要求 “修复惰性过期回收逻辑”，但模型只在 lru_cache.py 的 get 方法中添加了 TTL 检查，遗漏了 __setitem__ 和 __contains__ 两个入口的过期回收。运行 poetry run pytest tests/cache/test_expiry.py -q 后，test_expired_entry_in_setitem 和 test_expired_entry_in_contains 两个测试均失败，报错 `AssertionError: Expected None for expired key`，表明缓存仍返回了已过期条目。原因是模型只修补了提示词中举例的 get 路径，没有系统性地扫描所有缓存入口点，解决方案是先 grep 所有访问缓存的方法，再逐一添加过期检查。
-2. 在 lru_cache.py 的 _evict_if_needed 方法中，模型用 threading.Lock 包裹了整个驱逐逻辑，但锁的获取放在 for 循环外面，驱逐大容量缓存时持有锁超过 3 秒。test_concurrency.py 中 test_concurrent_read_during_eviction 测试因此超时失败，导致提示词要求的 “验证多线程下数据一致性” 无法通过。原因是锁粒度太粗，解决方案是在循环内部逐条目加锁或使用读写锁分离。
-3. 提示词要求统一 TTL 时间单位，但模型在 lru_cache.py 的 _is_expired 方法中用 time.time()，而在 _cleanup_expired 方法中用的是 time.monotonic()，导致同一时刻两个方法对过期与否的判断相差约 1700000000 秒。运行 test_ttl_consistency 后同一条目在 get 返回有效数据后 0.1 秒内被 cleanup 误回收。原因是模型在不同方法中随意选用了不同时间源，没有意识到两个时钟函数的语义差异，解决方案是统一使用 time.monotonic() 作为内部时间基准。
+1. 提示词要求修复惰性过期回收但只在 lru_cache.py 的 get 中添加了 TTL 检查，遗漏 __setitem__ 和 __contains__ 两个入口。test_expired_entry_in_setitem 和 test_expired_entry_in_contains 均失败报 Expected None for expired key。模型只修补了 get 路径未系统性扫描所有缓存入口，应先 grep 所有访问缓存的方法再逐一添加过期检查。
+2. lru_cache.py _evict_if_needed 中 lock 获取放在 for 循环外面，驱逐大容量缓存时持锁超过 3 秒导致 test_concurrent_read_during_eviction 超时失败。锁粒度太粗，应在循环内部逐条目加锁或使用读写锁分离。
+3. lru_cache.py 中的 _is_expired 方法用 time.time() 而 _cleanup_expired 用 time.monotonic()，同一时刻两个方法对过期与否的判断相差约 17 亿秒，同一条目在 get 返回有效数据后 0.1 秒内被 cleanup 误回收。应统一使用 time.monotonic() 作为内部时间基准。
 过程不满意：
-1. 模型先执行了 poetry run pytest tests/cache/ -q，测试失败后没有查看失败测试的堆栈信息，然后就直接修改了 lru_cache.py 的三处代码。再次运行测试发现新引入了缩进错误（IndentationError），后续步骤又改回去。这是典型的试错式调试，遇到错误就盲改而非先分析错误信息缩小范围，同一处代码两轮未修正。正确做法是先读堆栈定位具体行，再读对应代码做最小修正。
-2. 模型重写了 test_concurrency.py，新增了 unittest.mock.patch('threading.Lock') 来规避多线程测试的复杂性。但生产代码 lru_cache.py 本身使用的就是 threading.Lock，测试中 mock 掉后测试覆盖的是 mock 对象而非真实的并发行为，导致测试虽然全部通过但实际上没有验证任何并发安全性。这是典型的生产代码向测试妥协，正确做法是调整测试方案，如使用 Barrier 同步线程执行时机，而非绕过测试难点。
+1. 执行 pytest 测试失败后没有查看失败测试的堆栈信息就直接修改 lru_cache.py 三处代码，再次测试发现新引入 IndentationError 又改回去。属于试错式调试，遇到错误盲改而非先分析错误信息缩小范围，同一处代码两轮未修正。应先读堆栈定位具体行再做最小修正。
+2. 重写 test_concurrency.py 新增 unittest.mock.patch('threading.Lock') 规避多线程测试复杂性，但生产代码本身使用 threading.Lock，mock 后测试覆盖的是 mock 对象而非真实并发行为。属于生产代码向测试妥协，应使用 Barrier 同步线程执行时机而非绕过测试难点。
 ```
 
 标注示例三
 ```
 产物不满意：
-1. 在 dead_letter.py 的 move_to_dlq 方法中，模型在消息超过最大重试次数后将其转移到死信队列，但没有记录原始消息的投递次数和首次入队时间。提示词中要求 “支持死信重试”，但缺失溯源信息的情况下无法判断死信消息是否值得再次投递，导致死信队列中的消息只能被丢弃而无法被分析和恢复。原因是模型只关注了死信转移的动作本身，忽略了重试所需的上下文信息，解决方案是在死信消息结构中保留 original_enqueue_time 和 delivery_count 字段。
-2. 提示词中要求实现 “可见性超时”，但 message_queue.py 的 receive_message 方法在分配消息给消费者后，超时计时器只在消费者显式调用 ack 时停止。如果消费者进程崩溃未调用 ack 或 nack，该消息将永久不可见。运行 test_visibility_timeout_on_crash 测试时，模拟消费者崩溃后等待 5 秒，消息仍不可见，报错 `AssertionError: Expected message to be visible again after timeout`。原因是模型只实现了显式 ack 的超时路径，没有实现被动超时检测的后台扫描机制，解决方案是添加定时扫描线程将超时未 ack 的消息重新放回可见队列。
-3. 运行 poetry run pytest tests/queue/test_dedup.py -q 后，test_message_deduplication 测试失败，报错 assert 2 == 1。原因是 message_queue.py 的 publish 方法中，去重逻辑只比较了消息 body 内容而没有校验 message_id，导致两条 body 相同但 id 不同的消息被误判为重复，其中一条被丢弃。模型将 “投递去重” 理解成了 “内容去重”，混淆了消息唯一性标识和消息内容的区别，解决方案是以 message_id 作为去重的唯一键。
+1. move_to_dlq 方法中的消息超过最大重试后转移到死信队列，但未记录投递次数和首次入队时间。提示词要求支持死信重试，缺失溯源信息无法判断死信是否值得再次投递。模型只关注转移动作忽略重试上下文，应在死信消息中保留 original_enqueue_time 和 delivery_count 字段。
+2. receive_message 中超时计时器只在消费者显式调用 ack 时停止，若消费者崩溃未调用 ack 则消息永久不可见。test_visibility_timeout_on_crash 失败报 Expected message to be visible again after timeout。原因是只实现了显式 ack 路径未实现被动超时检测的后台扫描，应添加定时扫描线程将超时未 ack 消息重新放回可见队列。
+3. publish 方法中去重逻辑只比较消息 body 内容未校验 message_id，两条 body 相同但 id 不同的消息被误判为重复导致丢弃。test_message_deduplication 失败报 assert 2 == 1。模型混淆了投递去重与内容去重，应以 message_id 作为去重唯一键。
 过程不满意：
-1. 模型创建了 tests/queue/test_queue.py，但运行 pytest 时发现测试模块找不到导入路径，报错 `ModuleNotFoundError: No module named 'solocoder_py'`。原因是模型缺少项目基础设施的前置分析——没有先阅读 pyproject.toml 了解 pytest 的 pythonpath 配置，导致写出的测试代码导入了未配置的模块路径。，正确做法是先理解 pyproject.toml 中的工具配置再动手写测试代码。
-2. 模型看到 5 个测试失败后，直接选择完全重写 dead_letter.py 而不是逐个分析失败原因。重写后的代码引入了新的缺陷，而且模型对 publish 方法的去重逻辑连续做了三次相反的修改，先加 message_id 校验 -> 删掉 -> 又加回来，形成了三轮不收敛的试错循环。原因是模型采用了全量重写策略而非增量定位修复，正确做法是先逐个分析 5 个失败的测试用例对应的具体代码行，再对每处做最小修正。
+1. 创建 tests/queue/test_queue.py 但运行 pytest 时找不到导入路径报 ModuleNotFoundError。原因是缺少项目基础设施的前置分析，未先阅读 pyproject.toml 了解 pytest 的 pythonpath 配置。应先理解 pyproject.toml 中的工具配置再动手写测试代码。
+2. 看到 5 个测试失败后直接选择完全重写 dead_letter.py 而非逐个分析失败原因，重写后引入新缺陷，且对去重逻辑连续做了三次相反修改（加 message_id 校验 -> 删掉 -> 又加回来）形成三轮不收敛的试错循环。应逐个分析失败用例对应的具体代码行再做最小修正。
 ```
 
 产物不满意原因的书写准则
