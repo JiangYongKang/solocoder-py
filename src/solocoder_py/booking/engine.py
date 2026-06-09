@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
 from .models import (
@@ -40,15 +40,50 @@ class BookingEngine:
     def is_holiday(self, check_date: date) -> bool:
         return check_date in self._holidays
 
-    def _slot_is_on_holiday(self, slot: TimeSlot) -> bool:
-        start_date = slot.start_time.date()
-        end_date = slot.end_time.date()
-        current = start_date
-        while current <= end_date:
-            if current in self._holidays:
-                return True
-            current = current + timedelta(days=1)
-        return False
+    def _datetime_falls_on_holiday(self, dt: datetime) -> bool:
+        return dt.date() in self._holidays
+
+    def _split_non_holiday_ranges(
+        self, start: datetime, end: datetime
+    ) -> List[Tuple[datetime, datetime]]:
+        if start >= end:
+            return []
+
+        result: List[Tuple[datetime, datetime]] = []
+        segment_start = start
+        current_date = start.date()
+        end_date = end.date()
+
+        while current_date <= end_date:
+            day_start = datetime.combine(current_date, time.min)
+            day_end = datetime.combine(current_date + timedelta(days=1), time.min)
+
+            seg_end_in_day = min(end, day_end)
+
+            if current_date in self._holidays:
+                if result and result[-1][1] == segment_start:
+                    pass
+                segment_start = seg_end_in_day
+            else:
+                if segment_start < seg_end_in_day:
+                    result.append((segment_start, seg_end_in_day))
+                segment_start = seg_end_in_day
+
+            current_date = current_date + timedelta(days=1)
+
+        return result
+
+    def _slot_has_available_non_holiday_overlap(
+        self, slot: TimeSlot, query_start: datetime, query_end: datetime
+    ) -> bool:
+        if slot.available_capacity <= 0:
+            return False
+        overlap_start = max(slot.start_time, query_start)
+        overlap_end = min(slot.end_time, query_end)
+        if overlap_start >= overlap_end:
+            return False
+        non_holiday_segs = self._split_non_holiday_ranges(overlap_start, overlap_end)
+        return len(non_holiday_segs) > 0
 
     def create_time_slot(
         self,
@@ -96,8 +131,9 @@ class BookingEngine:
                 slot
                 for slot in self._slots.values()
                 if slot.overlaps(start_time, end_time)
-                and slot.available_capacity > 0
-                and not self._slot_is_on_holiday(slot)
+                and self._slot_has_available_non_holiday_overlap(
+                    slot, start_time, end_time
+                )
             ]
 
     def _find_overlapping_slots(
@@ -107,50 +143,46 @@ class BookingEngine:
             slot
             for slot in self._slots.values()
             if slot.overlaps(start_time, end_time)
-            and not self._slot_is_on_holiday(slot)
         ]
         slots.sort(key=lambda s: s.start_time)
         return slots
 
-    def _validate_no_gaps(
+    def _validate_no_gaps_for_range(
         self,
-        start_time: datetime,
-        end_time: datetime,
+        seg_start: datetime,
+        seg_end: datetime,
         slots: List[TimeSlot],
     ) -> None:
-        if not slots:
-            raise TimeSlotConflictError(
-                f"No time slots cover the requested range: {start_time} to {end_time}"
-            )
-
-        current = start_time
+        current = seg_start
         for slot in slots:
-            if slot.start_time > current:
+            s_overlap = max(slot.start_time, seg_start)
+            e_overlap = min(slot.end_time, seg_end)
+            if s_overlap >= e_overlap:
+                continue
+            if s_overlap > current:
                 raise TimeSlotConflictError(
-                    f"Gap detected between {current} and {slot.start_time}"
+                    f"Gap detected between {current} and {s_overlap}"
                 )
-            current = max(current, slot.end_time)
+            current = max(current, e_overlap)
+            if current >= seg_end:
+                break
 
-        if current < end_time:
+        if current < seg_end:
             raise TimeSlotConflictError(
-                f"No time slot covers up to {end_time}, only up to {current}"
+                f"No time slot covers up to {seg_end}, only up to {current}"
             )
 
-    def _split_into_sub_bookings(
+    def _split_sub_bookings_for_range(
         self,
-        start_time: datetime,
-        end_time: datetime,
+        seg_start: datetime,
+        seg_end: datetime,
         quantity: int,
         slots: List[TimeSlot],
     ) -> List[SubBooking]:
         sub_bookings: List[SubBooking] = []
-        current = start_time
-
         for slot in slots:
-            if current >= end_time:
-                break
-            sb_start = max(current, slot.start_time)
-            sb_end = min(end_time, slot.end_time)
+            sb_start = max(slot.start_time, seg_start)
+            sb_end = min(slot.end_time, seg_end)
             if sb_start < sb_end:
                 sub_bookings.append(
                     SubBooking(
@@ -160,8 +192,6 @@ class BookingEngine:
                         quantity=quantity,
                     )
                 )
-            current = sb_end
-
         return sub_bookings
 
     def create_booking(
@@ -181,16 +211,35 @@ class BookingEngine:
             raise InvalidTimeRangeError(f"quantity must be positive: {quantity}")
 
         with self._lock:
-            overlapping_slots = self._find_overlapping_slots(start_time, end_time)
-            self._validate_no_gaps(start_time, end_time, overlapping_slots)
+            non_holiday_segs = self._split_non_holiday_ranges(start_time, end_time)
+            if not non_holiday_segs:
+                raise TimeSlotConflictError(
+                    f"Booking range {start_time} to {end_time} falls entirely on holidays"
+                )
 
-            sub_bookings = self._split_into_sub_bookings(
-                start_time, end_time, quantity, overlapping_slots
-            )
+            all_sub_bookings: List[SubBooking] = []
+            for seg_start, seg_end in non_holiday_segs:
+                overlapping_slots = self._find_overlapping_slots(seg_start, seg_end)
+                if not overlapping_slots:
+                    raise TimeSlotConflictError(
+                        f"No time slots cover the requested range: {seg_start} to {seg_end}"
+                    )
+                self._validate_no_gaps_for_range(
+                    seg_start, seg_end, overlapping_slots
+                )
+                seg_subs = self._split_sub_bookings_for_range(
+                    seg_start, seg_end, quantity, overlapping_slots
+                )
+                all_sub_bookings.extend(seg_subs)
+
+            if not all_sub_bookings:
+                raise TimeSlotConflictError(
+                    f"No valid sub-bookings could be created for range {start_time} to {end_time}"
+                )
 
             applied: List[Tuple[str, int]] = []
             try:
-                for sb in sub_bookings:
+                for sb in all_sub_bookings:
                     slot = self._slots[sb.slot_id]
                     slot.reserve(sb.quantity)
                     applied.append((sb.slot_id, sb.quantity))
@@ -199,7 +248,7 @@ class BookingEngine:
                     user_id=user_id,
                     start_time=start_time,
                     end_time=end_time,
-                    sub_bookings=sub_bookings,
+                    sub_bookings=all_sub_bookings,
                 )
                 self._bookings[booking.id] = booking
                 return booking

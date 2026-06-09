@@ -18,6 +18,7 @@ class RefundState(str, Enum):
     UNDER_REVIEW = "审核中"
     REFUNDED = "已退款"
     REJECTED = "已拒绝"
+    PARTIALLY_CHARGED_BACK = "部分拒付"
     CHARGED_BACK = "已拒付"
     CANCELLED = "已取消"
 
@@ -30,9 +31,14 @@ _TRANSITIONS: Dict[RefundState, Set[RefundState]] = {
     RefundState.UNDER_REVIEW: {
         RefundState.REFUNDED,
         RefundState.REJECTED,
+        RefundState.PARTIALLY_CHARGED_BACK,
         RefundState.CHARGED_BACK,
     },
     RefundState.REFUNDED: {
+        RefundState.PARTIALLY_CHARGED_BACK,
+        RefundState.CHARGED_BACK,
+    },
+    RefundState.PARTIALLY_CHARGED_BACK: {
         RefundState.CHARGED_BACK,
     },
     RefundState.REJECTED: set(),

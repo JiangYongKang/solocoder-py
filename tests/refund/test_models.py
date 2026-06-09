@@ -129,7 +129,10 @@ class TestRefund:
         assert refund.state == RefundState.REFUND_REQUESTED
         assert refund.reviewed_at is None
         assert refund.completed_at is None
-        assert refund.chargeback_id is None
+        assert refund.chargeback_ids == []
+        assert refund.charged_back_amount == 0
+        assert refund.is_fully_charged_back is False
+        assert refund.remaining_chargeable_amount == Decimal("50.00")
 
     def test_refund_amount_must_be_positive(self):
         with pytest.raises(InvalidRefundAmountError):
@@ -144,6 +147,7 @@ class TestRefund:
         assert refund.can_be_rejected is False
         assert refund.can_be_cancelled is True
         assert refund.can_be_charged_back is False
+        assert refund.is_partially_charged_back is False
 
     def test_start_review(self):
         refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
@@ -179,20 +183,89 @@ class TestRefund:
         assert refund.state == RefundState.CANCELLED
         assert refund.completed_at is not None
 
-    def test_apply_chargeback_from_refunded(self):
+    def test_apply_chargeback_from_refunded_full(self):
         refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
         refund.start_review()
         refund.approve()
-        refund.apply_chargeback("cb-1")
+        refund.apply_chargeback("cb-1", Decimal("50.00"))
         assert refund.state == RefundState.CHARGED_BACK
-        assert refund.chargeback_id == "cb-1"
+        assert "cb-1" in refund.chargeback_ids
+        assert refund.charged_back_amount == Decimal("50.00")
+        assert refund.is_fully_charged_back is True
+        assert refund.remaining_chargeable_amount == 0
 
-    def test_apply_chargeback_from_under_review(self):
+    def test_apply_chargeback_from_refunded_partial(self):
         refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
         refund.start_review()
-        refund.apply_chargeback("cb-1")
+        refund.approve()
+        refund.apply_chargeback("cb-1", Decimal("20.00"))
+        assert refund.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert "cb-1" in refund.chargeback_ids
+        assert refund.charged_back_amount == Decimal("20.00")
+        assert refund.is_fully_charged_back is False
+        assert refund.is_partially_charged_back is True
+        assert refund.remaining_chargeable_amount == Decimal("30.00")
+
+    def test_apply_chargeback_partial_then_remaining(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
+        refund.start_review()
+        refund.approve()
+        refund.apply_chargeback("cb-1", Decimal("20.00"))
+        assert refund.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert refund.is_partially_charged_back is True
+        refund.apply_chargeback("cb-2", Decimal("30.00"))
         assert refund.state == RefundState.CHARGED_BACK
-        assert refund.chargeback_id == "cb-1"
+        assert refund.is_partially_charged_back is False
+        assert "cb-1" in refund.chargeback_ids
+        assert "cb-2" in refund.chargeback_ids
+        assert refund.charged_back_amount == Decimal("50.00")
+        assert refund.is_fully_charged_back is True
+
+    def test_apply_chargeback_from_under_review_full(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
+        refund.start_review()
+        refund.apply_chargeback("cb-1", Decimal("50.00"))
+        assert refund.state == RefundState.CHARGED_BACK
+        assert "cb-1" in refund.chargeback_ids
+        assert refund.charged_back_amount == Decimal("50.00")
+        assert refund.is_fully_charged_back is True
+
+    def test_apply_chargeback_exceeds_remaining(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
+        refund.start_review()
+        refund.approve()
+        with pytest.raises(ChargebackAmountError):
+            refund.apply_chargeback("cb-1", Decimal("60.00"))
+
+    def test_apply_chargeback_zero_or_negative(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
+        refund.start_review()
+        refund.approve()
+        with pytest.raises(ChargebackAmountError):
+            refund.apply_chargeback("cb-1", Decimal("0"))
+        with pytest.raises(ChargebackAmountError):
+            refund.apply_chargeback("cb-1", Decimal("-10.00"))
+
+    def test_can_accept_chargeback(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
+        assert refund.can_accept_chargeback(Decimal("10.00")) is False
+        refund.start_review()
+        assert refund.can_accept_chargeback(Decimal("50.00")) is True
+        assert refund.can_accept_chargeback(Decimal("50.01")) is False
+        assert refund.can_accept_chargeback(Decimal("0")) is False
+        assert refund.can_accept_chargeback(Decimal("-10")) is False
+        refund.apply_chargeback("cb-1", Decimal("20.00"))
+        assert refund.can_accept_chargeback(Decimal("30.00")) is True
+        assert refund.can_accept_chargeback(Decimal("30.01")) is False
+
+    def test_apply_chargeback_duplicate_chargeback_id_not_duplicated(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
+        refund.start_review()
+        refund.approve()
+        refund.apply_chargeback("cb-1", Decimal("20.00"))
+        refund.apply_chargeback("cb-1", Decimal("20.00"))
+        assert refund.chargeback_ids == ["cb-1"]
+        assert refund.charged_back_amount == Decimal("40.00")
 
     def test_cannot_approve_from_initial_state(self):
         refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
@@ -209,6 +282,52 @@ class TestRefund:
         refund.start_review()
         with pytest.raises(InvalidStateTransitionError):
             refund.cancel()
+
+    def test_apply_chargeback_from_under_review_partial(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
+        refund.start_review()
+        refund.apply_chargeback("cb-1", Decimal("30.00"))
+        assert refund.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert refund.charged_back_amount == Decimal("30.00")
+        assert refund.is_partially_charged_back is True
+        assert refund.is_fully_charged_back is False
+
+    def test_apply_chargeback_from_partial_state(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("50.00"))
+        refund.start_review()
+        refund.approve()
+        refund.apply_chargeback("cb-1", Decimal("20.00"))
+        assert refund.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert refund.can_be_charged_back is True
+        refund.apply_chargeback("cb-2", Decimal("20.00"))
+        assert refund.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert refund.charged_back_amount == Decimal("40.00")
+        refund.apply_chargeback("cb-3", Decimal("10.00"))
+        assert refund.state == RefundState.CHARGED_BACK
+        assert refund.is_fully_charged_back is True
+
+    def test_is_partially_charged_back_flags(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("100.00"))
+        assert refund.is_partially_charged_back is False
+        refund.start_review()
+        refund.approve()
+        assert refund.is_partially_charged_back is False
+        refund.apply_chargeback("cb-1", Decimal("30.00"))
+        assert refund.is_partially_charged_back is True
+        assert refund.is_fully_charged_back is False
+        refund.apply_chargeback("cb-2", Decimal("70.00"))
+        assert refund.is_partially_charged_back is False
+        assert refund.is_fully_charged_back is True
+
+    def test_can_accept_chargeback_in_partial_state(self):
+        refund = make_refund(payment_id="pay-1", amount=Decimal("100.00"))
+        refund.start_review()
+        refund.approve()
+        refund.apply_chargeback("cb-1", Decimal("40.00"))
+        assert refund.can_be_charged_back is True
+        assert refund.can_accept_chargeback(Decimal("60.00")) is True
+        assert refund.can_accept_chargeback(Decimal("60.01")) is False
+        assert refund.can_accept_chargeback(Decimal("0")) is False
 
 
 class TestChargeback:

@@ -1,0 +1,5 @@
+上一轮修复后，README.md 文档仍然存在与实际代码行为不一致的问题，需要修复：
+1. README.md 的「在过期临界点消耗」示例代码中，捕获消耗过期积分异常时写的是 except InsufficientPointsError，但 account.py 在积分剩余总额充足但可用积分不足（因过期）的场景下实际抛出的是 PointsExpiredError。示例中 t0+200 秒时批次已过期，调用方按示例编写 except 将无法正确捕获异常。
+2. README.md 的「FEFO 扣减算法」章节中，第 4 步「余额校验」只写了"不足则抛出 InsufficientPointsError"，没有描述两步校验逻辑（先比较 total_remaining 决定是否抛 InsufficientPointsError，再比较 available 决定是否抛 PointsExpiredError）。同时该章节的步骤排序与实际代码执行顺序不一致：代码是先做两步校验再筛选未过期批次，文档却将校验放在筛选和排序之后。
+3. 上述两处修复后，重新检查 README.md 全文，确保所有示例代码的异常类型、输出值和算法步骤描述与 account.py 的实际行为完全一致。
+4. 重新运行 poetry run pytest tests/points/ -q，确保所有测试通过。

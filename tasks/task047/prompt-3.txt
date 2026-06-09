@@ -1,0 +1,7 @@
+你之前实现的 DAG 任务调度器模块中，环检测相关代码存在两个问题需要修复：
+
+1. _would_create_cycle 方法和 _find_cycle_path 方法各自独立构建完全相同的邻接表并执行几乎一致的 DFS 三色标记遍历，存在约 30 行的代码重复。_would_create_cycle 只是在检测到环时返回 True，_find_cycle_path 则是在检测到环时收集路径。未来维护环检测逻辑时任何改动都需要同时修改两处，容易漏改。
+
+2. _find_cycle_path 返回的环路路径起始节点取决于字典迭代顺序，调用方 register_task 和 add_dependency 在拿到路径后无条件在末尾追加 task_id 来构造完整环路字符串，隐含假设路径最后一个节点一定有一条指向 task_id 的真实边。当任务注册顺序与 DFS 遍历顺序不对齐时，路径最后一个节点与 task_id 之间可能不存在真实依赖边，导致报错信息中出现虚假的边。
+
+3. 修复后重新运行 poetry run pytest tests/dag/ -q，确保所有现有测试通过。

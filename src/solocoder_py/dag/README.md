@@ -96,7 +96,9 @@ PENDING → READY → RUNNING → SUCCESS
 
 ## 环检测与路径报告机制
 
-模块在 `register_task()` 和 `add_dependency()` 两个入口进行环检测，采用基于 DFS 三色标记的算法（WHITE/GRAY/BLACK）。环路路径的报告使用 **DFS 递归栈** 而非遍历树 parent 指针，确保报错信息中的每一条边都对应图中的真实依赖关系，避免误导开发者排查问题。
+模块在 `register_task()` 和 `add_dependency()` 两个入口进行环检测，采用基于 **单遍 DFS 三色标记** 的算法（WHITE/GRAY/BLACK）。环路路径的报告使用 **DFS 递归栈** 而非遍历树 parent 指针，确保报错信息中的每一条边都对应图中的真实依赖关系，避免误导开发者排查问题。
+
+环检测由内部方法 `_detect_cycle(new_task_id, dependencies)` 统一实现，单次 DFS 遍历同时完成「是否存在环」的布尔判断以及「环路具体路径」的收集，返回 `Tuple[bool, List[str]]`，消除了原本判定与寻径各跑一遍 DFS 的代码重复。
 
 ### 算法原理
 
@@ -105,6 +107,7 @@ PENDING → READY → RUNNING → SUCCESS
 3. 当遍历某节点的邻居时，若发现该邻居处于 GRAY 状态，说明找到了一条回边（back edge），即形成了环
 4. 此时环路起点为该 GRAY 邻居在 `recursion_stack` 中的索引位置，环路路径即为从该索引到栈顶的子序列
 5. 由于 `recursion_stack` 的每一步推进都沿着图的真实邻接边进行，因此提取出的环路路径中每一对相邻节点都必然存在真实的依赖边
+6. 最终报错字符串采用 `cycle_path + [cycle_path[0]]` 的方式将环路首尾闭合，不再依赖调用方传入的 `task_id`，避免出现虚假边
 
 ### 错误信息格式
 

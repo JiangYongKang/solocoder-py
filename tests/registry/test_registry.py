@@ -5,7 +5,6 @@ import pytest
 from solocoder_py.registry import (
     InstanceAlreadyRegisteredError,
     InstanceNotFoundError,
-    NoAvailableInstanceError,
     ServiceNotFoundError,
 )
 from solocoder_py.registry import ManualClock, ServiceRegistry
@@ -151,19 +150,36 @@ class TestServiceDeregistration:
 
 
 class TestServiceQuery:
-    def test_get_instances_returns_only_available(self, registry: ServiceRegistry, clock: ManualClock):
-        registry.register(make_instance("inst-1", "svc-1"))
-        registry.register(make_instance("inst-2", "svc-1"))
-
-        clock.advance(15.0)
-        registry.renew("svc-1", "inst-1")
-
-        clock.advance(20.0)
+    def test_get_instances_filters_zero_weight(self, registry: ServiceRegistry):
+        registry.register(make_instance("inst-1", "svc-1", weight=1, port=8001))
+        registry.register(make_instance("inst-2", "svc-1", weight=0, port=8002))
+        registry.register(make_instance("inst-3", "svc-1", weight=5, port=8003))
+        registry.register(make_instance("inst-4", "svc-1", weight=0, port=8004))
 
         instances = registry.get_instances("svc-1")
         instance_ids = {i.instance_id for i in instances}
-        assert "inst-1" in instance_ids
-        assert "inst-2" not in instance_ids
+        assert instance_ids == {"inst-1", "inst-3"}
+        assert len(instances) == 2
+
+    def test_get_all_instances_includes_zero_weight(self, registry: ServiceRegistry):
+        registry.register(make_instance("inst-1", "svc-1", weight=1, port=8001))
+        registry.register(make_instance("inst-2", "svc-1", weight=0, port=8002))
+        registry.register(make_instance("inst-3", "svc-1", weight=0, port=8003))
+
+        instances = registry.get_all_instances("svc-1")
+        instance_ids = {i.instance_id for i in instances}
+        assert instance_ids == {"inst-1", "inst-2", "inst-3"}
+        assert len(instances) == 3
+
+    def test_get_instances_all_zero_weight_returns_empty(self, registry: ServiceRegistry):
+        registry.register(make_instance("inst-1", "svc-1", weight=0, port=8001))
+        registry.register(make_instance("inst-2", "svc-1", weight=0, port=8002))
+
+        instances = registry.get_instances("svc-1")
+        assert len(instances) == 0
+
+        all_instances = registry.get_all_instances("svc-1")
+        assert len(all_instances) == 2
 
     def test_get_all_instances_auto_evicts_expired(self, registry: ServiceRegistry, clock: ManualClock):
         registry.register(make_instance("inst-1", "svc-1"))
@@ -182,10 +198,22 @@ class TestServiceQuery:
         with pytest.raises(ServiceNotFoundError):
             registry.get_instances("svc-nonexistent")
 
+    def test_get_all_instances_nonexistent_service_raises(self, registry: ServiceRegistry):
+        with pytest.raises(ServiceNotFoundError):
+            registry.get_all_instances("svc-nonexistent")
+
     def test_get_instances_returns_clones(self, registry: ServiceRegistry):
         registry.register(make_instance("inst-1", "svc-1", metadata={"env": "dev"}))
         instances = registry.get_instances("svc-1")
         instances[0].metadata["env"] = "prod"
 
         instances2 = registry.get_instances("svc-1")
+        assert instances2[0].metadata["env"] == "dev"
+
+    def test_get_all_instances_returns_clones(self, registry: ServiceRegistry):
+        registry.register(make_instance("inst-1", "svc-1", weight=0, metadata={"env": "dev"}))
+        instances = registry.get_all_instances("svc-1")
+        instances[0].metadata["env"] = "prod"
+
+        instances2 = registry.get_all_instances("svc-1")
         assert instances2[0].metadata["env"] == "dev"

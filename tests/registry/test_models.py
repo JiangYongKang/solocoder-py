@@ -101,23 +101,4 @@ class TestRegistryConfig:
             RegistryConfig(default_ttl=-5.0)
 
 
-class TestServiceRegistrySnapshot:
-    def test_snapshot_get_available_instances(self):
-        from solocoder_py.registry import ServiceRegistrySnapshot
-        clock = ManualClock(100.0)
-        now = clock.now()
 
-        inst1 = make_instance("inst-1")
-        inst1.last_heartbeat = now
-        inst2 = make_instance("inst-2")
-        inst2.last_heartbeat = now - 35.0
-
-        snapshot = ServiceRegistrySnapshot(
-            service_name="svc-1",
-            instances={"inst-1": inst1, "inst-2": inst2},
-        )
-
-        available = snapshot.get_available_instances(now, 30.0)
-        assert "inst-1" in available
-        assert "inst-2" not in available
-        assert len(available) == 1

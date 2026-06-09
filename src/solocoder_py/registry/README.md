@@ -20,8 +20,8 @@
 - `register(instance: ServiceInstance) -> ServiceInstance`：注册一个服务实例
 - `renew(service_name: str, instance_id: str) -> ServiceInstance`：为指定实例发送心跳续约
 - `deregister(service_name: str, instance_id: str) -> bool`：主动注销服务实例
-- `get_instances(service_name: str) -> List[ServiceInstance]`：获取指定服务的所有可用（未过期）实例列表
-- `get_all_instances(service_name: str) -> List[ServiceInstance]`：获取指定服务的所有实例（自动摘除过期后剩余的全部实例）
+- `get_instances(service_name: str) -> List[ServiceInstance]`：获取指定服务的所有正权重（`weight > 0`）实例列表，用于实际流量分配
+- `get_all_instances(service_name: str) -> List[ServiceInstance]`：获取指定服务的全部实例列表（包含零权重实例），用于监控或管理
 - `select_instance(service_name: str) -> ServiceInstance`：按权重随机选取一个可用实例
 - `cleanup_expired() -> Dict[str, List[str]]`：主动触发一次过期实例清理（一般无需手动调用，所有核心操作均会自动触发），返回被摘除的实例列表
 - `list_services() -> List[str]`：列出所有已注册的服务名
@@ -85,10 +85,9 @@
 ## 异常体系
 
 - `RegistryError`：基类异常
-- `ServiceNotFoundError`：查询的服务不存在
+- `ServiceNotFoundError`：查询的服务不存在（或全部实例已过期并被自动摘除）
 - `InstanceNotFoundError`：指定实例不存在
 - `InstanceAlreadyRegisteredError`：重复注册同一实例
-- `NoAvailableInstanceError`：服务下没有可用实例（全部过期）
 - `InvalidConfigError`：配置参数无效
 
 ## 使用示例

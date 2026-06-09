@@ -5,7 +5,6 @@ from collections import Counter
 import pytest
 
 from solocoder_py.registry import (
-    NoAvailableInstanceError,
     ServiceNotFoundError,
 )
 from solocoder_py.registry import ManualClock, ServiceRegistry

@@ -1,0 +1,6 @@
+你在上一轮实现了 TTL 自动摘除功能后，代码中遗留了一些死代码和冗余问题，需要清理：
+1. registry.py 的 select_instance 方法在添加 _evict_expired() 自动摘除后，中间有一段空值判断和异常抛出的分支变成了永远走不到的代码，对应的异常类定义、模块导出也一同变成了死代码。需要删除这些不再可达的代码。
+2. registry.py 中 get_instances 和 get_all_instances 两个方法经过自动摘除修改后行为完全一致，形成了 API 层面的命名冗余。需要消除这个冗余，使两个方法有实质差异，或保留有意义的一个。
+3. models.py 中有一个辅助方法在自动摘除重构后不再被 registry.py 的任何方法调用，只剩下方法定义和一个单元测试，形成了孤立残留代码。需要清理。
+4. test_registry.py 和 test_edge_cases.py 中导入了上一轮变死代码的异常类，但所有测试用例都不再使用它，形成了无实际用途的残留 import。需要清理。
+5. 重新运行 poetry run pytest tests/registry/ -q，需要让所有测试通过。

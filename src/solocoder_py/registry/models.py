@@ -63,10 +63,3 @@ class ServiceRegistrySnapshot:
             service_name=self.service_name,
             instances={k: v.clone() for k, v in self.instances.items()},
         )
-
-    def get_available_instances(self, now: float, ttl: float) -> Dict[str, ServiceInstance]:
-        return {
-            k: v.clone()
-            for k, v in self.instances.items()
-            if not v.is_expired(now, ttl)
-        }

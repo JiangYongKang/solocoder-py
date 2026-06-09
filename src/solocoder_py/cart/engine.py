@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import threading
 import uuid
-from datetime import datetime
 from typing import Dict, List, Optional
 
 from .exceptions import (
@@ -116,13 +115,21 @@ class CartEngine:
             raise InvalidQuantityError("Quantity must be positive")
         with self._lock:
             cart = self.get_anonymous_cart(cart_id)
-            clipped_quantity, _ = self._validate_and_clip_quantity(product_id, quantity)
-            cart.add_item(product_id, clipped_quantity)
-            final_item = cart.get_item(product_id)
-            if final_item is not None:
-                product = self.get_product(product_id)
-                if final_item.quantity > product.stock:
-                    final_item.quantity = product.stock
+            product = self.get_product(product_id)
+            if not product.is_online:
+                raise ProductOfflineError(f"Product is offline: {product_id}")
+            if product.stock == 0:
+                raise InsufficientStockError(
+                    f"Product {product_id} is out of stock"
+                )
+            existing_item = cart.get_item(product_id)
+            if existing_item is not None:
+                combined = existing_item.quantity + quantity
+                final_quantity = min(combined, product.stock)
+                cart.update_quantity(product_id, final_quantity)
+            else:
+                final_quantity = min(quantity, product.stock)
+                cart.add_item(product_id, final_quantity)
             return cart
 
     def add_to_user_cart(
@@ -132,13 +139,21 @@ class CartEngine:
             raise InvalidQuantityError("Quantity must be positive")
         with self._lock:
             cart = self.get_or_create_user_cart(user_id)
-            clipped_quantity, _ = self._validate_and_clip_quantity(product_id, quantity)
-            cart.add_item(product_id, clipped_quantity)
-            final_item = cart.get_item(product_id)
-            if final_item is not None:
-                product = self.get_product(product_id)
-                if final_item.quantity > product.stock:
-                    final_item.quantity = product.stock
+            product = self.get_product(product_id)
+            if not product.is_online:
+                raise ProductOfflineError(f"Product is offline: {product_id}")
+            if product.stock == 0:
+                raise InsufficientStockError(
+                    f"Product {product_id} is out of stock"
+                )
+            existing_item = cart.get_item(product_id)
+            if existing_item is not None:
+                combined = existing_item.quantity + quantity
+                final_quantity = min(combined, product.stock)
+                cart.update_quantity(product_id, final_quantity)
+            else:
+                final_quantity = min(quantity, product.stock)
+                cart.add_item(product_id, final_quantity)
             return cart
 
     def remove_from_anonymous_cart(self, cart_id: str, product_id: str) -> Cart:
@@ -238,7 +253,7 @@ class CartEngine:
                 else:
                     user_cart.add_item(product_id, final_quantity)
 
-            user_cart.updated_at = datetime.now()
+            user_cart.touch()
 
             anonymous_cart.clear()
             del self._anonymous_carts[anonymous_cart_id]

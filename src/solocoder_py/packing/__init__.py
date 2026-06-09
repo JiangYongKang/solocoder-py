@@ -1,5 +1,4 @@
 from .exceptions import (
-    InsufficientCapacityError,
     InvalidBinError,
     InvalidItemError,
     PackingError,
@@ -12,7 +11,6 @@ __all__ = [
     "Bin",
     "BestFitStrategy",
     "FirstFitStrategy",
-    "InsufficientCapacityError",
     "InvalidBinError",
     "InvalidItemError",
     "Item",

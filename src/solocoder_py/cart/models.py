@@ -86,6 +86,9 @@ class Cart:
     def get_item(self, product_id: str) -> Optional[CartItem]:
         return self.items.get(product_id)
 
+    def touch(self) -> None:
+        self.updated_at = datetime.now()
+
 
 @dataclass
 class TrimNotification:

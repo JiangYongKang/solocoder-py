@@ -5,10 +5,6 @@ class PackingError(Exception):
     pass
 
 
-class InsufficientCapacityError(PackingError):
-    pass
-
-
 class InvalidItemError(PackingError):
     pass
 

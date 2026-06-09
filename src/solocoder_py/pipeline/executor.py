@@ -109,11 +109,12 @@ class PipelineExecutor:
     def _sleep_checking_cancel(self, seconds: float) -> bool:
         end = time.monotonic() + seconds
         while True:
+            self._check_and_set_timeout()
+            if self._should_stop():
+                return False
             remaining = end - time.monotonic()
             if remaining <= 0:
                 return True
-            if self._should_stop():
-                return False
             time.sleep(min(0.01, remaining))
 
     def _get_stage_input(self, item: PipelineItem) -> Any:
@@ -173,7 +174,6 @@ class PipelineExecutor:
 
         item.mark_processing()
         max_attempts = stage_config.max_retries + 1
-        last_error: Optional[Exception] = None
 
         for attempt in range(1, max_attempts + 1):
             if not self._is_time_remaining():
@@ -202,7 +202,6 @@ class PipelineExecutor:
                     stage_result.processed_count += 1
                 return
 
-            last_error = handler_error
             if attempt < max_attempts:
                 item.mark_retrying()
                 if stage_config.retry_delay > 0:
@@ -224,18 +223,6 @@ class PipelineExecutor:
                     stage_result.failed_count += 1
                     stage_result.processed_count += 1
                 return
-
-        if last_error is not None:
-            retry_error = ItemRetryExhaustedError(
-                stage_name=stage_config.name,
-                item_id=item.item_id,
-                attempts=max_attempts,
-                last_error=last_error,
-            )
-            item.mark_failed(stage_config.name, retry_error)
-            with stage_lock:
-                stage_result.failed_count += 1
-                stage_result.processed_count += 1
 
     def _try_enqueue(self, queue: BoundedQueue, item: Any) -> bool:
         while True:

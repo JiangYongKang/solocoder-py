@@ -1,0 +1,5 @@
+你实现的座位预留域模块存在一些问题，需要修复：
+1. test_system_clock_sleep_advances_time 测试的断言使用了 `assert t2 >= t1`，即使 clock.sleep(0.05) 是什么都不做的空实现，该断言也会通过，无法验证 sleep 是否真的推进了时间。
+2. manager.py 的 _cleanup_loop 方法中，_cleanup_expired_reservations 的调用被裸 `except Exception: pass` 包裹了。如果清理逻辑内部出错，异常会被静默吞掉，过期预留将永远不会被主动释放且无任何告警。
+3. TestActiveAutoRelease 类中有 4 个测试直接访问了 manager 的私有属性（_lock、_seats、_cleanup_thread、_stop_cleanup），测试依赖了内部实现细节而非公开 API。
+4. 重新运行 poetry run pytest tests/seat/ -q，需要让所有测试通过。

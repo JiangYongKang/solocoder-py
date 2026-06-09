@@ -8,7 +8,6 @@ from .clock import Clock, SystemClock
 from .exceptions import (
     InstanceAlreadyRegisteredError,
     InstanceNotFoundError,
-    NoAvailableInstanceError,
     ServiceNotFoundError,
 )
 from .models import RegistryConfig, ServiceInstance, ServiceRegistrySnapshot
@@ -113,7 +112,7 @@ class ServiceRegistry:
             self._ensure_service_exists(service_name)
 
             snapshot = self._services[service_name]
-            return [v.clone() for v in snapshot.instances.values()]
+            return [v.clone() for v in snapshot.instances.values() if v.weight > 0]
 
     def get_all_instances(self, service_name: str) -> List[ServiceInstance]:
         with self._lock:
@@ -129,12 +128,6 @@ class ServiceRegistry:
 
             snapshot = self._services[service_name]
             all_candidates = list(snapshot.instances.values())
-
-            if not all_candidates:
-                raise NoAvailableInstanceError(
-                    f"No available instances for service '{service_name}'"
-                )
-
             positive_weight_candidates = [inst for inst in all_candidates if inst.weight > 0]
 
             if positive_weight_candidates:

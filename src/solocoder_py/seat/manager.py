@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .clock import Clock, SystemClock
 from .exceptions import (
@@ -30,6 +30,7 @@ class SeatReservationManager:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _stop_cleanup: threading.Event = field(default_factory=threading.Event, init=False)
     _cleanup_thread: Optional[threading.Thread] = field(default=None, init=False)
+    cleanup_errors: List[Tuple[float, BaseException]] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
         if self.rows <= 0:
@@ -58,13 +59,18 @@ class SeatReservationManager:
 
     def _cleanup_loop(self) -> None:
         while not self._stop_cleanup.is_set():
+            now = self.clock.now()
             try:
-                self._cleanup_expired_reservations()
-            except Exception:
-                pass
+                self.cleanup_expired_reservations()
+            except BaseException as e:
+                try:
+                    error_time = self.clock.now()
+                except BaseException:
+                    error_time = now
+                self.cleanup_errors.append((error_time, e))
             self._stop_cleanup.wait(self.cleanup_interval)
 
-    def _cleanup_expired_reservations(self) -> int:
+    def cleanup_expired_reservations(self) -> int:
         now = self.clock.now()
         released = 0
         with self._lock:
@@ -77,11 +83,19 @@ class SeatReservationManager:
                     released += 1
         return released
 
+    @property
+    def is_cleanup_active(self) -> bool:
+        return self._cleanup_thread is not None and self._cleanup_thread.is_alive()
+
     def shutdown(self) -> None:
         self._stop_cleanup.set()
         if self._cleanup_thread is not None:
             self._cleanup_thread.join(timeout=5)
             self._cleanup_thread = None
+
+    def count_reserved(self) -> int:
+        with self._lock:
+            return sum(1 for seat in self._seats.values() if seat.state == SeatState.RESERVED)
 
     def _expire_reservation_if_needed(self, seat: Seat, now: float) -> None:
         if seat.state == SeatState.RESERVED and seat.is_reservation_expired(

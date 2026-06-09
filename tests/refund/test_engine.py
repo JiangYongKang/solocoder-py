@@ -236,6 +236,14 @@ class TestChargeback:
         assert payment.charged_back_amount == Decimal("200.00")
         assert payment.available_refund_amount == Decimal("700.00")
 
+        refund = engine.repository.get_refund(refund.id)
+        assert refund.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert refund.charged_back_amount == Decimal("200.00")
+        assert refund.remaining_chargeable_amount == Decimal("300.00")
+        assert refund.is_fully_charged_back is False
+        assert refund.is_partially_charged_back is True
+        assert cb.id in refund.chargeback_ids
+
     def test_chargeback_on_under_review_refund(self):
         engine, payment = RefundEngine(RefundRepository()), None
         engine = RefundEngine(RefundRepository())
@@ -281,9 +289,15 @@ class TestChargeback:
         r1 = engine.repository.get_refund(refund1.id)
         r2 = engine.repository.get_refund(refund2.id)
         assert r1.state == RefundState.CHARGED_BACK
-        assert r1.chargeback_id == cb.id
-        assert r2.state == RefundState.CHARGED_BACK
-        assert r2.chargeback_id == cb.id
+        assert r1.charged_back_amount == Decimal("300.00")
+        assert r1.is_fully_charged_back is True
+        assert cb.id in r1.chargeback_ids
+        assert r2.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert r2.charged_back_amount == Decimal("200.00")
+        assert r2.is_fully_charged_back is False
+        assert r2.is_partially_charged_back is True
+        assert r2.remaining_chargeable_amount == Decimal("200.00")
+        assert cb.id in r2.chargeback_ids
 
     def test_chargeback_without_refund_id_partial_first_refund_only(self):
         engine, payment = RefundEngine(RefundRepository()), None
@@ -305,10 +319,15 @@ class TestChargeback:
 
         r1 = engine.repository.get_refund(refund1.id)
         r2 = engine.repository.get_refund(refund2.id)
-        assert r1.state == RefundState.CHARGED_BACK
-        assert r1.chargeback_id == cb.id
+        assert r1.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert r1.charged_back_amount == Decimal("200.00")
+        assert r1.is_fully_charged_back is False
+        assert r1.is_partially_charged_back is True
+        assert r1.remaining_chargeable_amount == Decimal("100.00")
+        assert cb.id in r1.chargeback_ids
         assert r2.state == RefundState.REFUNDED
-        assert r2.chargeback_id is None
+        assert r2.charged_back_amount == 0
+        assert r2.chargeback_ids == []
 
     def test_chargeback_without_refund_id_covers_exactly_all_refunds(self):
         engine, payment = RefundEngine(RefundRepository()), None
@@ -487,6 +506,116 @@ class TestChargeback:
                 amount=Decimal("300.00"),
                 reason="fraud",
             )
+
+    def test_chargeback_on_partially_charged_back_refund(self):
+        engine = RefundEngine(RefundRepository())
+        payment = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
+        refund = engine.request_refund(payment.id, Decimal("500.00"))
+        engine.start_review(refund.id)
+        engine.approve_refund(refund.id)
+
+        cb1 = engine.process_chargeback(
+            payment_id=payment.id,
+            refund_id=refund.id,
+            amount=Decimal("200.00"),
+            reason="first dispute",
+        )
+
+        r = engine.repository.get_refund(refund.id)
+        assert r.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert r.charged_back_amount == Decimal("200.00")
+
+        cb2 = engine.process_chargeback(
+            payment_id=payment.id,
+            refund_id=refund.id,
+            amount=Decimal("300.00"),
+            reason="second dispute",
+        )
+
+        r = engine.repository.get_refund(refund.id)
+        assert r.state == RefundState.CHARGED_BACK
+        assert r.is_fully_charged_back is True
+        assert r.charged_back_amount == Decimal("500.00")
+        assert cb1.id in r.chargeback_ids
+        assert cb2.id in r.chargeback_ids
+
+        payment = engine.repository.get_payment(payment.id)
+        assert payment.refunded_amount == Decimal("0.00")
+        assert payment.charged_back_amount == Decimal("500.00")
+
+    def test_chargeback_without_refund_id_includes_partially_charged_back(self):
+        engine = RefundEngine(RefundRepository())
+        payment = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
+
+        refund1 = engine.request_refund(payment.id, Decimal("300.00"))
+        engine.start_review(refund1.id)
+        engine.approve_refund(refund1.id)
+
+        refund2 = engine.request_refund(payment.id, Decimal("400.00"))
+        engine.start_review(refund2.id)
+        engine.approve_refund(refund2.id)
+
+        engine.process_chargeback(
+            payment_id=payment.id,
+            refund_id=refund1.id,
+            amount=Decimal("100.00"),
+            reason="partial on refund1",
+        )
+        r1 = engine.repository.get_refund(refund1.id)
+        assert r1.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert r1.charged_back_amount == Decimal("100.00")
+        assert engine.get_total_refunded_amount(payment.id) == Decimal("600.00")
+
+        cb = engine.process_chargeback(
+            payment_id=payment.id,
+            refund_id=None,
+            amount=Decimal("500.00"),
+            reason="bulk chargeback",
+        )
+
+        r1 = engine.repository.get_refund(refund1.id)
+        r2 = engine.repository.get_refund(refund2.id)
+        assert r1.state == RefundState.CHARGED_BACK
+        assert r1.charged_back_amount == Decimal("300.00")
+        assert r2.state == RefundState.PARTIALLY_CHARGED_BACK
+        assert r2.charged_back_amount == Decimal("300.00")
+        assert cb.id in r1.chargeback_ids
+        assert cb.id in r2.chargeback_ids
+
+        payment = engine.repository.get_payment(payment.id)
+        assert payment.refunded_amount == Decimal("100.00")
+        assert payment.charged_back_amount == Decimal("600.00")
+
+    def test_chargeback_consistency_no_dirty_data_on_validation_failure(self):
+        engine = RefundEngine(RefundRepository())
+        payment = engine.create_payment(user_id="user-1", amount=Decimal("1000.00"))
+        refund1 = engine.request_refund(payment.id, Decimal("300.00"))
+        engine.start_review(refund1.id)
+        engine.approve_refund(refund1.id)
+        refund2 = engine.request_refund(payment.id, Decimal("200.00"))
+        engine.start_review(refund2.id)
+        engine.reject_refund(refund2.id)
+
+        pre_refunded = engine.get_total_refunded_amount(payment.id)
+        pre_chargebacks = engine.repository.find_chargebacks_by_payment_id(payment.id)
+        pre_r1_state = engine.repository.get_refund(refund1.id).state
+        pre_r2_state = engine.repository.get_refund(refund2.id).state
+
+        with pytest.raises(ChargebackAmountError):
+            engine.process_chargeback(
+                payment_id=payment.id,
+                refund_id=None,
+                amount=Decimal("1000.00"),
+                reason="amount exceeds refunded",
+            )
+
+        assert engine.get_total_refunded_amount(payment.id) == pre_refunded
+        assert len(engine.repository.find_chargebacks_by_payment_id(payment.id)) == len(
+            pre_chargebacks
+        )
+        assert engine.repository.get_refund(refund1.id).state == pre_r1_state
+        assert engine.repository.get_refund(refund2.id).state == pre_r2_state
+        assert payment.chargeback_ids == []
 
 
 class TestInvalidTransitions:

@@ -19,8 +19,8 @@
 | `AccountError` | 账户相关异常基类 |
 | `AccountNotFoundError` | 指定账户不存在 |
 | `AccountExistsError` | 创建重复账户 |
-| `InsufficientPointsError` | 可用积分余额不足 |
-| `PointsExpiredError` | 积分已过期 |
+| `InsufficientPointsError` | 积分余额不足（所有批次剩余积分之和 < 请求额，账户真正没有足够积分） |
+| `PointsExpiredError` | 积分已过期（剩余总额 ≥ 请求额，但未过期的可用积分 < 请求额） |
 | `InvalidAmountError` | 积分数额非法（负数或零） |
 | `FreezeNotFoundError` | 指定冻结记录不存在 |
 | `FreezeStateError` | 冻结记录状态非法（如对已解冻记录再次解冻） |
@@ -86,13 +86,16 @@ PointsError
 
 ### FEFO 扣减算法
 
-消耗积分或冻结积分时，按以下步骤执行：
+消耗积分（`consume_points`）或冻结积分（`freeze_points`）时，按以下步骤执行（与 [account.py](file:///c:/Users/vince/GoletaLab/SoloCoder-3/solocoder-py/src/solocoder_py/points/account.py#L146-L225) 中 `_deduct_by_fefo` / `_freeze_by_fefo` 的实际执行顺序一致）：
 
-1. **筛选未过期批次**：过滤掉 `expired_at <= now` 的批次
-2. **按过期时间升序排序**：过期时间越早，优先级越高
-3. **依次扣减**：从排序后的第一个批次开始，用该批次的 `remaining_points` 尽可能多地抵扣所需金额，不足部分继续从下一批次扣除
-4. **余额校验**：扣减前先校验可用积分总额是否充足，不足则抛出 `InsufficientPointsError`
-5. **冻结特殊处理**：冻结操作会将积分从 `remaining_points` 转移到 `frozen_points`，不减少总积分
+1. **计算总剩余积分**：遍历所有批次，累计 `remaining_points` 之和（含已过期批次），记为 `total_remaining`
+2. **计算可用积分**：遍历未过期批次（`expired_at > now`），累计 `remaining_points` 之和，记为 `available`
+3. **总额度校验**：若 `total_remaining < amount` → 抛出 `InsufficientPointsError`（账户真正没有足够积分，即使把过期积分全部算上也不够）
+4. **可用额度校验**：若 `available < amount` → 抛出 `PointsExpiredError`（总额度充足，但未过期的可用积分不足，差额部分已过期）
+5. **筛选未过期批次**：过滤掉 `expired_at <= now` 的批次
+6. **按过期时间升序排序**：过期时间越早，优先级越高
+7. **依次扣减**：从排序后的第一个批次开始，用该批次的 `remaining_points` 尽可能多地抵扣所需金额，不足部分继续从下一批次扣除
+8. **冻结特殊处理**（仅 `freeze_points`）：扣减时不减少 `remaining_points + frozen_points` 的总和，而是将积分从 `remaining_points` 转移到 `frozen_points`
 
 #### 示例
 
@@ -124,9 +127,13 @@ PointsError
 
 ### 解冻
 
-解冻操作将冻结记录中的积分按原冻结明细精确返还到对应批次：
-- 每个批次的 `frozen_points` 减少，`remaining_points` 等额增加
-- 解冻后积分恢复为可用状态
+解冻操作将冻结记录中的积分按原冻结明细精确返还到对应批次（与 [account.py](file:///c:/Users/vince/GoletaLab/SoloCoder-3/solocoder-py/src/solocoder_py/points/account.py#L268-L303) 中 `unfreeze_points()` 的实际行为一致）：
+
+- 遍历冻结记录中每个批次的扣减明细，对每个批次：
+  - **若批次未过期**（`batch.is_expired(now) == false`）：该批次的 `frozen_points` 减少，`remaining_points` 等额增加，积分恢复为可用状态
+  - **若批次已过期**（`batch.is_expired(now) == true`）：该批次的 `frozen_points` 直接清零，**不**返还到 `remaining_points`，并生成一条 `ExpiredLog` 回收记录，该部分积分从账户总余额中消失（与 `recycle_expired_points()` 的回收行为一致）
+
+因此解冻后，`get_total_points()` 与 `get_available_points()` 始终保持一致，不会出现总余额虚高。
 
 ### 消费冻结积分
 
@@ -230,14 +237,16 @@ print(manager.get_total_points("user-001"))       # 100
 ### 过期回收
 
 ```python
-manager.add_points("user-001", 500, now - timedelta(days=1))  # 已过期
-print(manager.get_available_points("user-001"))  # 150 (过期不计入可用)
-print(manager.get_total_points("user-001"))      # 650
+# 紧接上文状态：消费冻结积分后，剩余可用积分 100，冻结 0，总积分 100
+
+manager.add_points("user-001", 500, now - timedelta(days=1))  # 新增批次：500 分，已过期
+print(manager.get_available_points("user-001"))  # 100（500 已过期，不计入可用）
+print(manager.get_total_points("user-001"))      # 600（100 + 500，total 含过期批次的 remaining）
 
 logs = manager.recycle_expired_points("user-001")
 print(len(logs))                                   # 1
 print(logs[0].recycled_points)                     # 500
-print(manager.get_total_points("user-001"))        # 150
+print(manager.get_total_points("user-001"))        # 100（过期积分已回收）
 
 history = manager.get_expired_logs("user-001")
 print(len(history))                                # 1
@@ -246,17 +255,25 @@ print(len(history))                                # 1
 ### 在过期临界点消耗
 
 ```python
+from solocoder_py.points import InsufficientPointsError, PointsExpiredError
+
 t0 = datetime.now()
 manager.add_points("user-001", 100, t0 + timedelta(seconds=100))
 
 # 过期前 50 秒正常消耗
 manager.consume_points("user-001", 30, now=t0 + timedelta(seconds=50))
 
-# 过期后无法消耗
+# 过期后无法消耗：总额 70 >= 70，但可用为 0，抛出 PointsExpiredError
 try:
     manager.consume_points("user-001", 70, now=t0 + timedelta(seconds=200))
-except InsufficientPointsError:
+except PointsExpiredError:
     print("积分已过期，无法消耗")
+
+# 如果请求额超过总额，则抛出 InsufficientPointsError
+try:
+    manager.consume_points("user-001", 500, now=t0 + timedelta(seconds=200))
+except InsufficientPointsError:
+    print("积分余额不足")
 ```
 
 ## 运行测试
@@ -268,8 +285,8 @@ poetry run pytest tests/points/ -q
 测试覆盖以下场景：
 
 - **正常流程**：账户创建、积分入账、FEFO 扣减、冻结/解冻、过期回收
-- **边界条件**：积分在过期临界点消耗、多个批次混合扣减、扣减金额刚好等于某批次余额、解冻精确还原批次
-- **异常分支**：余额不足时冻结或消耗、消耗/冻结已过期积分、对已解冻记录再次操作、非法数额校验
+- **边界条件**：积分在过期临界点消耗、多个批次混合扣减、扣减金额刚好等于某批次余额、解冻精确还原批次、冻结期间批次过期后解冻（部分/全部批次过期）
+- **异常分支**：余额不足时冻结或消耗、消耗/冻结已过期积分（`PointsExpiredError` 与 `InsufficientPointsError` 的区分）、对已解冻/已消费记录重复操作抛 `FreezeStateError`、非法数额校验
 - **封装保护**：所有返回对象均为独立副本，修改返回值不影响内部状态
-- **异常层次**：所有异常均继承自 `PointsError`
+- **异常层次**：所有异常均继承自 `PointsError`，模型层与业务层对同一语义抛相同异常类型
 - **并发一致性**：并发消耗无超额、并发入账与消耗无异常

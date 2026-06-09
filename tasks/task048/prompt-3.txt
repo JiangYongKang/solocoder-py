@@ -1,0 +1,7 @@
+你之前修复的流水线分阶段执行器模块仍存在一些问题，需要继续修复：
+1. executor.py 的 _process_single_item_at_stage 方法中，for 重试循环后面有一段代码永远不会被执行，因为循环内部每个分支都以 return 语句退出，循环不可能自然结束到达那段代码。
+2. executor.py 的 _stage_worker 方法中，当数据项处理成功但无法入队下游队列被回滚标记为 CANCELLED 时，success_count 和 cancelled_count 被调整了，但 processed_count 没有同步回退，导致该阶段的 processed_count 不等于 success + failed + cancelled 之和。
+3. executor.py 的 _sleep_checking_cancel 方法在 retry_delay 等待期间只检查了取消标志，没有主动检测超时。当前超时检测依赖外部主轮询线程，如果未来轮询间隔调整，retry_delay 期间的超时检测会失效。
+4. 测试中缺少对每个阶段 StageResult 的 processed_count 是否等于 success + failed + cancelled 之和的逐阶段计数器一致性校验。
+5. 修复后需要补充相关测试，覆盖阶段级计数器一致性。
+6. 重新运行 poetry run pytest tests/pipeline/ -q，需要让所有测试通过。

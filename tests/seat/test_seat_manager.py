@@ -617,7 +617,8 @@ class TestSystemClock:
         t1 = clock.now()
         clock.sleep(0.05)
         t2 = clock.now()
-        assert t2 >= t1
+        elapsed = t2 - t1
+        assert elapsed >= 0.04, f"Expected sleep to advance time by at least ~0.05s, got {elapsed}s"
 
     def test_system_clock_with_manager(self):
         from solocoder_py.seat import SystemClock
@@ -635,6 +636,26 @@ class TestSystemClock:
             assert manager.count_available() == 6
         finally:
             manager.shutdown()
+
+
+class TestManualClock:
+    def test_sleep_records_history(self):
+        clock = ManualClock()
+        clock.sleep(10.0)
+        clock.sleep(20.0)
+        assert clock.sleep_history == [10.0, 20.0]
+
+    def test_sleep_advances_time(self):
+        clock = ManualClock()
+        t1 = clock.now()
+        clock.sleep(100.0)
+        t2 = clock.now()
+        assert t2 - t1 == 100.0
+
+    def test_sleep_negative_rejected(self):
+        clock = ManualClock()
+        with pytest.raises(ValueError, match="Cannot sleep for negative seconds"):
+            clock.sleep(-1.0)
 
 
 class TestManagerConfiguration:
@@ -658,10 +679,10 @@ class TestActiveAutoRelease:
         manager.reserve_seat(0, 0, "user-1")
         manager.reserve_seat(0, 1, "user-2")
         manager.reserve_seat(1, 0, "user-3")
-        assert manager._cleanup_expired_reservations() == 0
+        assert manager.cleanup_expired_reservations() == 0
 
         clock.advance(61.0)
-        released = manager._cleanup_expired_reservations()
+        released = manager.cleanup_expired_reservations()
         assert released == 3
         assert manager.count_available() == 15
 
@@ -676,7 +697,7 @@ class TestActiveAutoRelease:
         clock.advance(30.0)
         manager.reserve_seat(0, 1, "user-2")
         clock.advance(31.0)
-        released = manager._cleanup_expired_reservations()
+        released = manager.cleanup_expired_reservations()
         assert released == 1
         assert manager.get_seat(0, 0).state == SeatState.AVAILABLE
         assert manager.get_seat(0, 1).state == SeatState.RESERVED
@@ -692,7 +713,7 @@ class TestActiveAutoRelease:
         manager.confirm_occupancy(0, 0, "user-1")
         manager.reserve_seat(0, 1, "user-2")
         clock.advance(100.0)
-        released = manager._cleanup_expired_reservations()
+        released = manager.cleanup_expired_reservations()
         assert released == 1
         assert manager.get_seat(0, 0).state == SeatState.OCCUPIED
         assert manager.get_seat(0, 1).state == SeatState.AVAILABLE
@@ -709,19 +730,9 @@ class TestActiveAutoRelease:
         try:
             manager.reserve_seat(0, 0, "user-1")
             manager.reserve_seat(0, 1, "user-2")
-            with manager._lock:
-                count_reserved = sum(
-                    1 for s in manager._seats.values()
-                    if s.state == SeatState.RESERVED
-                )
-            assert count_reserved == 2
+            assert manager.count_reserved() == 2
             time.sleep(0.2)
-            with manager._lock:
-                count_reserved = sum(
-                    1 for s in manager._seats.values()
-                    if s.state == SeatState.RESERVED
-                )
-            assert count_reserved == 0
+            assert manager.count_reserved() == 0
         finally:
             manager.shutdown()
 
@@ -737,9 +748,9 @@ class TestActiveAutoRelease:
         try:
             manager.reserve_seat(0, 0, "user-1")
             time.sleep(0.2)
-            with manager._lock:
-                seat = manager._seats[SeatId(row=0, column=0)]
-                assert seat.state == SeatState.AVAILABLE
+            seat = manager.get_seat(0, 0)
+            assert seat is not None
+            assert seat.state == SeatState.AVAILABLE
         finally:
             manager.shutdown()
 
@@ -751,11 +762,9 @@ class TestActiveAutoRelease:
             cleanup_interval=0.01,
             clock=SystemClock(),
         )
-        assert manager._cleanup_thread is not None
-        assert manager._cleanup_thread.is_alive() is True
+        assert manager.is_cleanup_active is True
         manager.shutdown()
-        assert manager._cleanup_thread is None
-        assert manager._stop_cleanup.is_set() is True
+        assert manager.is_cleanup_active is False
 
     def test_shutdown_idempotent(self):
         from solocoder_py.seat import SystemClock
@@ -767,4 +776,28 @@ class TestActiveAutoRelease:
         )
         manager.shutdown()
         manager.shutdown()
-        assert manager._cleanup_thread is None
+        assert manager.is_cleanup_active is False
+
+    def test_cleanup_errors_recorded(self):
+        from solocoder_py.seat import SystemClock
+
+        manager = SeatReservationManager(
+            rows=2, columns=3,
+            cleanup_interval=0.01,
+            clock=SystemClock(),
+        )
+        try:
+            assert len(manager.cleanup_errors) == 0
+            original_cleanup = manager.cleanup_expired_reservations
+
+            def broken_cleanup():
+                raise RuntimeError("cleanup is broken")
+
+            manager.cleanup_expired_reservations = broken_cleanup
+            time.sleep(0.1)
+            manager.cleanup_expired_reservations = original_cleanup
+            assert len(manager.cleanup_errors) >= 1
+            assert isinstance(manager.cleanup_errors[-1][1], RuntimeError)
+            assert str(manager.cleanup_errors[-1][1]) == "cleanup is broken"
+        finally:
+            manager.shutdown()

@@ -91,7 +91,8 @@ class Refund:
     created_at: datetime = field(default_factory=datetime.now)
     reviewed_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    chargeback_id: Optional[str] = None
+    chargeback_ids: List[str] = field(default_factory=list)
+    charged_back_amount: Decimal = field(default_factory=lambda: Decimal("0"))
     _state_machine: RefundStateMachine = field(
         default_factory=lambda: RefundStateMachine(RefundState.REFUND_REQUESTED)
     )
@@ -99,6 +100,12 @@ class Refund:
     def __post_init__(self) -> None:
         if self.amount <= 0:
             raise InvalidRefundAmountError("Refund amount must be positive")
+        if self.charged_back_amount < 0:
+            raise ValueError("charged_back_amount cannot be negative")
+        if self.charged_back_amount > self.amount:
+            raise ValueError(
+                "charged_back_amount cannot exceed refund amount"
+            )
 
     @property
     def state(self) -> RefundState:
@@ -122,7 +129,33 @@ class Refund:
 
     @property
     def can_be_charged_back(self) -> bool:
-        return self.state in (RefundState.UNDER_REVIEW, RefundState.REFUNDED)
+        return self.state in (
+            RefundState.UNDER_REVIEW,
+            RefundState.REFUNDED,
+            RefundState.PARTIALLY_CHARGED_BACK,
+        )
+
+    @property
+    def is_fully_charged_back(self) -> bool:
+        return self.charged_back_amount >= self.amount
+
+    @property
+    def is_partially_charged_back(self) -> bool:
+        return (
+            self.charged_back_amount > Decimal("0")
+            and not self.is_fully_charged_back
+        )
+
+    @property
+    def remaining_chargeable_amount(self) -> Decimal:
+        return self.amount - self.charged_back_amount
+
+    def can_accept_chargeback(self, amount: Decimal) -> bool:
+        if amount <= 0:
+            return False
+        if not self.can_be_charged_back:
+            return False
+        return amount <= self.remaining_chargeable_amount
 
     def start_review(self) -> None:
         self._state_machine.transition_to(RefundState.UNDER_REVIEW)
@@ -140,10 +173,25 @@ class Refund:
         self._state_machine.transition_to(RefundState.CANCELLED)
         self.completed_at = datetime.now()
 
-    def apply_chargeback(self, chargeback_id: str) -> None:
-        self._state_machine.transition_to(RefundState.CHARGED_BACK)
-        self.chargeback_id = chargeback_id
-        self.completed_at = datetime.now()
+    def apply_chargeback(self, chargeback_id: str, amount: Decimal) -> None:
+        if not self.can_accept_chargeback(amount):
+            raise ChargebackAmountError(
+                f"Refund {self.id} cannot accept chargeback amount {amount}. "
+                f"Remaining chargeable: {self.remaining_chargeable_amount}, "
+                f"State: {self.state.value}"
+            )
+        self.charged_back_amount += amount
+        if chargeback_id not in self.chargeback_ids:
+            self.chargeback_ids.append(chargeback_id)
+        if self.is_fully_charged_back:
+            if self.state != RefundState.CHARGED_BACK:
+                self._state_machine.transition_to(RefundState.CHARGED_BACK)
+                self.completed_at = datetime.now()
+        else:
+            if self.state not in (
+                RefundState.PARTIALLY_CHARGED_BACK,
+            ):
+                self._state_machine.transition_to(RefundState.PARTIALLY_CHARGED_BACK)
 
 
 def make_payment(user_id: str, amount: Decimal, currency: str = "CNY") -> Payment:

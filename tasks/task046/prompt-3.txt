@@ -1,0 +1,9 @@
+你之前修复的装箱分配调度器模块仍存在以下问题，需要继续修复：
+
+1. test_packing.py 中 TestStrategyDifference 的策略对比测试都使用了两种策略都能成功的温和场景，没有覆盖 Best-Fit 能装完所有物品而 First-Fit 装不完的核心场景。例如 bins=[5,4,3], items=[3,3,2,2,2] 时 First-Fit 会产生 unpacked_items，Best-Fit 则全部成功，这种成功/失败差异才是验证两种策略本质区别的关键。
+
+2. scheduler.py 的 pack 方法已经不再抛出 InsufficientCapacityError 异常，但 __init__.py 仍将其纳入导出列表，exceptions.py 也保留了该异常类定义。调用方可以导入一个永远不会被抛出的异常，形成死代码。
+
+3. README.md 的策略对比示例仅展示了两种策略产生不同分配位置，没有展示 Best-Fit 能装入而 First-Fit 不能装入的优势场景，读者无法理解两种策略的真实能力差异。
+
+4. 修复后重新运行 poetry run pytest tests/packing/ -q，需要让所有测试通过。

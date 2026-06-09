@@ -17,9 +17,5 @@ class InstanceAlreadyRegisteredError(RegistryError):
     pass
 
 
-class NoAvailableInstanceError(RegistryError):
-    pass
-
-
 class InvalidConfigError(RegistryError):
     pass

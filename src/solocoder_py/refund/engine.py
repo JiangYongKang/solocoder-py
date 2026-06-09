@@ -114,53 +114,86 @@ class RefundEngine:
                 raise RefundOwnershipError(
                     f"Refund {refund_id} does not belong to payment {payment_id}"
                 )
-            if not refund.can_be_charged_back:
+            if not refund.can_accept_chargeback(amount):
+                if amount > refund.remaining_chargeable_amount:
+                    raise ChargebackAmountError(
+                        f"Chargeback amount {amount} exceeds refund remaining "
+                        f"chargeable amount {refund.remaining_chargeable_amount}"
+                    )
                 raise RefundStateError(
-                    f"Cannot charge back refund in state: {refund.state.value}"
+                    f"Cannot charge back refund in state: {refund.state.value}. "
+                    f"Remaining chargeable: {refund.remaining_chargeable_amount}"
                 )
-            if amount > refund.amount:
+            needs_rollback = refund.state in (
+                RefundState.REFUNDED,
+                RefundState.PARTIALLY_CHARGED_BACK,
+            )
+            if needs_rollback and amount > payment.refunded_amount:
                 raise ChargebackAmountError(
-                    f"Chargeback amount {amount} exceeds refund amount {refund.amount}"
+                    f"Chargeback amount {amount} exceeds payment refunded amount {payment.refunded_amount}"
                 )
-            if refund.state == RefundState.REFUNDED:
-                payment.rollback_refunded_amount(amount)
+
             chargeback = make_chargeback(
                 payment_id=payment_id,
                 refund_id=refund_id,
                 amount=amount,
                 reason=reason,
             )
+            refund.apply_chargeback(chargeback.id, amount)
+            if needs_rollback:
+                payment.rollback_refunded_amount(amount)
             self._repo.save_chargeback(chargeback)
-            refund.apply_chargeback(chargeback.id)
         else:
             if amount > payment.refunded_amount:
                 raise ChargebackAmountError(
                     f"Chargeback amount {amount} exceeds total refunded amount {payment.refunded_amount}"
                 )
-            payment.rollback_refunded_amount(amount)
+
+            all_refunds = self._repo.find_refunds_by_payment_id(payment_id)
+            chargeable_refunds = sorted(
+                [
+                    r
+                    for r in all_refunds
+                    if r.state
+                    in (RefundState.REFUNDED, RefundState.PARTIALLY_CHARGED_BACK)
+                ],
+                key=lambda r: r.created_at,
+            )
+
+            allocation: list[tuple[Refund, Decimal]] = []
+            remaining = amount
+            for refund in chargeable_refunds:
+                if remaining <= 0:
+                    break
+                alloc_amount = min(refund.remaining_chargeable_amount, remaining)
+                if alloc_amount <= 0:
+                    continue
+                if not refund.can_accept_chargeback(alloc_amount):
+                    raise RefundStateError(
+                        f"Refund {refund.id} in state {refund.state.value} "
+                        f"cannot accept chargeback amount {alloc_amount}"
+                    )
+                allocation.append((refund, alloc_amount))
+                remaining -= alloc_amount
+
+            if remaining > 0:
+                raise ChargebackAmountError(
+                    f"Cannot allocate full chargeback amount {amount}. "
+                    f"Remaining unallocated: {remaining}"
+                )
+
             chargeback = make_chargeback(
                 payment_id=payment_id,
                 refund_id=None,
                 amount=amount,
                 reason=reason,
             )
-            self._repo.save_chargeback(chargeback)
 
-            all_refunds = self._repo.find_refunds_by_payment_id(payment_id)
-            refunded_refunds = sorted(
-                [r for r in all_refunds if r.state == RefundState.REFUNDED],
-                key=lambda r: r.created_at,
-            )
-            remaining = amount
-            for refund in refunded_refunds:
-                if remaining <= 0:
-                    break
-                if refund.amount <= remaining:
-                    refund.apply_chargeback(chargeback.id)
-                    remaining -= refund.amount
-                else:
-                    refund.apply_chargeback(chargeback.id)
-                    remaining = Decimal("0")
+            for refund, alloc_amount in allocation:
+                refund.apply_chargeback(chargeback.id, alloc_amount)
+
+            payment.rollback_refunded_amount(amount)
+            self._repo.save_chargeback(chargeback)
 
         payment.chargeback_ids.append(chargeback.id)
         return chargeback

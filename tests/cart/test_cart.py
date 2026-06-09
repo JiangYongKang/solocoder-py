@@ -13,7 +13,7 @@ from solocoder_py.cart import (
     ProductNotFoundError,
     ProductOfflineError,
 )
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from .conftest import build_engine_with_products
 

@@ -3,7 +3,6 @@ from .exceptions import (
     InstanceAlreadyRegisteredError,
     InstanceNotFoundError,
     InvalidConfigError,
-    NoAvailableInstanceError,
     RegistryError,
     ServiceNotFoundError,
 )
@@ -16,7 +15,6 @@ __all__ = [
     "InstanceNotFoundError",
     "InvalidConfigError",
     "ManualClock",
-    "NoAvailableInstanceError",
     "RegistryConfig",
     "RegistryError",
     "ServiceInstance",

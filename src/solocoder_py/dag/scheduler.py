@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from .models import (
     CycleDetectedError,
@@ -59,9 +59,9 @@ class DAGScheduler:
                     f"Dependency '{dep_id}' not found for task '{task_id}'"
                 )
 
-        if self._would_create_cycle(task_id, deps):
-            cycle_path = self._find_cycle_path(task_id, deps)
-            cycle_info = " -> ".join(cycle_path + [task_id])
+        has_cycle, cycle_path = self._detect_cycle(task_id, deps)
+        if has_cycle:
+            cycle_info = " -> ".join(cycle_path + [cycle_path[0]])
             raise CycleDetectedError(
                 f"Adding dependencies for '{task_id}' would create a cycle: {cycle_info}"
             )
@@ -96,11 +96,11 @@ class DAGScheduler:
         if dependency_id in task.dependencies:
             return
 
-        if self._would_create_cycle(task_id, task.dependencies + [dependency_id]):
-            cycle_path = self._find_cycle_path(
-                task_id, task.dependencies + [dependency_id]
-            )
-            cycle_info = " -> ".join(cycle_path + [task_id])
+        has_cycle, cycle_path = self._detect_cycle(
+            task_id, task.dependencies + [dependency_id]
+        )
+        if has_cycle:
+            cycle_info = " -> ".join(cycle_path + [cycle_path[0]])
             raise CycleDetectedError(
                 f"Adding dependency '{dependency_id}' -> '{task_id}' would create a cycle: {cycle_info}"
             )
@@ -228,37 +228,9 @@ class DAGScheduler:
                 result.append(dep)
                 self._collect_downstream(dep, visited, result)
 
-    def _would_create_cycle(self, new_task_id: str, dependencies: List[str]) -> bool:
-        WHITE, GRAY, BLACK = 0, 1, 2
-        color: Dict[str, int] = {tid: WHITE for tid in self._tasks}
-        color[new_task_id] = WHITE
-
-        adjacency: Dict[str, List[str]] = {}
-        for tid, task in self._tasks.items():
-            adjacency[tid] = list(task.dependencies)
-        adjacency[new_task_id] = list(dependencies)
-
-        def dfs(node: str) -> bool:
-            color[node] = GRAY
-            for neighbor in adjacency.get(node, []):
-                if neighbor not in color:
-                    continue
-                if color[neighbor] == GRAY:
-                    return True
-                if color[neighbor] == WHITE and dfs(neighbor):
-                    return True
-            color[node] = BLACK
-            return False
-
-        for node in list(color.keys()):
-            if color[node] == WHITE:
-                if dfs(node):
-                    return True
-        return False
-
-    def _find_cycle_path(
+    def _detect_cycle(
         self, new_task_id: str, dependencies: List[str]
-    ) -> List[str]:
+    ) -> Tuple[bool, List[str]]:
         adjacency: Dict[str, List[str]] = {}
         for tid, task in self._tasks.items():
             adjacency[tid] = list(task.dependencies)
@@ -289,9 +261,9 @@ class DAGScheduler:
         for node in adjacency:
             if color[node] == WHITE:
                 if dfs(node):
-                    break
+                    return True, found_cycle
 
-        return found_cycle
+        return False, []
 
     def _propagate_success(self, completed_task_id: str) -> None:
         for dependent_id in self._dependents.get(completed_task_id, set()):

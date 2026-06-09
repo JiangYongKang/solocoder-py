@@ -340,6 +340,42 @@ class TestStrategyDifference:
         assert bf_utils[bf_result.packed_bins[0].id] == 0.0
         assert bf_utils[bf_result.packed_bins[2].id] == 1.0
 
+    def test_best_fit_succeeds_where_first_fit_fails(self, make_scheduler, make_item, make_bin):
+        scheduler = make_scheduler()
+        bins = [
+            make_bin(capacity=6),
+            make_bin(capacity=5),
+            make_bin(capacity=5),
+        ]
+        items = [
+            make_item(size=4, name="A"),
+            make_item(size=3, name="B"),
+            make_item(size=3, name="C"),
+            make_item(size=3, name="D"),
+            make_item(size=2, name="E"),
+        ]
+
+        ff_result = scheduler.first_fit(items, bins)
+        bf_result = scheduler.best_fit(items, bins)
+
+        assert ff_result.success is False
+        assert len(ff_result.unpacked_items) == 1
+        assert ff_result.unpacked_items[0].name in ("C", "D")
+        ff_total_packed = sum(len(b.items) for b in ff_result.packed_bins)
+        assert ff_total_packed == 4
+
+        assert bf_result.success is True
+        assert len(bf_result.unpacked_items) == 0
+        bf_total_packed = sum(len(b.items) for b in bf_result.packed_bins)
+        assert bf_total_packed == 5
+        bf_total_size = sum(
+            i.size for b in bf_result.packed_bins for i in b.items
+        )
+        assert bf_total_size == 15
+
+        assert bf_result.fragmentation_rate < ff_result.fragmentation_rate
+        assert bf_result.overall_utilization > ff_result.overall_utilization
+
 
 class TestEdgeCases:
     def test_item_exactly_fills_bin(self, make_scheduler, make_item, make_bin):

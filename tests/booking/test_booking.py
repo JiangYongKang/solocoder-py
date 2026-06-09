@@ -317,19 +317,27 @@ class TestHolidayManagement:
                 end_time=make_datetime(2026, 12, 25, 12),
             )
 
-    def test_booking_crosses_holiday_raises(self):
+    def test_booking_spans_holiday_splits_into_two_segments(self):
         engine, slots = build_engine_with_24h_slots(
             make_datetime(2026, 12, 24), 3, capacity=10
         )
         engine.add_holiday(date(2026, 12, 25))
 
-        with pytest.raises(TimeSlotConflictError):
-            engine.create_booking(
-                user_id="user-1",
-                start_time=make_datetime(2026, 12, 24, 20),
-                end_time=make_datetime(2026, 12, 26, 10),
-                quantity=1,
-            )
+        booking = engine.create_booking(
+            user_id="user-1",
+            start_time=make_datetime(2026, 12, 24, 20),
+            end_time=make_datetime(2026, 12, 26, 10),
+            quantity=1,
+        )
+        assert booking is not None
+        assert booking.start_time == make_datetime(2026, 12, 24, 20)
+        assert booking.end_time == make_datetime(2026, 12, 26, 10)
+        sub_starts = sorted([sb.start_time for sb in booking.sub_bookings])
+        sub_ends = sorted([sb.end_time for sb in booking.sub_bookings])
+        assert sub_starts[0] == make_datetime(2026, 12, 24, 20)
+        assert sub_ends[-1] == make_datetime(2026, 12, 26, 10)
+        for sb in booking.sub_bookings:
+            assert sb.start_time.date() != date(2026, 12, 25)
 
     def test_booking_around_holiday_succeeds(self):
         engine, slots = build_engine_with_24h_slots(
@@ -355,21 +363,103 @@ class TestHolidayManagement:
         assert booking2 is not None
         assert len(booking2.sub_bookings) == 4
 
-    def test_holiday_slot_spanning_midnight(self):
+    def test_book_non_holiday_part_of_cross_midnight_holiday_slot(self):
         engine = BookingEngine()
-        engine.create_time_slot(
+        slot = engine.create_time_slot(
             make_datetime(2026, 12, 24, 22),
             make_datetime(2026, 12, 25, 2),
             capacity=10,
         )
         engine.add_holiday(date(2026, 12, 25))
 
-        with pytest.raises(TimeSlotConflictError):
-            engine.create_booking(
-                user_id="user-1",
-                start_time=make_datetime(2026, 12, 24, 23),
-                end_time=make_datetime(2026, 12, 25, 1),
-            )
+        booking = engine.create_booking(
+            user_id="user-1",
+            start_time=make_datetime(2026, 12, 24, 23),
+            end_time=make_datetime(2026, 12, 25, 1),
+        )
+        assert booking is not None
+        assert len(booking.sub_bookings) == 1
+        assert booking.sub_bookings[0].slot_id == slot.id
+        assert booking.sub_bookings[0].start_time == make_datetime(2026, 12, 24, 23)
+        assert booking.sub_bookings[0].end_time == make_datetime(2026, 12, 25, 0)
+        assert slot.booked_count == 1
+
+    def test_book_non_holiday_part_of_cross_holiday_slot(self):
+        engine = BookingEngine()
+        slot = engine.create_time_slot(
+            make_datetime(2026, 12, 24, 22),
+            make_datetime(2026, 12, 25, 2),
+            capacity=5,
+        )
+        engine.add_holiday(date(2026, 12, 25))
+
+        booking = engine.create_booking(
+            user_id="user-1",
+            start_time=make_datetime(2026, 12, 24, 22),
+            end_time=make_datetime(2026, 12, 24, 23),
+            quantity=2,
+        )
+        assert booking is not None
+        assert booking.user_id == "user-1"
+        assert len(booking.sub_bookings) == 1
+        assert booking.sub_bookings[0].slot_id == slot.id
+        assert booking.sub_bookings[0].start_time == make_datetime(2026, 12, 24, 22)
+        assert booking.sub_bookings[0].end_time == make_datetime(2026, 12, 24, 23)
+        assert booking.total_quantity() == 2
+        assert slot.booked_count == 2
+
+    def test_cross_holiday_slot_appears_in_available_slots(self):
+        engine = BookingEngine()
+        slot = engine.create_time_slot(
+            make_datetime(2026, 12, 24, 22),
+            make_datetime(2026, 12, 25, 2),
+            capacity=10,
+        )
+        slot_xmas_only = engine.create_time_slot(
+            make_datetime(2026, 12, 25, 10),
+            make_datetime(2026, 12, 25, 12),
+            capacity=10,
+        )
+        engine.add_holiday(date(2026, 12, 25))
+
+        available = engine.get_available_slots(
+            make_datetime(2026, 12, 24, 0),
+            make_datetime(2026, 12, 26, 0),
+        )
+        available_ids = {s.id for s in available}
+        assert slot.id in available_ids
+        assert slot_xmas_only.id not in available_ids
+
+    def test_book_non_holiday_part_at_start_of_cross_holiday_slot(self):
+        engine = BookingEngine()
+        slot = engine.create_time_slot(
+            make_datetime(2026, 12, 31, 22),
+            make_datetime(2027, 1, 1, 4),
+            capacity=5,
+        )
+        engine.add_holiday(date(2027, 1, 1))
+
+        booking = engine.create_booking(
+            user_id="user-1",
+            start_time=make_datetime(2026, 12, 31, 23),
+            end_time=make_datetime(2027, 1, 1, 1),
+        )
+        assert booking is not None
+        assert len(booking.sub_bookings) == 1
+        assert booking.sub_bookings[0].slot_id == slot.id
+        assert booking.sub_bookings[0].start_time == make_datetime(2026, 12, 31, 23)
+        assert booking.sub_bookings[0].end_time == make_datetime(2027, 1, 1, 0)
+        assert slot.booked_count == 1
+
+        booking2 = engine.create_booking(
+            user_id="user-2",
+            start_time=make_datetime(2026, 12, 31, 22),
+            end_time=make_datetime(2026, 12, 31, 23, 30),
+            quantity=1,
+        )
+        assert booking2 is not None
+        assert len(booking2.sub_bookings) == 1
+        assert slot.booked_count == 2
 
 
 class TestSingleSlotBooking:

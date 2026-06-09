@@ -13,6 +13,7 @@ class TestRefundState:
         assert RefundState.UNDER_REVIEW.value == "审核中"
         assert RefundState.REFUNDED.value == "已退款"
         assert RefundState.REJECTED.value == "已拒绝"
+        assert RefundState.PARTIALLY_CHARGED_BACK.value == "部分拒付"
         assert RefundState.CHARGED_BACK.value == "已拒付"
         assert RefundState.CANCELLED.value == "已取消"
 
@@ -32,21 +33,33 @@ class TestRefundStateMachine:
         assert sm.can_transition_to(RefundState.CANCELLED)
         assert not sm.can_transition_to(RefundState.REFUNDED)
         assert not sm.can_transition_to(RefundState.REJECTED)
+        assert not sm.can_transition_to(RefundState.PARTIALLY_CHARGED_BACK)
         assert not sm.can_transition_to(RefundState.CHARGED_BACK)
 
     def test_valid_transitions_from_under_review(self):
         sm = RefundStateMachine(RefundState.UNDER_REVIEW)
         assert sm.can_transition_to(RefundState.REFUNDED)
         assert sm.can_transition_to(RefundState.REJECTED)
+        assert sm.can_transition_to(RefundState.PARTIALLY_CHARGED_BACK)
         assert sm.can_transition_to(RefundState.CHARGED_BACK)
         assert not sm.can_transition_to(RefundState.REFUND_REQUESTED)
         assert not sm.can_transition_to(RefundState.CANCELLED)
 
     def test_valid_transitions_from_refunded(self):
         sm = RefundStateMachine(RefundState.REFUNDED)
+        assert sm.can_transition_to(RefundState.PARTIALLY_CHARGED_BACK)
         assert sm.can_transition_to(RefundState.CHARGED_BACK)
         assert not sm.can_transition_to(RefundState.REFUND_REQUESTED)
         assert not sm.can_transition_to(RefundState.UNDER_REVIEW)
+        assert not sm.can_transition_to(RefundState.REJECTED)
+        assert not sm.can_transition_to(RefundState.CANCELLED)
+
+    def test_valid_transitions_from_partially_charged_back(self):
+        sm = RefundStateMachine(RefundState.PARTIALLY_CHARGED_BACK)
+        assert sm.can_transition_to(RefundState.CHARGED_BACK)
+        assert not sm.can_transition_to(RefundState.REFUND_REQUESTED)
+        assert not sm.can_transition_to(RefundState.UNDER_REVIEW)
+        assert not sm.can_transition_to(RefundState.REFUNDED)
         assert not sm.can_transition_to(RefundState.REJECTED)
         assert not sm.can_transition_to(RefundState.CANCELLED)
 
@@ -96,6 +109,32 @@ class TestRefundStateMachine:
         sm.transition_to(RefundState.REFUNDED)
         sm.transition_to(RefundState.CHARGED_BACK)
         assert sm.state == RefundState.CHARGED_BACK
+
+    def test_partial_chargeback_from_refunded(self):
+        sm = RefundStateMachine()
+        sm.transition_to(RefundState.UNDER_REVIEW)
+        sm.transition_to(RefundState.REFUNDED)
+        sm.transition_to(RefundState.PARTIALLY_CHARGED_BACK)
+        assert sm.state == RefundState.PARTIALLY_CHARGED_BACK
+
+    def test_partial_chargeback_then_full(self):
+        sm = RefundStateMachine()
+        sm.transition_to(RefundState.UNDER_REVIEW)
+        sm.transition_to(RefundState.REFUNDED)
+        sm.transition_to(RefundState.PARTIALLY_CHARGED_BACK)
+        sm.transition_to(RefundState.CHARGED_BACK)
+        assert sm.state == RefundState.CHARGED_BACK
+
+    def test_partial_chargeback_from_under_review(self):
+        sm = RefundStateMachine()
+        sm.transition_to(RefundState.UNDER_REVIEW)
+        sm.transition_to(RefundState.PARTIALLY_CHARGED_BACK)
+        assert sm.state == RefundState.PARTIALLY_CHARGED_BACK
+
+    def test_cannot_go_back_from_partial_to_refunded(self):
+        sm = RefundStateMachine(RefundState.PARTIALLY_CHARGED_BACK)
+        with pytest.raises(InvalidStateTransitionError):
+            sm.transition_to(RefundState.REFUNDED)
 
     def test_invalid_transition_raises_error(self):
         sm = RefundStateMachine()
