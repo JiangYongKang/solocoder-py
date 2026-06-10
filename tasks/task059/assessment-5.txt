@@ -1,0 +1,8 @@
+产物不满意：
+1. test_block_strategy_bounds_buffer 移除允许 blk-late 被标 DROPPED 的容错断言改为 handler 释放前无记录释放后必须 SUCCESS 消除了矛盾。但测试 sleep 0.2 秒就断言 blk-late 无记录而 _enqueue_for_subscriber 的 BLOCK 有 1.0 秒超时丢弃，虽断言方向是"无记录"不会误报但等待偏短可能间歇不一致。根因是只消除矛盾未审视 sleep 与异步机制匹配，应评估每个等待点是否给异步操作留够时间。测试虽通过但隐藏了时序假设偏紧的隐患。
+2. test_clear_records_dropped_for_buffered_messages 在 clear() 前正确验证了 unsubscribe 触发残留 DROPPED 记录断言 dropped_count==2 且 error_message 含"stopped"覆盖了上轮缺失的路径产出。但只查了 clear-sub 记录订阅 other-topic 的 other-sub 未验证其不受 unsubscribe 影响，若 clear() 有 bug 误清无关订阅者记录测试无法发现。根因是验证范围只覆盖目标订阅者，应额外断言 other-sub 在 clear 后数量不变。
+
+过程不满意：
+1. 模型收到提示词后第一步就用 todo_write 建计划再读测试文件违反先分析后规划。全程只看测试文件从未阅读 pubsub.py 生产代码理解 BLOCK 超时丢弃在 _enqueue_for_subscriber 的 1.0 秒实现和 DROPPED 在 _stop_subscriber_dispatch 的循环逻辑使测试隐藏异步时序假设过紧的隐患。应先阅读三个关键方法理解完整时序再设计等待时长。
+2. 首次编写 clear 测试后失败因 clear-0 已从缓冲区取出进入 handler 不被 DROPPED 循环处理模型直接调整流程而不先读 _stop_subscriber_dispatch 源码理解 DROPPED 只处理 buffer 中消息的机制，属于依赖运行结果而非源码分析来调试降低了效率。
+3. 最终 pytest 命令为 `poetry run pytest tests/pubsub/ -q undefined` 末尾多出 `undefined` 字符串与 task054、task056 同一问题一致，反映模型 Shell 工具调用时某个参数字段未被正确赋值被意外序列化到命令文本中。虽 pytest 容错忽略多余参数但若该字符串出现在破坏性命令中可能造成严重后果属跨任务的系统性缺陷。

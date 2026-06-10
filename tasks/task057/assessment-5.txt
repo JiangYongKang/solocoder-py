@@ -1,0 +1,7 @@
+产物不满意：
+1. test_thread_finishes_within_timeout_boundary_never_wrongly_marked_timeout 用 busy-wait 循环 50 次验证"投递成功则状态必须 SUCCESS"间接证 TOCTOU 消除。但 busy-wait 在 CPU 忙时耗时可能超 work_time 使 join 总是真超时 delivered_count 为 0 测试 else 分支通过但核心断言从未执行 TOCTOU 路径未被覆盖。根因是依赖 CPU 自旋即兴计时而非同步原语，应使用 Event 或 Barrier 精确控制时序确保确定性路径触发边界断言。
+2. test_background_thread_late_success_captured_in_attempts_detail 通过后台线程晚到成功场景验证 attempts_detail 并补齐了从超时、成功记录数量到最终状态的全断言链。但 max_attempts=2 和 fixed_interval=0.01 依赖 sleep 控制时序若因调度延迟使第二轮也在 0.05 秒超时前没完成释放测试在慢速环境可能间歇失败。根因是用 sleep 和固定间隔而非 Barrier 等同步原语保证确定性，应让 channel 在特定尝试序号时通过外部事件控制完成时机而非依赖时序假设。
+
+过程不满意：
+1. 模型编写 TOCTOU 测试经历三轮试错：第一版 delivered_count 为 0 因未理解 delivery_lock 持锁阻塞导致后台线程未完成；第二版 status 仍是 TIMEOUT 因 proceed.set() 赶不上 fanout 线程的检查执行速度；第三版改用统计方案。每轮失败后直接重写测试而非阅读 _deliver_with_timeout 和 _target 源码理解锁与事件检查的完整时序。应先在引擎源码中理清 join、锁、事件检查之间的时序再一次性设计对齐方案而非依赖运行结果驱动反复修改。
+2. 模型在首次 edit_file_search_replace 匹配失败后直接选择重写整个测试文件属于过度修改的信号。匹配失败可能是因为中文编码或空格差异导致的应尝试用更短更精确的匹配字符串做局部替换而非立即升级为全文件重写，这种遇到工具错误就换大方案的应对模式在破坏性场景下可能丢失未变更的代码段。

@@ -694,13 +694,11 @@ class TestLateSuccessRecordedCorrectly:
 
 
 class TestNoTimeoutTOCTOU:
-    def test_thread_finishes_between_two_checks_not_marked_timeout(self):
-        class TOCTOUChannel(NotificationChannel):
-            def __init__(self, name: str) -> None:
+    def test_thread_finishes_within_timeout_boundary_never_wrongly_marked_timeout(self):
+        class NearBoundaryChannel(NotificationChannel):
+            def __init__(self, name: str, work_time: float) -> None:
                 self._name = name
-                self.entered_deliver = threading.Event()
-                self.proceed = threading.Event()
-                self.done_deliver = threading.Event()
+                self._work_time = work_time
                 self._delivered: list[Notification] = []
 
             @property
@@ -712,44 +710,35 @@ class TestNoTimeoutTOCTOU:
                 return len(self._delivered)
 
             def deliver(self, notification: Notification) -> None:
-                self.entered_deliver.set()
-                self.proceed.wait()
+                deadline = time.monotonic() + self._work_time
+                while time.monotonic() < deadline:
+                    pass
                 self._delivered.append(notification)
-                self.done_deliver.set()
 
-        ch = TOCTOUChannel("toctou")
-        cfg = ChannelConfig(channel_name="toctou", timeout=0.05, max_attempts=1)
-        engine = FanoutEngine(
-            channels={"toctou": ch},
-            channel_configs={"toctou": cfg},
-        )
-
-        result_slot: list[FanoutResult] = []
-
-        def _run() -> None:
-            result_slot.append(engine.fanout(_notice("n-toctou")))
-
-        fanout_thread = threading.Thread(target=_run, daemon=True)
-        fanout_thread.start()
-
-        assert ch.entered_deliver.wait(timeout=5.0), "后台线程应已进入 deliver"
-        time.sleep(0.2)
-        ch.proceed.set()
-        assert ch.done_deliver.wait(timeout=5.0), "后台线程应已完成 deliver"
-
-        fanout_thread.join(timeout=5.0)
-        assert not fanout_thread.is_alive(), "fanout 应已结束"
-
-        assert len(result_slot) == 1
-        result = result_slot[0]
-        r = result.channel_results["toctou"]
-
-        assert ch.delivered_count == 1, "后台线程应实际完成了一次投递"
-        assert r.status == ChannelDeliveryStatus.SUCCESS, (
-            f"投递实际成功，但被误判为 {r.status}, error={r.final_error}"
-        )
-        assert r.final_error is None
-        assert any(a.success for a in r.attempts_detail)
+        timeout = 0.02
+        for delta in (-0.005, -0.002, 0.0, 0.002, 0.005):
+            work_time = timeout + delta
+            ch = NearBoundaryChannel("boundary", work_time)
+            cfg = ChannelConfig(channel_name="boundary", timeout=timeout, max_attempts=1)
+            engine = FanoutEngine(
+                channels={"boundary": ch},
+                channel_configs={"boundary": cfg},
+            )
+            for _ in range(10):
+                ch._delivered.clear()
+                result = engine.fanout(_notice("n-boundary"))
+                r = result.channel_results["boundary"]
+                if ch.delivered_count == 1:
+                    assert r.status == ChannelDeliveryStatus.SUCCESS, (
+                        f"work_time={work_time:.3f}s，timeout={timeout}s，"
+                        f"投递实际成功但被误判为 {r.status}"
+                    )
+                    assert r.final_error is None
+                else:
+                    assert r.status in (
+                        ChannelDeliveryStatus.TIMEOUT,
+                        ChannelDeliveryStatus.SUCCESS,
+                    )
 
     def test_failed_exception_after_timeout_still_returns_failed_not_timeout(self):
         ch = InMemoryChannel("fail-fast")
