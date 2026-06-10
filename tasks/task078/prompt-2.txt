@@ -1,0 +1,7 @@
+你实现的工作日历模块存在一些问题，需要修复：
+1. README.md 中"自定义工作时段"部分的示例代码使用了 start 等于 end 的 WorkTimeRange，这会直接抛出 InvalidWorkHoursError，读者按文档复制示例代码将无法运行。需要修正示例使其使用合法的时段配置。
+2. is_work_time 方法判定时段边界时包含端点，但 add_work_hours 方法跳过时段终点，同一时刻在 is_work_time 和 add_work_hours 中得出矛盾的判定结果。需要统一两个方法对时段终点的边界处理逻辑。
+3. _next_workday_start 方法中寻找下一个工作日的 while 循环没有任何最大迭代保护，当全部日期都被配置为节假日时会导致死循环。需要对极端配置添加防御性检查。
+4. conftest.py 中定义的辅助函数在测试文件中全部未被引用，实际使用的工厂函数定义在测试文件自身内。需要统一工厂函数的存放位置，避免出现两份重复的函数集。
+5. test_workday_priority_over_holiday 测试的名称暗示验证调休日优先于节假日的优先级逻辑，但实际只测试了自然工作日保持为工作日的平凡场景，需要构造调休日与节假日冲突的配置来真正验证优先级。
+6. 修复上述问题后运行 poetry run pytest tests/work_calendar/ -v，确保所有测试通过。

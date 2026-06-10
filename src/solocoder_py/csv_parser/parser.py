@@ -82,6 +82,9 @@ class CSVParser:
                 else:
                     current_field_chars.append(ch)
                     if ch == "\n":
+                        if i == 0 or text[i - 1] != "\r":
+                            line_number += 1
+                    elif ch == "\r":
                         line_number += 1
                     i += 1
                     continue

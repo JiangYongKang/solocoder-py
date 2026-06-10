@@ -238,7 +238,7 @@ class TestMismatchedParentheses:
             evaluator.evaluate("(2 + 3")
 
     def test_extra_closing_parenthesis(self, evaluator):
-        with pytest.raises(ParseError):
+        with pytest.raises(MismatchedParenthesisError, match="Unexpected closing"):
             evaluator.evaluate("2 + 3)")
 
     def test_multiple_missing_closing(self, evaluator):
@@ -292,11 +292,11 @@ class TestEmptyExpression:
 
 class TestInvalidNumberFormat:
     def test_lone_dot(self, evaluator):
-        with pytest.raises(TokenizeError, match="Invalid number format"):
+        with pytest.raises(InvalidCharacterError, match="Invalid character"):
             evaluator.evaluate(".")
 
     def test_dot_between_operators(self, evaluator):
-        with pytest.raises(TokenizeError):
+        with pytest.raises(InvalidCharacterError):
             evaluator.evaluate("2 + . + 3")
 
 

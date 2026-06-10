@@ -10,6 +10,7 @@ from .exceptions import (
     InvalidLoopError,
     TemplateSyntaxError,
     UnclosedTagError,
+    VariableNotFoundError,
 )
 
 
@@ -129,16 +130,12 @@ class TemplateEngine:
                     current = current[part]
                 else:
                     if self.strict:
-                        from .exceptions import VariableNotFoundError
-
                         raise VariableNotFoundError(f"Variable not found: {name}")
                     return self._undefined_sentinel
             elif hasattr(current, part):
                 current = getattr(current, part)
             else:
                 if self.strict:
-                    from .exceptions import VariableNotFoundError
-
                     raise VariableNotFoundError(f"Variable not found: {name}")
                 return self._undefined_sentinel
         return current
@@ -180,7 +177,7 @@ class TemplateEngine:
         elif normalized == "endfor":
             return _Token(TokenType.ENDFOR, "")
         else:
-            raise InvalidConditionError(f"Unknown tag: {content}")
+            raise TemplateSyntaxError(f"Unknown tag: {content}")
 
     def _parse(self, tokens: list[_Token]) -> list[_ASTNode]:
         nodes: list[_ASTNode] = []
@@ -222,15 +219,10 @@ class TemplateEngine:
                 block, i = self._parse_for_block(tokens, i)
                 current_branch.append(block)
             elif token.type == TokenType.ELSE:
-                if depth == 1:
-                    current_branch = else_branch
-                else:
-                    current_branch.append(_TextNode(""))
+                current_branch = else_branch
                 i += 1
             elif token.type == TokenType.ENDIF:
                 depth -= 1
-                if depth > 0:
-                    current_branch.append(_TextNode(""))
                 i += 1
             elif token.type == TokenType.TEXT:
                 current_branch.append(_TextNode(token.value))
@@ -271,8 +263,6 @@ class TemplateEngine:
                 body.append(block)
             elif token.type == TokenType.ENDFOR:
                 depth -= 1
-                if depth > 0:
-                    body.append(_TextNode(""))
                 i += 1
             elif token.type == TokenType.TEXT:
                 body.append(_TextNode(token.value))

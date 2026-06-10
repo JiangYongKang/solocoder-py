@@ -26,7 +26,6 @@ class SlaTimer:
     _status: SlaTimerStatus = SlaTimerStatus.NOT_STARTED
     _start_time: Optional[datetime] = None
     _pause_records: List[PauseRecord] = field(default_factory=list)
-    _accumulated_work_hours_before_pause: float = 0.0
 
     def __post_init__(self) -> None:
         if self.total_work_hours <= 0:
@@ -70,7 +69,6 @@ class SlaTimer:
         self._start_time = current_time
         self._status = SlaTimerStatus.RUNNING
         self._pause_records = []
-        self._accumulated_work_hours_before_pause = 0.0
 
         self._check_expiration(current_time)
 
@@ -95,7 +93,6 @@ class SlaTimer:
             work_hours_before_pause=elapsed_before_pause,
         )
         self._pause_records.append(pause_record)
-        self._accumulated_work_hours_before_pause = elapsed_before_pause
         self._status = SlaTimerStatus.PAUSED
 
     def resume(self, resume_time: Optional[datetime] = None) -> None:
@@ -115,7 +112,6 @@ class SlaTimer:
         if self._pause_records and self._pause_records[-1].is_active:
             self._pause_records[-1].resume_time = current_time
 
-        self._start_time = current_time
         self._status = SlaTimerStatus.RUNNING
 
     def get_status(self, current_time: Optional[datetime] = None) -> SlaTimerResult:
@@ -193,39 +189,78 @@ class SlaTimer:
 
         return current_time
 
-    def _get_effective_start_time(self) -> datetime:
-        if not self._pause_records:
-            return self._start_time
-
+    def _get_last_resume_time(self) -> Optional[datetime]:
         last_resume_time = None
         for record in reversed(self._pause_records):
             if record.resume_time is not None:
                 last_resume_time = record.resume_time
                 break
+        return last_resume_time
 
+    def _get_effective_start_time(self) -> datetime:
+        if self._start_time is None:
+            raise SlaTimerNotStartedError("SLA timer has not been started")
+
+        last_resume_time = self._get_last_resume_time()
         if last_resume_time is not None:
             return last_resume_time
         return self._start_time
+
+    def _get_accumulated_hours_before(self, target_time: datetime) -> float:
+        if self._start_time is None:
+            raise SlaTimerNotStartedError("SLA timer has not been started")
+
+        timeline = [(self._start_time, 'start')]
+        for record in self._pause_records:
+            timeline.append((record.pause_time, 'pause'))
+            if record.resume_time is not None:
+                timeline.append((record.resume_time, 'resume'))
+
+        timeline.sort(key=lambda x: x[0])
+
+        total_hours = 0.0
+        current_time = self._start_time
+        is_running = True
+
+        for event_time, event_type in timeline[1:]:
+            if event_time > target_time:
+                break
+
+            if event_time <= current_time:
+                if event_type == 'pause':
+                    is_running = False
+                elif event_type == 'resume':
+                    is_running = True
+                continue
+
+            if is_running:
+                total_hours += self._calculate_work_hours_between(current_time, event_time)
+
+            current_time = event_time
+
+            if event_type == 'pause':
+                is_running = False
+            elif event_type == 'resume':
+                is_running = True
+
+        if is_running and current_time < target_time:
+            total_hours += self._calculate_work_hours_between(current_time, target_time)
+
+        return min(total_hours, self.total_work_hours)
 
     def _calculate_elapsed_work_hours(self, current_time: datetime) -> float:
         if self._status == SlaTimerStatus.NOT_STARTED:
             return 0.0
 
-        if self._status == SlaTimerStatus.PAUSED:
-            return self._accumulated_work_hours_before_pause
-
         if self._status == SlaTimerStatus.EXPIRED:
             return self.total_work_hours
 
-        effective_start = self._get_effective_start_time()
+        if self._status == SlaTimerStatus.PAUSED:
+            if self._pause_records:
+                return self._pause_records[-1].work_hours_before_pause
+            return 0.0
 
-        if current_time <= effective_start:
-            return self._accumulated_work_hours_before_pause
-
-        additional_hours = self._calculate_work_hours_between(effective_start, current_time)
-        total = self._accumulated_work_hours_before_pause + additional_hours
-
-        return min(total, self.total_work_hours)
+        return self._get_accumulated_hours_before(current_time)
 
     def _calculate_work_hours_between(self, start: datetime, end: datetime) -> float:
         if end <= start:

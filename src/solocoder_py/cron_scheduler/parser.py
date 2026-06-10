@@ -159,19 +159,10 @@ class CronParser:
         if range_part == "*":
             return (min_val, max_val)
 
-        if "-" in range_part:
-            range_parts = range_part.split("-")
-            if len(range_parts) != 2:
-                raise CronParseError(
-                    f"Invalid range syntax in step segment for field '{FIELD_NAMES[field_type]}': '{range_part}'"
-                )
-            try:
-                start = int(range_parts[0])
-                end = int(range_parts[1])
-            except ValueError:
-                raise CronParseError(
-                    f"Invalid range values in field '{FIELD_NAMES[field_type]}': '{range_part}'"
-                )
+        range_match = _RANGE_PATTERN.match(range_part)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2))
             return (start, end)
 
         try:
@@ -181,32 +172,6 @@ class CronParser:
                 f"Invalid start value '{range_part}' in step segment for field '{FIELD_NAMES[field_type]}'"
             )
         return (start, max_val)
-
-    @classmethod
-    def _parse_range_segment(
-        cls,
-        segment: str,
-        field_type: FieldType,
-        min_val: int,
-        max_val: int,
-    ) -> Set[int]:
-        parts = segment.split("-")
-        if len(parts) != 2:
-            raise CronParseError(
-                f"Invalid range syntax in field '{FIELD_NAMES[field_type]}': '{segment}'"
-            )
-
-        try:
-            start = int(parts[0])
-            end = int(parts[1])
-        except ValueError:
-            raise CronParseError(
-                f"Invalid range values in field '{FIELD_NAMES[field_type]}': '{segment}'"
-            )
-
-        cls._validate_range(field_type, start, end, min_val, max_val)
-
-        return set(range(start, end + 1))
 
     @classmethod
     def _parse_single_value(

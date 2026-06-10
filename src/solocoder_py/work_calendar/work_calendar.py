@@ -39,11 +39,16 @@ class WorkCalendar:
         current = start_date
         direction = 1 if days > 0 else -1
         remaining = abs(days)
+        max_iterations = 3650
 
-        while remaining > 0:
+        while remaining > 0 and max_iterations > 0:
             current += timedelta(days=direction)
             if self.is_workday(current):
                 remaining -= 1
+            max_iterations -= 1
+
+        if remaining > 0:
+            raise NoWorkDayFoundError("Cannot find enough workdays within the search range")
 
         return current
 
@@ -103,8 +108,13 @@ class WorkCalendar:
                 return datetime.combine(current_date, work_start)
 
         next_date = current_date + timedelta(days=1)
-        while not self.is_workday(next_date):
+        max_iterations = 3650
+        while not self.is_workday(next_date) and max_iterations > 0:
             next_date += timedelta(days=1)
+            max_iterations -= 1
+
+        if not self.is_workday(next_date):
+            raise NoWorkDayFoundError("Cannot find any workday within the search range")
 
         return datetime.combine(next_date, schedule.morning.start)
 
@@ -160,10 +170,6 @@ class WorkCalendar:
 
     def set_holidays(self, holidays: Iterable[date]) -> None:
         holiday_set = set(holidays)
-        workday_set = set(self.config.workdays)
-        conflicting = holiday_set & workday_set
-        if conflicting:
-            raise ValueError(f"Dates cannot be both holiday and workday: {conflicting}")
         self.config = CalendarConfig(
             holidays=frozenset(holiday_set),
             workdays=self.config.workdays,
@@ -172,10 +178,6 @@ class WorkCalendar:
 
     def set_workdays(self, workdays: Iterable[date]) -> None:
         workday_set = set(workdays)
-        holiday_set = set(self.config.holidays)
-        conflicting = workday_set & holiday_set
-        if conflicting:
-            raise ValueError(f"Dates cannot be both holiday and workday: {conflicting}")
         self.config = CalendarConfig(
             holidays=self.config.holidays,
             workdays=frozenset(workday_set),

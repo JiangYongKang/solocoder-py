@@ -5,6 +5,8 @@ import pytest
 from solocoder_py.timeout_manager import (
     ContextAlreadyCancelledError,
     ContextCancelledError,
+    ContextNotFoundError,
+    InvalidCallbackError,
     InvalidDeadlineError,
     ManualClock,
     TimeoutContext,
@@ -102,7 +104,7 @@ class TestChildContextCreation:
             manager.create_child_context(parent.context_id, deadline=80.0)
 
     def test_create_child_on_nonexistent_parent_raises(self, manager: TimeoutManager):
-        with pytest.raises(ContextCancelledError):
+        with pytest.raises(ContextNotFoundError):
             manager.create_child_context("nonexistent-id", deadline=80.0)
 
     def test_create_child_with_both_deadline_and_timeout_raises(self, manager: TimeoutManager):
@@ -189,7 +191,7 @@ class TestCancellation:
         assert info.cancel_reason == "first"
 
     def test_cancel_nonexistent_context_raises(self, manager: TimeoutManager):
-        with pytest.raises(ContextCancelledError):
+        with pytest.raises(ContextNotFoundError):
             manager.cancel_context("nonexistent")
 
     def test_cancelled_context_not_active(self, manager: TimeoutManager):
@@ -447,7 +449,7 @@ class TestCallbacks:
 
     def test_add_none_callback_raises(self, manager: TimeoutManager):
         ctx = manager.create_root_context(100.0)
-        with pytest.raises(InvalidDeadlineError):
+        with pytest.raises(InvalidCallbackError):
             manager.add_callback(ctx.context_id, None)
 
     def test_callbacks_only_triggered_once(self, manager: TimeoutManager, clock: ManualClock):
@@ -691,7 +693,7 @@ class TestEdgeCases:
         ctx = manager.create_root_context(100.0)
         clock.set(100.0)
         manager.check_expired()
-        with pytest.raises(ContextCancelledError):
+        with pytest.raises(ContextAlreadyCancelledError):
             manager.create_child_context(ctx.context_id, deadline=50.0)
 
     def test_cancel_already_expired_context(self, manager: TimeoutManager, clock: ManualClock):
@@ -758,7 +760,34 @@ class TestExceptionMessages:
             assert False, "Expected ContextAlreadyCancelledError"
         except ContextAlreadyCancelledError as e:
             assert ctx.context_id in str(e)
-            assert "cancelled" in str(e).lower()
+            assert "terminal state" in str(e).lower()
+
+    def test_expired_context_error_message(self, manager: TimeoutManager, clock: ManualClock):
+        ctx = manager.create_root_context(100.0)
+        clock.set(100.0)
+        manager.check_expired()
+        try:
+            manager.create_child_context(ctx.context_id, deadline=50.0)
+            assert False, "Expected ContextAlreadyCancelledError"
+        except ContextAlreadyCancelledError as e:
+            assert ctx.context_id in str(e)
+            assert "terminal state" in str(e).lower()
+
+    def test_context_not_found_error_message(self, manager: TimeoutManager):
+        try:
+            manager.cancel_context("nonexistent-id")
+            assert False, "Expected ContextNotFoundError"
+        except ContextNotFoundError as e:
+            assert "nonexistent-id" in str(e)
+            assert "not found" in str(e).lower()
+
+    def test_invalid_callback_error_message(self, manager: TimeoutManager):
+        ctx = manager.create_root_context(100.0)
+        try:
+            manager.add_callback(ctx.context_id, None)
+            assert False, "Expected InvalidCallbackError"
+        except InvalidCallbackError as e:
+            assert "Callback cannot be None" in str(e)
 
     def test_invalid_deadline_error_message_past(self, manager: TimeoutManager, clock: ManualClock):
         clock.set(50.0)
@@ -768,3 +797,35 @@ class TestExceptionMessages:
         except InvalidDeadlineError as e:
             assert "30.0" in str(e)
             assert "50.0" in str(e)
+
+
+class TestAdditionalExceptionScenarios:
+    def test_add_callback_to_nonexistent_context_raises(self, manager: TimeoutManager):
+        def cb(ctx: TimeoutContext) -> None:
+            pass
+        with pytest.raises(ContextNotFoundError):
+            manager.add_callback("nonexistent", cb)
+
+    def test_get_nonexistent_context_returns_none(self, manager: TimeoutManager):
+        assert manager.get_context("nonexistent") is None
+
+    def test_is_active_nonexistent_context_returns_false(self, manager: TimeoutManager):
+        assert manager.is_active("nonexistent") is False
+
+    def test_cancelled_and_expired_are_mutually_exclusive(self, manager: TimeoutManager, clock: ManualClock):
+        ctx = manager.create_root_context(100.0)
+        manager.cancel_context(ctx.context_id, "cancelled first")
+        clock.set(200.0)
+        manager.check_expired()
+        info = manager.get_context(ctx.context_id)
+        assert info.is_cancelled is True
+        assert info.is_expired is False
+
+    def test_expired_and_cancelled_are_mutually_exclusive(self, manager: TimeoutManager, clock: ManualClock):
+        ctx = manager.create_root_context(100.0)
+        clock.set(100.0)
+        manager.check_expired()
+        manager.cancel_context(ctx.context_id, "late cancel")
+        info = manager.get_context(ctx.context_id)
+        assert info.is_expired is True
+        assert info.is_cancelled is False

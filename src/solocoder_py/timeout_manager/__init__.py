@@ -2,6 +2,8 @@ from .clock import Clock, ManualClock, SystemClock
 from .exceptions import (
     ContextAlreadyCancelledError,
     ContextCancelledError,
+    ContextNotFoundError,
+    InvalidCallbackError,
     InvalidDeadlineError,
     TimeoutManagerError,
 )
@@ -12,6 +14,8 @@ __all__ = [
     "Clock",
     "ContextAlreadyCancelledError",
     "ContextCancelledError",
+    "ContextNotFoundError",
+    "InvalidCallbackError",
     "InvalidDeadlineError",
     "ManualClock",
     "SystemClock",

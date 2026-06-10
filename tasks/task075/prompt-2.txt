@@ -1,0 +1,4 @@
+你实现的配置分层合并模块存在一些问题，需要修复：
+1. _deep_merge 方法中存在一段冗余的双重处理逻辑：第一个 for 循环遍历 lower-only keys 并 deepcopy，紧接着第二个 for 循环的 else 分支又对这些 key 做了完全相同的 deepcopy，同一批 key 被拷贝了两次。需要清理这段遗留代码。
+2. _validate_type_compatibility 方法只检测 dict 与 list 的类型冲突，对于 int 与 list 之间等基础类型与容器类型的覆盖完全静默处理。提示词要求覆盖"配置值类型冲突"场景，至少应将类型冲突检测扩展到基础类型与容器类型的互斥。对应的测试用例也应恢复其原有的异常期望。
+3. 修复上述问题后运行 poetry run pytest tests/config_merge/ -v，确保所有测试通过。

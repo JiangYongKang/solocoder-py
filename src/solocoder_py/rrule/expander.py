@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import List
 
 from .enums import Frequency
@@ -42,26 +42,7 @@ class RRuleExpander:
             raise ValueError(f"Unsupported frequency: {frequency}")
 
     def _add_days(self, current: date, days: int) -> date:
-        try:
-            return current.replace(day=current.day + days)
-        except ValueError:
-            month = current.month
-            year = current.year
-            remaining_days = days
-            while remaining_days > 0:
-                days_in_month = self._days_in_month(year, month)
-                if current.day + remaining_days <= days_in_month:
-                    return current.replace(
-                        year=year, month=month, day=current.day + remaining_days
-                    )
-                remaining_days -= days_in_month - current.day + 1
-                current = current.replace(day=1)
-                month += 1
-                if month > 12:
-                    month = 1
-                    year += 1
-                current = current.replace(year=year, month=month)
-            return current
+        return current + timedelta(days=days)
 
     def _add_months(self, current: date, months: int, original_day: int) -> date:
         total_months = current.year * 12 + current.month - 1 + months

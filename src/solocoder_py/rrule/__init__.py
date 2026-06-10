@@ -4,6 +4,7 @@ from .exceptions import (
     InvalidDateRangeError,
     InvalidFrequencyError,
     InvalidIntervalError,
+    MissingTerminationConditionError,
     RRuleError,
 )
 from .expander import RRuleExpander
@@ -17,5 +18,6 @@ __all__ = [
     "InvalidIntervalError",
     "InvalidDateRangeError",
     "InvalidCountError",
+    "MissingTerminationConditionError",
     "RRuleExpander",
 ]

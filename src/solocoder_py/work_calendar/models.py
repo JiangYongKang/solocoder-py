@@ -23,7 +23,7 @@ class WorkTimeRange:
         return (end_seconds - start_seconds) / 3600.0
 
     def contains(self, t: time) -> bool:
-        return self.start <= t <= self.end
+        return self.start <= t < self.end
 
 
 @dataclass
@@ -50,6 +50,4 @@ class CalendarConfig:
     work_schedule: WorkDaySchedule = field(default_factory=WorkDaySchedule)
 
     def __post_init__(self) -> None:
-        conflicting = self.holidays & self.workdays
-        if conflicting:
-            raise ValueError(f"Dates cannot be both holiday and workday: {conflicting}")
+        pass

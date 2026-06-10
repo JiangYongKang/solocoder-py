@@ -21,6 +21,10 @@ class Parser:
         ):
             raise EmptyExpressionError("Expression is empty")
         result = self._expression()
+        if self._current().type == TokenType.RPAREN:
+            raise MismatchedParenthesisError(
+                f"Unexpected closing parenthesis at position {self._current().position}"
+            )
         self._expect(TokenType.EOF)
         return result
 
@@ -80,6 +84,10 @@ class Parser:
                 )
             self._advance()
             return result
+        if token.type == TokenType.RPAREN:
+            raise MismatchedParenthesisError(
+                f"Unexpected closing parenthesis at position {token.position}"
+            )
         if token.type == TokenType.MINUS:
             self._advance()
             return -self._factor()

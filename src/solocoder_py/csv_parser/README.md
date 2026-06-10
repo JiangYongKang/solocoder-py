@@ -163,7 +163,7 @@ text = "a,b,c\n1,2\n3,4,5,6\n7,8,9"
 result = parser.parse(text)
 
 print(result.field_mismatch_lines)  # [2, 3]
-print(result.data)                  # [["1", "2", ""], ["3", "4", "5"], ["7",8,"9"]]
+print(result.data)                  # [["1", "2", ""], ["3", "4", "5"], ["7", "8", "9"]]
 ```
 
 ### 处理解析错误
@@ -191,7 +191,7 @@ parser = CSVParser(has_header=False)
 result = parser.parse("1,2,3\n4,5,6")
 
 print(result.header)  # None
-print(result.data)    # [["1", "2,3"], ["4",5,6]]
+print(result.data)    # [["1", "2", "3"], ["4", "5", "6"]]
 
 # 无表头模式下不检测字段数不一致
 result = parser.parse("1,2\n3,4,5,6")

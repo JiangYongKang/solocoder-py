@@ -16,3 +16,7 @@ class InvalidDateRangeError(RRuleError):
 
 class InvalidCountError(RRuleError):
     pass
+
+
+class MissingTerminationConditionError(RRuleError):
+    pass

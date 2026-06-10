@@ -10,6 +10,7 @@ from .exceptions import (
     InvalidDateRangeError,
     InvalidFrequencyError,
     InvalidIntervalError,
+    MissingTerminationConditionError,
 )
 
 
@@ -46,7 +47,7 @@ class RRule:
             )
 
         if self.end_date is None and self.count is None:
-            raise InvalidDateRangeError(
+            raise MissingTerminationConditionError(
                 "Either count or end_date must be specified to prevent infinite expansion."
             )
 

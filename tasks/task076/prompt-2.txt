@@ -1,0 +1,6 @@
+你实现的 Cron 表达式调度模块存在一些问题，需要修复：
+1. scheduler 中四个时间推进方法均采用逐单位加一的线性扫描，而 models 中 CronField 的 next_value 方法已被正确实现却完全未被调用。对于大间隔步长表达式，线性扫描需要多次迭代才能匹配，而 next_value 可以一步跳转。需要在推进方法中利用 next_value 替代逐值扫描。
+2. parser 中 _parse_range_segment 方法从未被任何调用路径引用，是在正则重构过程中遗留的死代码，需要清理。
+3. _parse_step_range_part 方法中范围解析仍使用 split("-")，而 _parse_segment 已经改用正则 _RANGE_PATTERN 处理范围。同一类输入在两个解析分支上会抛出不同层级的异常类型。需要将步长段的范围解析也统一使用 _RANGE_PATTERN 正则。
+4. 三个 IANA 时区测试因 tzdata 未安装被跳过，但提示词明确要求支持时区换算。需要安装 tzdata 依赖或使用固定偏移时区构造等价测试，确保时区功能有实际的测试覆盖。
+5. 修复上述问题后运行 poetry run pytest tests/cron_scheduler/ -v，确保所有测试通过。

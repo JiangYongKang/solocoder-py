@@ -1,25 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-import pytest
+from zoneinfo import ZoneInfo
 
 from solocoder_py.cron_scheduler import CronScheduler
-
-try:
-    from zoneinfo import ZoneInfo
-    HAS_ZONEINFO = True
-except ImportError:
-    HAS_ZONEINFO = False
-
-try:
-    import tzdata  # noqa: F401
-    HAS_TZDATA = True
-except ImportError:
-    HAS_TZDATA = False
-
-NEEDS_TZDATA = pytest.mark.skipif(
-    not (HAS_ZONEINFO and HAS_TZDATA),
-    reason="zoneinfo with tzdata package is required for this test"
-)
 
 
 class TestBasicScheduling:
@@ -287,7 +270,6 @@ class TestTimezoneHandling:
         assert result.tzinfo is not None
         assert result == datetime(2025, 1, 2, 9, 0, tzinfo=timezone.utc)
 
-    @NEEDS_TZDATA
     def test_scheduler_in_new_york_timezone(self, make_scheduler):
         scheduler = make_scheduler("0 9 * * *", timezone_name="America/New_York")
         after = datetime(2025, 1, 1, 14, 0, tzinfo=timezone.utc)
@@ -297,7 +279,6 @@ class TestTimezoneHandling:
         assert result_ny.hour == 9
         assert result_ny.minute == 0
 
-    @NEEDS_TZDATA
     def test_target_timezone_conversion(self, make_scheduler):
         scheduler = make_scheduler("0 9 * * *", timezone_name="UTC")
         after = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -310,7 +291,6 @@ class TestTimezoneHandling:
         expected_utc = datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc)
         assert result == expected_utc.astimezone(ny_tz)
 
-    @NEEDS_TZDATA
     def test_asia_tokyo_timezone(self, make_scheduler):
         scheduler = make_scheduler("0 9 * * *", timezone_name="Asia/Tokyo")
         after = datetime(2025, 1, 1, 0, 0, tzinfo=timezone.utc)

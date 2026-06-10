@@ -143,6 +143,47 @@ class TestEmbeddedNewlines:
         result = parser_no_header.parse('"a\r\nb",c')
         assert result.data == [["a\r\nb", "c"]]
 
+    def test_embedded_cr_in_quoted_field_line_number(self, parser: CSVParser):
+        text = 'name,desc\n"Alice","line1\rline2"\n"Bob","simple"'
+        result = parser.parse(text)
+        assert len(result.rows) == 2
+        assert result.rows[0].line_number == 2
+        assert result.rows[1].line_number == 4
+        assert result.rows[0].fields[1] == "line1\rline2"
+        assert result.rows[1].fields[1] == "simple"
+
+    def test_embedded_crlf_in_quoted_field_line_number(self, parser: CSVParser):
+        text = 'name,desc\n"Alice","line1\r\nline2"\n"Bob","simple"'
+        result = parser.parse(text)
+        assert len(result.rows) == 2
+        assert result.rows[0].line_number == 2
+        assert result.rows[1].line_number == 4
+        assert result.rows[0].fields[1] == "line1\r\nline2"
+        assert result.rows[1].fields[1] == "simple"
+
+    def test_multiple_cr_in_quoted_field(self, parser: CSVParser):
+        text = 'name,desc\n"Alice","a\rb\rc\rd"\n"Bob","next"'
+        result = parser.parse(text)
+        assert len(result.rows) == 2
+        assert result.rows[0].line_number == 2
+        assert result.rows[1].line_number == 6
+        assert result.rows[0].fields[1] == "a\rb\rc\rd"
+
+    def test_cr_outside_quotes_as_line_separator(self, parser_no_header: CSVParser):
+        result = parser_no_header.parse("a,b\rc,d\re,f")
+        assert result.data == [["a", "b"], ["c", "d"], ["e", "f"]]
+        assert result.rows[0].line_number == 1
+        assert result.rows[1].line_number == 2
+        assert result.rows[2].line_number == 3
+
+    def test_mixed_cr_and_lf_line_endings(self, parser_no_header: CSVParser):
+        result = parser_no_header.parse("a,b\nc,d\re,f\r\ng,h")
+        assert result.data == [["a", "b"], ["c", "d"], ["e", "f"], ["g", "h"]]
+        assert result.rows[0].line_number == 1
+        assert result.rows[1].line_number == 2
+        assert result.rows[2].line_number == 3
+        assert result.rows[3].line_number == 4
+
 
 class TestChineseAndSpecialCharacters:
     def test_chinese_characters(self, parser_no_header: CSVParser):

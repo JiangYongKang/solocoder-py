@@ -1,0 +1,4 @@
+你实现的表达式求值器模块存在一些问题，需要修复：
+1. 多余的右括号场景下抛出的异常类型与缺少右括号不一致，括号不匹配的错误应统一使用 MismatchedParenthesisError 让调用方能统一捕获处理，同时更新对应的测试断言。
+2. tokenizer 中孤立的点号被当作数字格式错误处理，但点号本身属于非法字符而非数字格式问题，应抛出 InvalidCharacterError 来准确分类错误类型，并更新对应测试的异常期望。
+3. 修复上述问题后运行 poetry run pytest tests/expr_eval/ -v，确保所有测试通过。

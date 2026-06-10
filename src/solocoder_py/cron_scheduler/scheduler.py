@@ -159,25 +159,62 @@ class CronScheduler:
         return len(field) == (max_val - min_val + 1)
 
     def _advance_month(self, dt: datetime) -> datetime:
-        if dt.month == 12:
-            return dt.replace(year=dt.year + 1, month=1, day=1, hour=0, minute=0)
-        return dt.replace(month=dt.month + 1, day=1, hour=0, minute=0)
+        next_m = self._expression.month.next_value(dt.month + 1)
+        min_hour = self._expression.hour.sorted_values()[0]
+        min_minute = self._expression.minute.sorted_values()[0]
+        if next_m is not None:
+            return dt.replace(month=next_m, day=1, hour=min_hour, minute=min_minute)
+        next_year_month = self._expression.month.sorted_values()[0]
+        return dt.replace(
+            year=dt.year + 1,
+            month=next_year_month,
+            day=1,
+            hour=min_hour,
+            minute=min_minute,
+        )
 
     def _advance_day(self, dt: datetime) -> datetime:
         year, month = dt.year, dt.month
         days_in_month = calendar.monthrange(year, month)[1]
+        dom_field = self._expression.day_of_month
+        dow_field = self._expression.day_of_week
+        dom_all = self._is_all_values(dom_field)
+        dow_all = self._is_all_values(dow_field)
+        min_hour = self._expression.hour.sorted_values()[0]
+        min_minute = self._expression.minute.sorted_values()[0]
+
+        if dow_all and not dom_all:
+            next_dom = dom_field.next_value(dt.day + 1)
+            if next_dom is not None and next_dom <= days_in_month:
+                return dt.replace(day=next_dom, hour=min_hour, minute=min_minute)
+            return self._advance_month(dt)
+
+        if dom_all and not dow_all:
+            cron_dow = self._python_weekday_to_cron_dow(dt.weekday())
+            next_dow = dow_field.next_value(cron_dow + 1)
+            if next_dow is None:
+                next_dow = dow_field.sorted_values()[0]
+            days_ahead = (next_dow - cron_dow) % 7
+            if days_ahead == 0:
+                days_ahead = 7
+            new_day = dt.day + days_ahead
+            if new_day <= days_in_month:
+                return dt.replace(day=new_day, hour=min_hour, minute=min_minute)
+            return self._advance_month(dt)
 
         if dt.day >= days_in_month:
             return self._advance_month(dt)
-
-        return dt.replace(day=dt.day + 1, hour=0, minute=0)
+        return dt.replace(day=dt.day + 1, hour=min_hour, minute=min_minute)
 
     def _advance_hour(self, dt: datetime) -> datetime:
-        if dt.hour >= 23:
-            return self._advance_day(dt)
-        return dt.replace(hour=dt.hour + 1, minute=0)
+        next_h = self._expression.hour.next_value(dt.hour + 1)
+        min_minute = self._expression.minute.sorted_values()[0]
+        if next_h is not None:
+            return dt.replace(hour=next_h, minute=min_minute)
+        return self._advance_day(dt)
 
     def _advance_minute(self, dt: datetime) -> datetime:
-        if dt.minute >= 59:
-            return self._advance_hour(dt)
-        return dt.replace(minute=dt.minute + 1)
+        next_min = self._expression.minute.next_value(dt.minute + 1)
+        if next_min is not None:
+            return dt.replace(minute=next_min)
+        return self._advance_hour(dt)

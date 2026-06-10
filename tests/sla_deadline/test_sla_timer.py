@@ -170,7 +170,8 @@ class TestSlaTimerResume:
         timer = make_default_sla_timer(total_work_hours=1.0)
         timer.start(start_time=make_monday_9am())
         timer.pause(pause_time=make_monday_930am())
-        timer._accumulated_work_hours_before_pause = 2.0
+
+        timer._status = SlaTimerStatus.EXPIRED
 
         with pytest.raises(SlaTimerExpiredError):
             timer.resume(resume_time=make_monday_11am())
@@ -907,3 +908,154 @@ class TestSlaTimerAdditionalErrorConditions:
         assert status.estimated_deadline.weekday() != 5
         assert status.estimated_deadline.weekday() != 6
         assert status.estimated_deadline.date() not in holidays
+
+
+class TestSlaTimerDeadlineAfterPauseResume:
+    def test_single_pause_resume_then_expire_deadline_accuracy(self):
+        timer = make_default_sla_timer(total_work_hours=4.0)
+        timer.start(start_time=make_monday_9am())
+
+        timer.pause(pause_time=make_monday_10am())
+        timer.resume(resume_time=make_monday_11am())
+
+        expected_deadline = timer.work_calendar.add_work_hours(make_monday_11am(), 3.0)
+
+        status = timer.get_status(current_time=expected_deadline)
+        assert status.is_expired is True
+        assert status.elapsed_work_hours == 4.0
+        assert status.estimated_deadline == expected_deadline
+
+    def test_pause_resume_expire_deadline_matches_calculation(self):
+        timer = make_default_sla_timer(total_work_hours=6.0)
+        timer.start(start_time=make_monday_9am())
+
+        timer.pause(pause_time=make_monday_10am())
+        timer.resume(resume_time=make_monday_12pm())
+
+        expected_deadline = timer.work_calendar.add_work_hours(make_monday_12pm(), 5.0)
+
+        status = timer.get_status(current_time=expected_deadline)
+        assert status.is_expired is True
+        assert status.elapsed_work_hours == 6.0
+        assert status.estimated_deadline == expected_deadline
+
+    def test_multiple_pause_resume_deadline_accuracy(self):
+        timer = make_default_sla_timer(total_work_hours=8.0)
+        timer.start(start_time=make_monday_9am())
+
+        timer.pause(pause_time=make_monday_10am())
+        timer.resume(resume_time=make_monday_11am())
+
+        timer.pause(pause_time=make_monday_12pm())
+        timer.resume(resume_time=make_monday_1pm())
+
+        expected_deadline = timer.work_calendar.add_work_hours(make_monday_1pm(), 6.0)
+
+        status = timer.get_status(current_time=expected_deadline)
+        assert status.is_expired is True
+        assert status.elapsed_work_hours == 8.0
+        assert status.estimated_deadline == expected_deadline
+
+    def test_pause_across_lunch_break_deadline(self):
+        timer = make_default_sla_timer(total_work_hours=3.0)
+        timer.start(start_time=make_monday_11am())
+
+        timer.pause(pause_time=make_monday_12pm())
+        timer.resume(resume_time=make_monday_1pm())
+
+        expected_deadline = timer.work_calendar.add_work_hours(make_monday_1pm(), 2.0)
+
+        status = timer.get_status(current_time=expected_deadline)
+        assert status.is_expired is True
+        assert status.elapsed_work_hours == 3.0
+        assert status.estimated_deadline == expected_deadline
+
+    def test_pause_across_weekend_deadline_accuracy(self):
+        timer = make_default_sla_timer(total_work_hours=5.0)
+        timer.start(start_time=make_monday_9am())
+
+        timer.pause(pause_time=make_monday_10am())
+        timer.resume(resume_time=make_monday_next_week_9am())
+
+        expected_deadline = timer.work_calendar.add_work_hours(make_monday_next_week_9am(), 4.0)
+
+        status = timer.get_status(current_time=expected_deadline)
+        assert status.is_expired is True
+        assert status.elapsed_work_hours == 5.0
+        assert status.estimated_deadline == expected_deadline
+
+    def test_long_pause_then_expire_deadline(self):
+        timer = make_default_sla_timer(total_work_hours=4.0)
+        timer.start(start_time=make_monday_9am())
+
+        timer.pause(pause_time=make_monday_10am())
+
+        one_year_later = datetime(2025, 1, 15, 9, 0, 0)
+        timer.resume(resume_time=one_year_later)
+
+        expected_deadline = timer.work_calendar.add_work_hours(one_year_later, 3.0)
+
+        status = timer.get_status(current_time=expected_deadline)
+        assert status.is_expired is True
+        assert status.elapsed_work_hours == 4.0
+        assert status.estimated_deadline == expected_deadline
+
+    def test_pause_resume_crossing_multiple_days_deadline(self):
+        timer = make_default_sla_timer(total_work_hours=10.0)
+        timer.start(start_time=make_monday_9am())
+
+        timer.pause(pause_time=make_monday_4pm())
+        timer.resume(resume_time=make_tuesday_9am())
+
+        expected_deadline = timer.work_calendar.add_work_hours(make_tuesday_9am(), 4.0)
+
+        status = timer.get_status(current_time=expected_deadline)
+        assert status.is_expired is True
+        assert status.elapsed_work_hours == 10.0
+        assert status.estimated_deadline == expected_deadline
+
+    def test_query_after_expired_with_pause_resume(self):
+        timer = make_default_sla_timer(total_work_hours=4.0)
+        timer.start(start_time=make_monday_9am())
+
+        timer.pause(pause_time=make_monday_10am())
+        timer.resume(resume_time=make_monday_11am())
+
+        expected_deadline = timer.work_calendar.add_work_hours(make_monday_11am(), 3.0)
+
+        query_time = expected_deadline + timedelta(days=5)
+        status = timer.get_status(current_time=query_time)
+        assert status.is_expired is True
+        assert status.elapsed_work_hours == 4.0
+        assert status.remaining_work_hours == 0.0
+        assert status.estimated_deadline == expected_deadline
+
+    def test_original_start_time_preserved_after_resume(self):
+        timer = make_default_sla_timer(total_work_hours=5.0)
+        original_start = make_monday_9am()
+        timer.start(start_time=original_start)
+
+        timer.pause(pause_time=make_monday_10am())
+        timer.resume(resume_time=make_monday_11am())
+
+        assert timer.start_time == original_start
+
+    def test_deadline_calculation_uses_original_timeline(self):
+        timer = make_default_sla_timer(total_work_hours=3.0)
+        start_time = make_monday_9am()
+        timer.start(start_time=start_time)
+
+        timer.pause(pause_time=make_monday_10am())
+        resume_time = make_tuesday_9am()
+        timer.resume(resume_time=resume_time)
+
+        expected_deadline = timer.work_calendar.add_work_hours(resume_time, 2.0)
+
+        status_before = timer.get_status(current_time=resume_time)
+        assert status_before.elapsed_work_hours == 1.0
+        assert status_before.remaining_work_hours == 2.0
+        assert status_before.estimated_deadline == expected_deadline
+
+        status_after = timer.get_status(current_time=expected_deadline)
+        assert status_after.is_expired is True
+        assert status_after.estimated_deadline == expected_deadline

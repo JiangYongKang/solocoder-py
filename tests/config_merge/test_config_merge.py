@@ -740,20 +740,6 @@ class TestConfigTypeConflictErrors:
     def test_three_layer_type_conflict_env_override(self):
         manager = make_manager()
         manager.set_layer_data(
-            ConfigLayerType.DEFAULT, {"a": {"b": {"inner": 1}}}
-        )
-        manager.set_layer_data(
-            ConfigLayerType.ENVIRONMENT, {"a": {"b": {"inner": 2}}}
-        )
-        manager.set_layer_data(
-            ConfigLayerType.OVERRIDE, {"a": {"b": [1, 2]}}
-        )
-        with pytest.raises(ConfigTypeConflictError):
-            manager.merge()
-
-    def test_primitive_to_list_is_valid_override(self):
-        manager = make_manager()
-        manager.set_layer_data(
             ConfigLayerType.DEFAULT, {"a": {"b": 1}}
         )
         manager.set_layer_data(
@@ -762,19 +748,76 @@ class TestConfigTypeConflictErrors:
         manager.set_layer_data(
             ConfigLayerType.OVERRIDE, {"a": {"b": [1, 2]}}
         )
-        merged = manager.merge()
-        assert merged["a"]["b"] == [1, 2]
+        with pytest.raises(ConfigTypeConflictError):
+            manager.merge()
 
-    def test_list_to_primitive_is_valid_override(self):
+    def test_int_vs_list_conflict(self):
         manager = make_manager()
         manager.set_layer_data(
-            ConfigLayerType.DEFAULT, {"a": {"b": [1, 2]}}
+            ConfigLayerType.DEFAULT, {"value": 42}
         )
         manager.set_layer_data(
-            ConfigLayerType.OVERRIDE, {"a": {"b": "primitive"}}
+            ConfigLayerType.ENVIRONMENT, {"value": [1, 2, 3]}
         )
-        merged = manager.merge()
-        assert merged["a"]["b"] == "primitive"
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_list_vs_int_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": [1, 2, 3]}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": 42}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_int_vs_dict_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": 42}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": {"key": "dict"}}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_dict_vs_int_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": {"key": "dict"}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": 42}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_str_vs_list_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": "string"}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": [1, 2]}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_nested_primitive_vs_container_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"a": {"b": 1}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"a": {"b": {"c": 2}}}
+        )
+        with pytest.raises(
+            ConfigTypeConflictError, match="Type conflict at 'a.b'"
+        ):
+            manager.merge()
 
     def test_temp_override_type_conflict(self):
         manager = make_manager()

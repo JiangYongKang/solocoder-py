@@ -164,7 +164,7 @@ class TestWildcardSelection:
     def test_wildcard_on_object(self):
         data = {"a": 1, "b": 2, "c": 3}
         result = jsonpath(data, "$.*")
-        assert sorted(result) == [1, 2, 3]
+        assert result == [1, 2, 3]
 
     def test_wildcard_on_array(self):
         data = {"items": [10, 20, 30]}
@@ -173,7 +173,7 @@ class TestWildcardSelection:
 
     def test_wildcard_on_nested_object(self):
         result = jsonpath(_SAMPLE_DATA, "$.store.bicycle.*")
-        assert set(result) == {"red", 19.95}
+        assert result == ["red", 19.95]
 
     def test_wildcard_on_books_array(self):
         result = jsonpath(_SAMPLE_DATA, "$.store.book[*].author")
@@ -200,7 +200,7 @@ class TestWildcardSelection:
     def test_double_wildcard(self):
         data = {"store": {"a": 1, "b": 2}}
         result = jsonpath(data, "$.store.*")
-        assert sorted(result) == [1, 2]
+        assert result == [1, 2]
 
     def test_wildcard_on_array_of_objects(self):
         data = {"items": [{"id": 1}, {"id": 2}, {"id": 3}]}
@@ -368,6 +368,14 @@ class TestInvalidPathSyntax:
         with pytest.raises(InvalidPathError, match="Expected index"):
             jsonpath({"a": [1]}, "$.a[abc]")
 
+    def test_bare_field_name_without_prefix_raises(self):
+        with pytest.raises(InvalidPathError, match="Unexpected character"):
+            jsonpath({"name": "Alice"}, "name")
+
+    def test_bare_field_name_after_root_raises(self):
+        with pytest.raises(InvalidPathError, match="Unexpected character"):
+            jsonpath({"name": "Alice"}, "$name")
+
 
 class TestJSONPathQueryClass:
     def test_query_reuse(self):
@@ -398,12 +406,12 @@ class TestComplexPaths:
             "group2": {"tag": "g2"},
         }
         result = jsonpath(data, "$.*..tag")
-        assert sorted(result) == ["g1", "g2"]
+        assert result == ["g1", "g2"]
 
     def test_index_then_wildcard(self):
         data = {"matrix": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}
         result = jsonpath(data, "$.matrix[0].*")
-        assert sorted(result) == [1, 2]
+        assert result == [1, 2]
 
     def test_recursive_on_top_level_field(self):
         data = {"name": "root", "child": {"name": "inner"}}

@@ -116,15 +116,10 @@ class JSONPathParser:
                     segments.append(
                         Segment(seg_type=SegmentType.INDEX, index=index)
                     )
-            elif ch.isalpha() or ch == "_":
-                field = self._read_field_name()
-                if field is not None:
-                    segments.append(
-                        Segment(seg_type=SegmentType.CHILD, field=field)
-                    )
             else:
                 raise InvalidPathError(
-                    f"Unexpected character '{ch}' at position {self._pos}"
+                    f"Unexpected character '{ch}' at position {self._pos}. "
+                    f"Expected '.' or '[' to start a new path segment."
                 )
 
         return segments

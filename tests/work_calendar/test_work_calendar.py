@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 import pytest
 
@@ -6,6 +6,7 @@ from solocoder_py.work_calendar import (
     CalendarConfig,
     InvalidDurationError,
     InvalidWorkHoursError,
+    NoWorkDayFoundError,
     WorkCalendar,
     WorkDaySchedule,
     WorkTimeRange,
@@ -38,9 +39,15 @@ class TestWorkTimeRange:
         r = WorkTimeRange(time(9, 0), time(12, 0))
         assert r.contains(time(9, 0))
         assert r.contains(time(10, 30))
-        assert r.contains(time(12, 0))
+        assert not r.contains(time(12, 0))
         assert not r.contains(time(8, 59))
         assert not r.contains(time(12, 1))
+
+    def test_contains_end_boundary_exclusive(self):
+        r = WorkTimeRange(time(9, 0), time(18, 0))
+        assert r.contains(time(9, 0))
+        assert not r.contains(time(18, 0))
+        assert r.contains(time(17, 59, 59))
 
 
 class TestWorkDaySchedule:
@@ -79,12 +86,13 @@ class TestCalendarConfig:
         assert len(config.holidays) == 0
         assert len(config.workdays) == 0
 
-    def test_conflicting_dates_raise_error(self):
-        with pytest.raises(ValueError):
-            CalendarConfig(
-                holidays=frozenset([date(2024, 1, 1)]),
-                workdays=frozenset([date(2024, 1, 1)]),
-            )
+    def test_conflicting_dates_workday_priority(self):
+        config = CalendarConfig(
+            holidays=frozenset([date(2024, 1, 1)]),
+            workdays=frozenset([date(2024, 1, 1)]),
+        )
+        cal = WorkCalendar(config=config)
+        assert cal.is_workday(date(2024, 1, 1))
 
 
 class TestWorkdayCheck:
@@ -115,9 +123,21 @@ class TestWorkdayCheck:
 
     def test_workday_priority_over_holiday(self):
         cal = WorkCalendar(
-            config=CalendarConfig(workdays=frozenset([date(2024, 1, 15)]))
+            config=CalendarConfig(
+                holidays=frozenset([date(2024, 1, 15)]),
+                workdays=frozenset([date(2024, 1, 15)]),
+            )
         )
         assert cal.is_workday(date(2024, 1, 15))
+
+    def test_workday_priority_over_holiday_on_weekend(self):
+        cal = WorkCalendar(
+            config=CalendarConfig(
+                holidays=frozenset([date(2024, 1, 13)]),
+                workdays=frozenset([date(2024, 1, 13)]),
+            )
+        )
+        assert cal.is_workday(date(2024, 1, 13))
 
     def test_holiday_priority_over_weekend_default(self):
         cal = WorkCalendar(
@@ -416,11 +436,11 @@ class TestEmptyHolidayConfig:
         cal.set_workdays([date(2024, 1, 13)])
         assert cal.is_workday(date(2024, 1, 13))
 
-    def test_set_conflicting_dates_raises_error(self):
+    def test_set_conflicting_dates_workday_priority(self):
         cal = WorkCalendar()
         cal.set_holidays([date(2024, 1, 15)])
-        with pytest.raises(ValueError):
-            cal.set_workdays([date(2024, 1, 15)])
+        cal.set_workdays([date(2024, 1, 15)])
+        assert cal.is_workday(date(2024, 1, 15))
 
     def test_set_work_schedule(self):
         cal = WorkCalendar()
@@ -459,41 +479,53 @@ class TestLongWorkHours:
         assert result == datetime(2024, 1, 19, 18, 0)
 
 
+class TestBoundaryConsistency:
+    def test_end_boundary_consistency_is_work_time(self):
+        s = WorkDaySchedule()
+        assert not s.is_work_time(datetime(2024, 1, 15, 12, 0))
+        assert not s.is_work_time(datetime(2024, 1, 15, 18, 0))
+        assert s.is_work_time(datetime(2024, 1, 15, 11, 59, 59))
+        assert s.is_work_time(datetime(2024, 1, 15, 17, 59, 59))
+
+    def test_end_boundary_consistency_add_work_hours(self, make_default_calendar):
+        cal = make_default_calendar()
+        result = cal.add_work_hours(datetime(2024, 1, 15, 11, 0), 1)
+        assert result == datetime(2024, 1, 15, 12, 0)
+
+    def test_start_boundary_included(self, make_default_calendar):
+        cal = make_default_calendar()
+        result = cal.add_work_hours(datetime(2024, 1, 15, 9, 0), 0)
+        assert result == datetime(2024, 1, 15, 9, 0)
+
+
+class TestInfiniteLoopProtection:
+    def test_add_work_days_all_holidays_raises_error(self):
+        holidays = []
+        current = date(2024, 1, 1)
+        for _ in range(4000):
+            holidays.append(current)
+            current += timedelta(days=1)
+        cal = WorkCalendar(config=CalendarConfig(holidays=frozenset(holidays)))
+        with pytest.raises(NoWorkDayFoundError):
+            cal.add_work_days(date(2024, 1, 1), 1)
+
+    def test_add_work_hours_all_holidays_raises_error(self):
+        holidays = []
+        current = date(2024, 1, 1)
+        for _ in range(4000):
+            holidays.append(current)
+            current += timedelta(days=1)
+        cal = WorkCalendar(config=CalendarConfig(holidays=frozenset(holidays)))
+        with pytest.raises(NoWorkDayFoundError):
+            cal.add_work_hours(datetime(2024, 1, 1, 9, 0), 1)
+
+    def test_no_work_day_found_error_is_work_calendar_error(self):
+        assert issubclass(NoWorkDayFoundError, WorkCalendarError)
+
+
 class TestExceptions:
     def test_invalid_duration_error_is_work_calendar_error(self):
         assert issubclass(InvalidDurationError, WorkCalendarError)
 
     def test_invalid_work_hours_error_is_work_calendar_error(self):
         assert issubclass(InvalidWorkHoursError, WorkCalendarError)
-
-
-@pytest.fixture
-def make_default_calendar():
-    def _make():
-        return WorkCalendar()
-    return _make
-
-
-@pytest.fixture
-def make_spring_festival_calendar():
-    def _make():
-        holidays = [
-            date(2024, 2, 10),
-            date(2024, 2, 11),
-            date(2024, 2, 12),
-            date(2024, 2, 13),
-            date(2024, 2, 14),
-            date(2024, 2, 15),
-            date(2024, 2, 16),
-            date(2024, 2, 17),
-        ]
-        workdays = [
-            date(2024, 2, 4),
-            date(2024, 2, 18),
-        ]
-        config = CalendarConfig(
-            holidays=frozenset(holidays),
-            workdays=frozenset(workdays),
-        )
-        return WorkCalendar(config=config)
-    return _make

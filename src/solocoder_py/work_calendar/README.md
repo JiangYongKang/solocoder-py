@@ -175,13 +175,13 @@ from solocoder_py.work_calendar import WorkCalendar, WorkDaySchedule, WorkTimeRa
 # 自定义工作时段（朝九晚六，无午休）
 custom_schedule = WorkDaySchedule(
     morning=WorkTimeRange(time(9, 0), time(18, 0)),
-    afternoon=WorkTimeRange(time(9, 0), time(9, 0)),  # 不使用下午时段
+    afternoon=WorkTimeRange(time(18, 0), time(18, 1)),  # 仅作为占位，实际不使用
 )
 
 # 或者更简单的方式 - 使用单段工作制
 single_schedule = WorkDaySchedule(
     morning=WorkTimeRange(time(9, 0), time(18, 0)),
-    afternoon=WorkTimeRange(time(0, 0), time(0, 0)),
+    afternoon=WorkTimeRange(time(23, 59), time(23, 59, 59)),  # 最小合法占位
 )
 
 cal = WorkCalendar()

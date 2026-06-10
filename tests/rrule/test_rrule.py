@@ -8,6 +8,7 @@ from solocoder_py.rrule import (
     InvalidDateRangeError,
     InvalidFrequencyError,
     InvalidIntervalError,
+    MissingTerminationConditionError,
     RRule,
     RRuleExpander,
 )
@@ -164,7 +165,7 @@ class TestRRuleModelValidationErrors:
             )
 
     def test_no_count_and_no_end_date_raises(self):
-        with pytest.raises(InvalidDateRangeError):
+        with pytest.raises(MissingTerminationConditionError):
             RRule(
                 frequency=Frequency.DAILY,
                 start_date=make_date(2026, 1, 1),

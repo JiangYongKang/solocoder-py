@@ -514,7 +514,7 @@ class TestErrorConditions:
             render_template("{% if %}test{% endif %}", {})
 
     def test_unknown_tag(self):
-        with pytest.raises(InvalidConditionError, match="Unknown tag"):
+        with pytest.raises(TemplateSyntaxError, match="Unknown tag"):
             render_template("{% something %}test", {})
 
 

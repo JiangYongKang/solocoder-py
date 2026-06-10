@@ -13,5 +13,13 @@ class ContextAlreadyCancelledError(TimeoutManagerError):
     pass
 
 
+class ContextNotFoundError(TimeoutManagerError):
+    pass
+
+
 class InvalidDeadlineError(TimeoutManagerError):
+    pass
+
+
+class InvalidCallbackError(TimeoutManagerError):
     pass

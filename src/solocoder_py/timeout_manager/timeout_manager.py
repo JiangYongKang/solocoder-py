@@ -8,6 +8,8 @@ from .clock import Clock, SystemClock
 from .exceptions import (
     ContextAlreadyCancelledError,
     ContextCancelledError,
+    ContextNotFoundError,
+    InvalidCallbackError,
     InvalidDeadlineError,
 )
 from .models import TimeoutContextInfo
@@ -81,7 +83,7 @@ class TimeoutContext:
                 f"Cannot add callback to cancelled context '{self._context_id}'"
             )
         if callback is None:
-            raise InvalidDeadlineError("Callback cannot be None")
+            raise InvalidCallbackError("Callback cannot be None")
         self._callbacks.append(callback)
 
     def _add_child(self, child: "TimeoutContext") -> None:
@@ -159,16 +161,12 @@ class TimeoutManager:
         with self._lock:
             parent = self._contexts.get(parent_id)
             if parent is None:
-                raise ContextCancelledError(
+                raise ContextNotFoundError(
                     f"Parent context '{parent_id}' not found"
                 )
-            if parent.is_cancelled:
+            if parent.is_cancelled or parent.is_expired:
                 raise ContextAlreadyCancelledError(
-                    f"Cannot create child context: parent context '{parent_id}' is already cancelled"
-                )
-            if parent.is_expired:
-                raise ContextCancelledError(
-                    f"Cannot create child context: parent context '{parent_id}' has already expired"
+                    f"Cannot create child context: parent context '{parent_id}' has already reached terminal state (cancelled or expired)"
                 )
 
             now = self._clock.now()
@@ -210,7 +208,7 @@ class TimeoutManager:
         with self._lock:
             context = self._contexts.get(context_id)
             if context is None:
-                raise ContextCancelledError(
+                raise ContextNotFoundError(
                     f"Context '{context_id}' not found"
                 )
             if context.is_cancelled or context.is_expired:
@@ -233,7 +231,7 @@ class TimeoutManager:
         with self._lock:
             context = self._contexts.get(context_id)
             if context is None:
-                raise ContextCancelledError(
+                raise ContextNotFoundError(
                     f"Context '{context_id}' not found"
                 )
             if context.is_cancelled:

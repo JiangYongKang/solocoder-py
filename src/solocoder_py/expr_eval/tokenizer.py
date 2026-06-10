@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum, auto
 
-from solocoder_py.expr_eval.exceptions import InvalidCharacterError, TokenizeError
+from solocoder_py.expr_eval.exceptions import InvalidCharacterError
 
 
 class TokenType(Enum):
@@ -85,7 +85,7 @@ class Tokenizer:
                 break
         num_str = self._text[start : self._pos]
         if num_str == ".":
-            raise TokenizeError(
-                f"Invalid number format '{num_str}' at position {start}"
+            raise InvalidCharacterError(
+                f"Invalid character '.' at position {start}"
             )
         self._tokens.append(Token(TokenType.NUMBER, num_str, start))

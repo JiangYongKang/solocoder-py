@@ -126,13 +126,29 @@ class ConfigMergeManager:
         lower_is_list = isinstance(lower_value, list)
         higher_is_list = isinstance(higher_value, list)
 
-        if (lower_is_dict and higher_is_list) or (
-            lower_is_list and higher_is_dict
-        ):
+        if lower_is_dict and not higher_is_dict:
             raise ConfigTypeConflictError(
                 f"Type conflict at '{key_path}': "
-                f"lower layer is {'dict' if lower_is_dict else 'list'}, "
-                f"higher layer is {'dict' if higher_is_dict else 'list'}"
+                f"lower layer is dict, "
+                f"higher layer is {type(higher_value).__name__}"
+            )
+        if lower_is_list and not higher_is_list:
+            raise ConfigTypeConflictError(
+                f"Type conflict at '{key_path}': "
+                f"lower layer is list, "
+                f"higher layer is {type(higher_value).__name__}"
+            )
+        if higher_is_dict and not lower_is_dict:
+            raise ConfigTypeConflictError(
+                f"Type conflict at '{key_path}': "
+                f"lower layer is {type(lower_value).__name__}, "
+                f"higher layer is dict"
+            )
+        if higher_is_list and not lower_is_list:
+            raise ConfigTypeConflictError(
+                f"Type conflict at '{key_path}': "
+                f"lower layer is {type(lower_value).__name__}, "
+                f"higher layer is list"
             )
 
     def _merge_array(
@@ -160,10 +176,6 @@ class ConfigMergeManager:
         path: str = "",
     ) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
-
-        for k, v in lower.items():
-            if k not in higher:
-                result[k] = copy.deepcopy(v)
 
         all_keys = set(lower.keys()) | set(higher.keys())
 
