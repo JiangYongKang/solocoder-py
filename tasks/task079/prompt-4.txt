@@ -1,0 +1,4 @@
+你实现的 SLA 截止时间模块在第3轮修复后还存在一些遗留问题：
+1. `_build_timeline` 方法当前只统一了时间线的构建逻辑，但 `_calculate_actual_deadline` 和 `_get_accumulated_hours_before` 两个方法各自保留了独立的遍历循环，且遍历逻辑中存在大量重复——两个循环都从 `timeline[0][0]` 初始化 `current_time`，都使用相同的 is_running 状态切换模式（start→pause→resume），都调用 `self.work_calendar.add_work_hours` 来累加工作时长。需要进一步抽取公共的运行时段遍历逻辑，使两处不再各自维护独立的累加循环。
+2. `_calculate_actual_deadline` 方法末尾的防御性分支使用了 `assert False`，但在 Python 的 `-O` 优化模式下 assert 语句会被跳过，此时方法将静默返回 None 而非抛出明确异常。需要将该分支改为始终抛出 RuntimeException 或自定义状态不一致异常的写法，确保在任何 Python 运行模式下都能暴露错误。
+3. 修复上述问题后运行 poetry run pytest tests/sla_deadline/ -v，确保所有测试通过。

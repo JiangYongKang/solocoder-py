@@ -139,14 +139,10 @@ class TestEmbeddedNewlines:
         assert result.rows[0].fields[1] == "line1\nline2"
         assert result.rows[1].fields[1] == "simple"
 
-    def test_embedded_newline_with_crlf(self, parser: CSVParser):
-        text = 'name,desc\n"Alice","line1\r\nline2"\n"Bob","simple"'
-        result = parser.parse(text)
-        assert len(result.rows) == 2
-        assert result.rows[0].line_number == 2
-        assert result.rows[1].line_number == 4
-        assert result.rows[0].fields[1] == "line1\r\nline2"
-        assert result.rows[1].fields[1] == "simple"
+    def test_embedded_newline_with_crlf(self, parser_no_header: CSVParser):
+        result = parser_no_header.parse('"a\r\nb",c')
+        assert result.data == [["a\r\nb", "c"]]
+        assert result.rows[0].line_number == 1
 
     def test_embedded_cr_in_quoted_field_line_number(self, parser: CSVParser):
         text = 'name,desc\n"Alice","line1\rline2"\n"Bob","simple"'

@@ -762,7 +762,7 @@ class TestEdgeCases:
 
 
 class TestExceptionMessages:
-    def test_context_already_cancelled_error_message(self, manager: TimeoutManager):
+    def test_terminal_state_error_message_on_cancelled(self, manager: TimeoutManager):
         ctx = manager.create_root_context(100.0)
         manager.cancel_context(ctx.context_id, "test")
         try:
@@ -772,7 +772,7 @@ class TestExceptionMessages:
             assert ctx.context_id in str(e)
             assert "terminal state" in str(e).lower()
 
-    def test_expired_context_error_message(self, manager: TimeoutManager, clock: ManualClock):
+    def test_terminal_state_error_message_on_expired(self, manager: TimeoutManager, clock: ManualClock):
         ctx = manager.create_root_context(100.0)
         clock.set(100.0)
         manager.check_expired()

@@ -30,16 +30,16 @@ class RRuleExpander:
 
         return dates
 
-    @staticmethod
-    def _advance(current: date, frequency: Frequency, interval: int, original_day: int) -> date:
+    @classmethod
+    def _advance(cls, current: date, frequency: Frequency, interval: int, original_day: int) -> date:
         if frequency == Frequency.DAILY:
-            return RRuleExpander._add_days(current, interval)
+            return cls._add_days(current, interval)
         elif frequency == Frequency.WEEKLY:
-            return RRuleExpander._add_days(current, interval * 7)
+            return cls._add_days(current, interval * 7)
         elif frequency == Frequency.MONTHLY:
-            return RRuleExpander._add_months(current, interval, original_day)
+            return cls._add_months(current, interval, original_day)
         elif frequency == Frequency.YEARLY:
-            return RRuleExpander._add_years(current, interval, original_day)
+            return cls._add_years(current, interval, original_day)
         else:
             raise ValueError(f"Unsupported frequency: {frequency}")
 

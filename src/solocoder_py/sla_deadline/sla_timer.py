@@ -15,6 +15,7 @@ from .exceptions import (
     SlaTimerNotPausedError,
     SlaTimerNotRunningError,
     SlaTimerNotStartedError,
+    SlaTimerStateError,
 )
 from .models import PauseRecord, SlaTimerResult, SlaTimerStatus
 
@@ -156,16 +157,19 @@ class SlaTimer:
         timeline.sort(key=lambda x: x[0])
         return timeline
 
-    def _calculate_actual_deadline(self) -> datetime:
-        timeline = self._build_timeline()
-
-        remaining_hours = self.total_work_hours
+    def _iter_running_segments(
+        self,
+        timeline: list[tuple[datetime, str]],
+        end_time: Optional[datetime] = None,
+    ):
         current_time = timeline[0][0]
         is_running = True
 
         for event_time, event_type in timeline[1:]:
-            if remaining_hours <= 0:
-                break
+            if end_time is not None and event_time > end_time:
+                if is_running and current_time < end_time:
+                    yield (current_time, end_time)
+                return
 
             if event_time <= current_time:
                 if event_type == 'pause':
@@ -175,11 +179,7 @@ class SlaTimer:
                 continue
 
             if is_running:
-                hours_available = self._calculate_work_hours_between(current_time, event_time)
-                if hours_available >= remaining_hours:
-                    return self.work_calendar.add_work_hours(current_time, remaining_hours)
-                else:
-                    remaining_hours -= hours_available
+                yield (current_time, event_time)
 
             current_time = event_time
 
@@ -188,10 +188,25 @@ class SlaTimer:
             elif event_type == 'resume':
                 is_running = True
 
-        if remaining_hours > 0 and is_running:
-            return self.work_calendar.add_work_hours(current_time, remaining_hours)
+        if end_time is not None and is_running and current_time < end_time:
+            yield (current_time, end_time)
 
-        assert False, (
+    def _calculate_actual_deadline(self) -> datetime:
+        timeline = self._build_timeline()
+
+        remaining_hours = self.total_work_hours
+
+        for segment_start, segment_end in self._iter_running_segments(timeline):
+            hours_available = self._calculate_work_hours_between(segment_start, segment_end)
+            if hours_available >= remaining_hours:
+                return self.work_calendar.add_work_hours(segment_start, remaining_hours)
+            remaining_hours -= hours_available
+
+        if remaining_hours > 0:
+            last_run_start = self._get_effective_start_time()
+            return self.work_calendar.add_work_hours(last_run_start, remaining_hours)
+
+        raise SlaTimerStateError(
             "Deadline calculation reached end of timeline without locating the expiration "
             "point for an SLA marked EXPIRED. This indicates a state inconsistency: "
             "the elapsed duration should have reached total_work_hours but the "
@@ -219,32 +234,8 @@ class SlaTimer:
         timeline = self._build_timeline()
 
         total_hours = 0.0
-        current_time = timeline[0][0]
-        is_running = True
-
-        for event_time, event_type in timeline[1:]:
-            if event_time > target_time:
-                break
-
-            if event_time <= current_time:
-                if event_type == 'pause':
-                    is_running = False
-                elif event_type == 'resume':
-                    is_running = True
-                continue
-
-            if is_running:
-                total_hours += self._calculate_work_hours_between(current_time, event_time)
-
-            current_time = event_time
-
-            if event_type == 'pause':
-                is_running = False
-            elif event_type == 'resume':
-                is_running = True
-
-        if is_running and current_time < target_time:
-            total_hours += self._calculate_work_hours_between(current_time, target_time)
+        for segment_start, segment_end in self._iter_running_segments(timeline, end_time=target_time):
+            total_hours += self._calculate_work_hours_between(segment_start, segment_end)
 
         return min(total_hours, self.total_work_hours)
 

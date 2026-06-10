@@ -1,0 +1,3 @@
+你实现的 CSV 解析模块在第3轮修复后还存在一些遗留问题：
+1. 提示词第3轮要求对 test_embedded_newline_with_crlf "追加行号验证"，但模型将整个测试方法重写了一遍——fixture 从 parser_no_header 换成了 parser，测试数据从无表头的 `'"a\r\nb",c'` 替换为带表头的 CSV，重写后的测试与同一文件中已有的 test_embedded_crlf_in_quoted_field_line_number 测试数据和断言完全一致，形成了一个冗余副本。同时原来无表头场景下引号内嵌 `\r\n` 的测试覆盖在该方法重写后丢失。需要恢复原来的测试数据与 fixture，仅在原有断言末尾追加行号验证，保持测试的最小变更。
+2. 修复上述问题后运行 poetry run pytest tests/csv_parser/ -v，确保所有测试通过。

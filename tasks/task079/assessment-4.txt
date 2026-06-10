@@ -1,0 +1,7 @@
+产物不满意：
+1. sla_timer.py 中新增的 `_iter_running_segments` 生成器方法（第160-164行）缺少返回类型注解。该方法产出 `(segment_start, segment_end)` 元组，应标注为 `-> Generator[tuple[datetime, datetime], None, None]` 或使用 `Iterator` 类型，以便 IDE 和类型检查工具能验证调用方对产出值的解包是否正确。由于 sla_timer.py 第1行已启用 `from __future__ import annotations`，本模块具备完整的类型注解基础，新增公开方法不应遗漏类型标注。
+2. `_iter_running_segments` 生成器在 end_time 参数为 None 时不产出最后一段运行时段（第191-192行的条件判断排除了 `end_time is None` 的情况），导致 `_calculate_actual_deadline` 必须依赖第205-207行的 fallback 来单独计算剩余时段的截止时间。这种设计在生成器与其调用方之间建立了一个隐式约定——不带 end_time 的调用方需要自行理解并处理生成器未闭合的最后一段。如果未来该模块新增其他不带 end_time 的调用路径，开发者可能遗漏这一约定而引入缺陷。更严谨的做法是让生成器在 end_time 为 None 时同样产出最后一段再返回，使行为对两种调用模式完全一致，fallback 仅作为防御性兜底。
+
+过程不满意：
+1. 模型在收到提示词后的第一个动作就是创建 todo 列表，之后才读取 sla_timer.py 和 exceptions.py 的当前代码。虽然这是第4轮修复任务、模型对代码已有基本了解，但这种"先规划再调研"的模式在第3轮的评估中已被指出。本轮提示词明确列出了两处需要修改的具体位置和方法名，模型的 todo 列表只需对应这两项即可，无需事先分析就能确定计划，因此本轮的规划时序问题影响很小，但该习惯在更复杂的任务中仍需纠正。
+2. 模型完成 `_iter_running_segments` 生成器的编写后，在提交测试之前自行发现了 end_time 为 None 时不产出最后一段运行时段的问题，随后通过给 `_calculate_actual_deadline` 添加 fallback（第205-207行）来修复。模型这种"先编码再自查"的工作方式有一定积极意义——在运行测试前就拦截了一个逻辑缺陷，避免了试错式调试。但从过程质量角度看，两种调用路径的终止条件差异（`_calculate_actual_deadline` 按剩余工作时长终止、`_get_accumulated_hours_before` 按目标时间点终止）是提示词中明确描述的需求，在设计生成器时就应该预见到 open-end 和 bounded 两种场景的差异，在编码前完成边界分析，而非等到代码写完后再通过自查发现缺口。编码前多花两分钟梳理两种调用场景的输入输出差异，就能省去一轮"写代码→发现问题→补 fallback"的迭代。

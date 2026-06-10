@@ -1,0 +1,3 @@
+你实现的超时管理器模块在第3轮修复后还存在一处遗留问题：
+1. 第3轮中异常类型从 ContextAlreadyCancelledError 重命名为 ContextTerminalStateError 后，test_timeout_manager.py 中的测试方法 test_context_already_cancelled_error_message 的方法名仍保留 already_cancelled 这一旧异常名的痕迹，与当前模块的实际异常命名不一致，会给后续维护者造成混淆。需要将该测试方法重命名使其与新的异常语义保持一致。
+2. 修复上述问题后运行 poetry run pytest tests/timeout_manager/ -v，确保所有测试通过。

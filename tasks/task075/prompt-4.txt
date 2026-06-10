@@ -1,0 +1,5 @@
+你实现的配置分层合并模块在第3轮修复后还存在一些遗留问题：
+1. 提示词第3轮要求审视 None 在类型冲突体系中的定位并确保有"明确的设计和处理"，但模型的两次代码编辑均失败，最终 `_validate_type_compatibility` 没有任何代码层面的注释来说明 None 的设计决策。需要在 `_validate_type_compatibility` 中 None 值的早期返回处用注释明确写明 None 在配置系统中的语义（表示显式置空或未设置，与任何类型之间均不视为类型冲突）。
+2. 新增的 7 个验证"None 与容器类型交互不触发冲突"的测试（test_none_overrides_dict_is_valid 等）被放在了 TestConfigTypeConflictErrors 类中，但这些测试验证的是无错误行为而非类型冲突错误，归属于类型冲突测试类的语义不匹配。需要将这些测试迁移到独立的测试类中。
+3. 新增的 test_three_layer_dict_vs_list_conflict 三层冲突测试未使用 match 参数精确验证错误路径，同文件内其他冲突测试如 test_nested_dict_vs_list_conflict 使用了 match="Type conflict at 'a.b'" 做精确匹配。需要为新增测试补充 match 参数。
+4. 修复上述问题后运行 poetry run pytest tests/config_merge/ -v，确保所有测试通过。

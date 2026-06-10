@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+from unittest.mock import patch
 
 import pytest
 
@@ -141,6 +142,34 @@ class TestWorkdayCheck:
             config=CalendarConfig(holidays=frozenset([date(2024, 1, 15)]))
         )
         assert not cal.is_workday(date(2024, 1, 15))
+
+    def test_workday_check_order_extra_workday_before_holiday(self, make_default_calendar):
+        cal = make_default_calendar()
+        test_date = date(2024, 1, 15)
+
+        def fake_is_extra_workday(d):
+            return d == test_date
+
+        def fake_is_holiday(d):
+            return d == test_date
+
+        with patch.object(cal, 'is_extra_workday', side_effect=fake_is_extra_workday), \
+             patch.object(cal, 'is_holiday', side_effect=fake_is_holiday):
+            assert cal.is_workday(test_date) is True
+
+    def test_workday_check_order_holiday_takes_effect_without_extra_workday(self, make_default_calendar):
+        cal = make_default_calendar()
+        test_date = date(2024, 1, 15)
+
+        def fake_is_extra_workday(d):
+            return False
+
+        def fake_is_holiday(d):
+            return d == test_date
+
+        with patch.object(cal, 'is_extra_workday', side_effect=fake_is_extra_workday), \
+             patch.object(cal, 'is_holiday', side_effect=fake_is_holiday):
+            assert cal.is_workday(test_date) is False
 
 
 class TestAddWorkDays:

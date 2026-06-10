@@ -118,6 +118,9 @@ class ConfigMergeManager:
         higher_value: Any,
         key_path: str,
     ) -> None:
+        # None 在配置系统中表示显式置空或未设置，
+        # 与任何类型（dict/list/基础类型）之间均不视为类型冲突，
+        # 允许 None 覆盖任何类型或被任何类型覆盖。
         if lower_value is None or higher_value is None:
             return
 

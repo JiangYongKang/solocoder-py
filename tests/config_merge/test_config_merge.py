@@ -762,7 +762,9 @@ class TestConfigTypeConflictErrors:
         manager.set_layer_data(
             ConfigLayerType.OVERRIDE, {"a": {"b": [1, 2]}}
         )
-        with pytest.raises(ConfigTypeConflictError):
+        with pytest.raises(
+            ConfigTypeConflictError, match="Type conflict at 'a.b'"
+        ):
             manager.merge()
 
     def test_int_vs_list_conflict(self):
@@ -908,6 +910,29 @@ class TestConfigTypeConflictErrors:
         with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
             manager.merge()
 
+    def test_nested_primitive_vs_container_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"a": {"b": 1}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"a": {"b": {"c": 2}}}
+        )
+        with pytest.raises(
+            ConfigTypeConflictError, match="Type conflict at 'a.b'"
+        ):
+            manager.merge()
+
+    def test_temp_override_type_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": {"key": "dict"}}
+        )
+        with pytest.raises(ConfigTypeConflictError):
+            manager.merge(temp_override={"value": [1, 2]})
+
+
+class TestNoneTypeInteractions:
     def test_none_overrides_dict_is_valid(self):
         manager = make_manager()
         manager.set_layer_data(
@@ -973,27 +998,6 @@ class TestConfigTypeConflictErrors:
         )
         merged = manager.merge()
         assert merged["a"]["b"] is None
-
-    def test_nested_primitive_vs_container_conflict(self):
-        manager = make_manager()
-        manager.set_layer_data(
-            ConfigLayerType.DEFAULT, {"a": {"b": 1}}
-        )
-        manager.set_layer_data(
-            ConfigLayerType.ENVIRONMENT, {"a": {"b": {"c": 2}}}
-        )
-        with pytest.raises(
-            ConfigTypeConflictError, match="Type conflict at 'a.b'"
-        ):
-            manager.merge()
-
-    def test_temp_override_type_conflict(self):
-        manager = make_manager()
-        manager.set_layer_data(
-            ConfigLayerType.DEFAULT, {"value": {"key": "dict"}}
-        )
-        with pytest.raises(ConfigTypeConflictError):
-            manager.merge(temp_override={"value": [1, 2]})
 
 
 class TestCircularReferenceErrors:

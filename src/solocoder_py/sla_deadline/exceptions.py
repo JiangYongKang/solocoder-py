@@ -31,3 +31,7 @@ class InvalidSlaDurationError(SlaTimerError):
 
 class InvalidWorkCalendarError(SlaTimerError):
     pass
+
+
+class SlaTimerStateError(SlaTimerError):
+    pass
