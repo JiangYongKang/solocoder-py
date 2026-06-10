@@ -919,64 +919,84 @@ class TestExplicitDenyOverride:
         assert result.resolved_by == "HIGHEST_PRIORITY"
         assert "High priority normal deny" in result.reason
 
-    def test_explicit_deny_filter_requires_both_flag_and_effect_deny(self):
-        from solocoder_py.abac import PolicyHit
-        import time
-
+    def test_permit_with_explicit_deny_flag_does_not_trigger_override_via_evaluate(self):
         engine = ABACEngine(conflict_strategy=ConflictResolutionStrategy.PERMIT_OVERRIDES)
 
-        fake_hit_flag_only = PolicyHit(
-            policy_id="fake_permit_with_flag",
-            policy_name="Fake Permit with is_explicit_deny=True",
+        permit_policy = Policy(
+            policy_id="permit_role",
+            name="Permit by role",
             effect=PolicyEffect.PERMIT,
-            priority=10,
-            is_explicit_deny=True,
-            matched_at=time.monotonic(),
-            order=0,
-        )
-        real_hit_deny_normal = PolicyHit(
-            policy_id="real_normal_deny",
-            policy_name="Real Normal Deny",
-            effect=PolicyEffect.DENY,
             priority=1,
-            is_explicit_deny=False,
-            matched_at=time.monotonic(),
-            order=1,
+            condition=AttributeCondition(
+                "subject.role", ComparisonOperator.EQ, "admin"
+            ),
+        )
+        object.__setattr__(permit_policy, "is_explicit_deny", True)
+        engine.add_policy(permit_policy)
+
+        engine.add_policy(
+            Policy(
+                policy_id="deny_dept",
+                name="Normal deny by dept",
+                effect=PolicyEffect.DENY,
+                priority=100,
+                is_explicit_deny=False,
+                condition=AttributeCondition(
+                    "subject.department", ComparisonOperator.EQ, "IT"
+                ),
+            )
         )
 
-        result = engine._resolve_conflicts([fake_hit_flag_only, real_hit_deny_normal])
+        ctx = RequestContext(subject={"role": "admin", "department": "IT"})
+        result = engine.evaluate(ctx)
+
         assert result.decision == Decision.PERMIT
         assert result.resolved_by == "PERMIT_OVERRIDES"
-        assert result.resolved_by != "EXPLICIT_DENY_OVERRIDE"
+        assert "Permit by role" in [h.policy_name for h in result.matched_policies]
+        permit_hit = next(
+            h for h in result.matched_policies if h.policy_id == "permit_role"
+        )
+        assert permit_hit.is_explicit_deny is True
+        assert permit_hit.effect == PolicyEffect.PERMIT
 
-    def test_only_deny_effect_with_explicit_flag_triggers_override(self):
-        from solocoder_py.abac import PolicyHit
-        import time
-
+    def test_real_explicit_deny_triggers_override_via_full_evaluate(self):
         engine = ABACEngine(conflict_strategy=ConflictResolutionStrategy.PERMIT_OVERRIDES)
 
-        hit_permit = PolicyHit(
-            policy_id="p1",
-            policy_name="Permit",
-            effect=PolicyEffect.PERMIT,
-            priority=1,
-            is_explicit_deny=False,
-            matched_at=time.monotonic(),
-            order=0,
+        engine.add_policy(
+            Policy(
+                policy_id="permit_high",
+                name="High priority permit",
+                effect=PolicyEffect.PERMIT,
+                priority=999,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
         )
-        hit_explicit_deny = PolicyHit(
-            policy_id="p2",
-            policy_name="Explicit Deny",
-            effect=PolicyEffect.DENY,
-            priority=1,
-            is_explicit_deny=True,
-            matched_at=time.monotonic(),
-            order=1,
+        engine.add_policy(
+            Policy(
+                policy_id="deny_explicit",
+                name="Low priority explicit deny",
+                effect=PolicyEffect.DENY,
+                priority=1,
+                is_explicit_deny=True,
+                condition=AttributeCondition(
+                    "subject.department", ComparisonOperator.EQ, "IT"
+                ),
+            )
         )
 
-        fake_evaluate_result = engine._resolve_conflicts([hit_permit, hit_explicit_deny])
-        assert fake_evaluate_result.resolved_by == "PERMIT_OVERRIDES"
-        assert fake_evaluate_result.decision == Decision.PERMIT
+        ctx = RequestContext(subject={"role": "admin", "department": "IT"})
+        result = engine.evaluate(ctx)
+
+        assert result.decision == Decision.DENY
+        assert result.resolved_by == "EXPLICIT_DENY_OVERRIDE"
+        assert len(result.matched_policies) == 2
+        explicit_hit = next(
+            h for h in result.matched_policies if h.policy_id == "deny_explicit"
+        )
+        assert explicit_hit.is_explicit_deny is True
+        assert explicit_hit.effect == PolicyEffect.DENY
 
 
 # =============================

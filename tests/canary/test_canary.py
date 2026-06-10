@@ -140,7 +140,10 @@ class TestTrafficRouterMetricsSeparation:
         assert stats.candidate_error_rate > 0
 
     def test_baseline_p99_latency(self):
+        self.router.set_traffic_percentage("test", 0)
         for i in range(100):
+            _, vtype = self.router.route("test", f"u-{i}")
+            assert vtype == VersionType.BASELINE
             self.router.record_metrics(
                 "test",
                 VersionType.BASELINE,
@@ -148,6 +151,7 @@ class TestTrafficRouterMetricsSeparation:
                 is_error=False,
             )
         stats = self.router.get_stats("test")
+        assert stats.baseline_requests == 100
         assert stats.baseline_p99_latency_ms >= 400.0
 
     def test_baseline_error_rate(self):

@@ -641,3 +641,100 @@ class TestDuplicateDeliveryPrevention:
         assert result.channel_results["bad"].failed is True
         assert result.channel_results["good"].succeeded is True
         assert good.delivered_count == 1
+
+
+class TestLateSuccessRecordedCorrectly:
+    def test_background_thread_late_success_adds_success_attempt_record(self):
+        ch = EventControlledChannel("late")
+        cfg = ChannelConfig(
+            channel_name="late",
+            timeout=0.05,
+            max_attempts=3,
+            backoff_type=BackoffType.FIXED,
+            fixed_interval=0.02,
+        )
+        engine = FanoutEngine(
+            channels={"late": ch},
+            channel_configs={"late": cfg},
+        )
+
+        fanout_thread = threading.Thread(target=lambda: engine.fanout(_notice()), daemon=True)
+        fanout_thread.start()
+
+        assert ch.wait_until_started(timeout=5.0), "第一次投递应已启动"
+        fanout_thread.join(timeout=2.0)
+        assert not fanout_thread.is_alive(), "fanout 应已在耗尽尝试后返回"
+
+        assert ch.delivered_count == 0, "后台线程未释放，此时不应已成功"
+
+        ch.release()
+        ch.release()
+        ch.release()
+
+        time.sleep(0.1)
+
+        assert ch.delivered_count == 1, "释放后应仅成功 1 次"
+
+    def test_delivered_event_set_before_next_attempt_records_success_attempt(self):
+        ch = EventControlledChannel("pre-set")
+        cfg = ChannelConfig(
+            channel_name="pre-set",
+            timeout=0.05,
+            max_attempts=2,
+            backoff_type=BackoffType.FIXED,
+            fixed_interval=0.02,
+        )
+        engine = FanoutEngine(
+            channels={"pre-set": ch},
+            channel_configs={"pre-set": cfg},
+        )
+
+        fanout_thread = threading.Thread(target=lambda: engine.fanout(_notice()), daemon=True)
+        fanout_thread.start()
+
+        assert ch.wait_until_started(timeout=5.0), "第一次投递应已启动"
+        ch.release()
+
+        fanout_thread.join(timeout=2.0)
+        assert not fanout_thread.is_alive(), "fanout 应已结束"
+
+        result = engine.fanout(_notice())
+        r = result.channel_results["pre-set"]
+        assert r.status == ChannelDeliveryStatus.SUCCESS
+        assert len(r.attempts_detail) >= 1
+        assert any(a.success for a in r.attempts_detail)
+
+
+class TestNoTimeoutTOCTOU:
+    def test_completed_thread_just_before_timeout_check_not_marked_timeout(self):
+        for _ in range(50):
+            ch = InMemoryChannel("edge")
+            ch.set_delay(0.01)
+            cfg = ChannelConfig(channel_name="edge", timeout=0.015, max_attempts=1)
+            engine = FanoutEngine(
+                channels={"edge": ch},
+                channel_configs={"edge": cfg},
+            )
+            result = engine.fanout(_notice())
+            r = result.channel_results["edge"]
+            assert r.status != ChannelDeliveryStatus.TIMEOUT, (
+                f"线程在超时窗口内完成不应被标记为 TIMEOUT，实际状态={r.status}"
+            )
+            assert r.status == ChannelDeliveryStatus.SUCCESS
+            assert ch.delivered_count == 1
+
+    def test_failed_exception_after_timeout_still_returns_failed_not_timeout(self):
+        ch = InMemoryChannel("fail-fast")
+        ch.set_fail_next_n(1)
+        cfg = ChannelConfig(channel_name="fail-fast", timeout=5.0, max_attempts=1)
+        engine = FanoutEngine(
+            channels={"fail-fast": ch},
+            channel_configs={"fail-fast": cfg},
+        )
+        result = engine.fanout(_notice())
+        r = result.channel_results["fail-fast"]
+        assert r.status == ChannelDeliveryStatus.FAILED
+        assert r.status != ChannelDeliveryStatus.TIMEOUT
+        assert isinstance(r.final_error, RuntimeError)
+        assert ch.delivered_count == 0
+

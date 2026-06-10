@@ -26,14 +26,19 @@ class GlobalQuota:
     created_at: datetime = field(default_factory=datetime.now)
     period_start: Optional[datetime] = None
     reset_at: Optional[datetime] = None
+    _skip_validation: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self._skip_validation:
+            return
         if not self.quota_id:
             raise ValueError("quota_id cannot be empty")
         if self.limit < 0:
             raise InvalidQuotaAmountError("limit cannot be negative")
         if self.used < 0:
             raise InvalidQuotaAmountError("used cannot be negative")
+        if self.used > self.limit:
+            raise InvalidQuotaAmountError("used cannot exceed limit")
 
     @property
     def remaining(self) -> int:
@@ -48,6 +53,7 @@ class GlobalQuota:
             created_at=self.created_at,
             period_start=self.period_start,
             reset_at=self.reset_at,
+            _skip_validation=True,
         )
 
 
@@ -60,14 +66,19 @@ class TenantQuota:
     created_at: datetime = field(default_factory=datetime.now)
     period_start: Optional[datetime] = None
     reset_at: Optional[datetime] = None
+    _skip_validation: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self._skip_validation:
+            return
         if not self.tenant_id:
             raise ValueError("tenant_id cannot be empty")
         if self.limit < 0:
             raise InvalidQuotaAmountError("limit cannot be negative")
         if self.used < 0:
             raise InvalidQuotaAmountError("used cannot be negative")
+        if self.used > self.limit:
+            raise InvalidQuotaAmountError("used cannot exceed limit")
 
     @property
     def remaining(self) -> int:
@@ -82,6 +93,7 @@ class TenantQuota:
             created_at=self.created_at,
             period_start=self.period_start,
             reset_at=self.reset_at,
+            _skip_validation=True,
         )
 
 

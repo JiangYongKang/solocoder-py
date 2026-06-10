@@ -50,13 +50,24 @@ class TestModels:
         with pytest.raises(InvalidQuotaAmountError):
             make_tenant_quota("t", -1)
 
-    def test_quota_used_can_exceed_limit_after_adjustment(self):
-        gq = GlobalQuota(quota_id="q", limit=10, used=20)
-        assert gq.used == 20
-        assert gq.remaining == -10
-        tq = TenantQuota(tenant_id="t", limit=10, used=20)
-        assert tq.used == 20
-        assert tq.remaining == -10
+    def test_quota_used_exceeds_limit_raises_on_direct_construction(self):
+        with pytest.raises(InvalidQuotaAmountError):
+            GlobalQuota(quota_id="q", limit=10, used=20)
+        with pytest.raises(InvalidQuotaAmountError):
+            TenantQuota(tenant_id="t", limit=10, used=20)
+
+    def test_quota_copy_allows_used_exceeding_limit(self):
+        gq = GlobalQuota(quota_id="q", limit=100, used=50)
+        gq.limit = 10
+        copied = gq.copy()
+        assert copied.used == 50
+        assert copied.remaining == -40
+
+        tq = TenantQuota(tenant_id="t", limit=100, used=50)
+        tq.limit = 10
+        copied_tq = tq.copy()
+        assert copied_tq.used == 50
+        assert copied_tq.remaining == -40
 
     def test_quota_copy_is_independent(self):
         tq = make_tenant_quota("t1", 100)

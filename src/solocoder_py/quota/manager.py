@@ -94,9 +94,11 @@ class QuotaManager:
             self._global_quota.period_start, self._global_quota.period, now
         ):
             for tenant_id in self._tenant_quotas:
-                self._tenant_quotas[tenant_id].used = 0
-                self._tenant_quotas[tenant_id].period_start = now
-                self._tenant_quotas[tenant_id].reset_at = now
+                tenant_lock = self._get_or_create_tenant_lock(tenant_id)
+                with tenant_lock:
+                    self._tenant_quotas[tenant_id].used = 0
+                    self._tenant_quotas[tenant_id].period_start = now
+                    self._tenant_quotas[tenant_id].reset_at = now
             self._global_quota.used = 0
             self._global_quota.period_start = now
             self._global_quota.reset_at = now

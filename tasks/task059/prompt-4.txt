@@ -1,0 +1,4 @@
+你实现的发布订阅模块第三轮修复后仍存在以下问题，需要在 "src/solocoder_py/pubsub/" 范围内修复：
+1. test_pubsub.py 的 test_clear_records_dropped_for_buffered_messages 测试在 clear() 前调用了 handler_event.set() 释放了 handler 消费缓冲区消息，导致 clear 时缓冲区已为空，_stop_subscriber_dispatch 中的残留消息 DROPPED 循环从未被执行。该测试只验证了 clear 清空了主题和记录，未覆盖真正的残留消息处理路径。
+2. test_pubsub.py 的 test_block_strategy_bounds_buffer 测试在 BLOCK 改为异步入队后被大幅简化，删除了对消息排队等待后成功投递路径的时序验证，修改后的断言只验证了成功与丢弃数量之和等于总数，允许 SUCCESS 与 DROPPED 任意组合，未验证 BLOCK 策略"等待后最终成功"的核心语义。
+3. 修复后运行 "poetry run pytest tests/pubsub/ -q"，确保该模块测试通过。

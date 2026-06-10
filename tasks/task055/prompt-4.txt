@@ -1,0 +1,3 @@
+你实现的 ABAC 模块第三轮修复后仍存在以下问题，需要在 "src/solocoder_py/abac/" 范围内修复：
+1. test_abac.py 中新增的两个测试用例（test_only_deny_effect_with_explicit_flag_triggers_override 和 test_explicit_deny_filter_requires_both_flag_and_effect_deny）都直接调用了 _resolve_conflicts 私有方法而非 evaluate 公有方法，完全绕过了 engine.py 新增的 is_explicit_deny 双重检查过滤逻辑。正常的 evaluate 流程遇到显式拒绝会直接返回 DENY 而不会进入 _resolve_conflicts，因此这两个测试对第三轮修复的核心代码路径覆盖率是零，无法验证 PERMIT + is_explicit_deny=True 错误触发显式拒绝优先的问题已被解决。应通过完整 evaluate 流程端到端验证过滤逻辑。
+2. 修复后运行 "poetry run pytest tests/abac/ -q"，确保该模块测试通过。

@@ -426,6 +426,37 @@ class TestDuplicateAssignmentDetection:
         with pytest.raises(PartitionAlreadyAssignedError, match="multiple consumers"):
             coordinator.force_rebalance()
 
+    def test_owner_record_mismatch_with_actual_holder_via_public_path(
+        self, coordinator: ConsumerGroupCoordinator
+    ):
+        c1 = coordinator.join_group("c1")
+        c2 = coordinator.join_group("c2")
+
+        assert 0 in c1.assigned_partitions
+        assert 1 in c2.assigned_partitions
+
+        coordinator._partition_owner[0] = "c2"
+
+        assert 0 in c1.assigned_partitions
+        assert coordinator._partition_owner[0] == "c2"
+
+        with pytest.raises(PartitionAlreadyAssignedError, match="ownership mismatch"):
+            coordinator.force_rebalance()
+
+    def test_recorded_owner_does_not_hold_partition_via_public_path(
+        self, coordinator: ConsumerGroupCoordinator
+    ):
+        c1 = coordinator.join_group("c1")
+        assert 0 in c1.assigned_partitions
+        assert coordinator.get_partition_owner(0) == "c1"
+
+        c1.revoke_partition(0)
+        assert 0 not in c1.assigned_partitions
+        assert coordinator.get_partition_owner(0) == "c1"
+
+        with pytest.raises(PartitionAlreadyAssignedError, match="does not have partition assigned"):
+            coordinator.force_rebalance()
+
 
 class TestConsumerLeaveEmptiesPartitionOwner:
     def test_last_consumer_leave_clears_owners(self, coordinator: ConsumerGroupCoordinator):

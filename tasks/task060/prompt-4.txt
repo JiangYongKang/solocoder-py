@@ -1,0 +1,4 @@
+你实现的分区有序消费模块第三轮修复后仍存在以下问题，需要在 "src/solocoder_py/partition_ordering/" 范围内修复：
+1. coordinator.py 新增的 _validate_ownership_consistency 方法包含三个校验分支，但 test_coordinator.py 中只有 test_ownership_conflict_detected_on_force_rebalance_public_path 覆盖了"多消费者同时持有同一分区"这一个分支，其余两个一致性校验分支（协调器记录的 _partition_owner 与实际消费者持有的分区不一致、协调器记录所有者但该消费者未持有对应分区）没有任何测试覆盖。
+2. coordinator.py _do_rebalance 方法中原有的"if pid in consumer.assigned_partitions: raise PartitionAlreadyAssignedError"重复分配异常检查在新增加的 _validate_ownership_consistency 之后变成了不可达代码，因为一致性校验在重平衡开始时已提前检测了所有多消费者冲突场景，到达分配循环时不可能再有重复分配。应移除该死代码分支。
+3. 修复后运行 "poetry run pytest tests/partition_ordering/ -q"，确保该模块测试通过。

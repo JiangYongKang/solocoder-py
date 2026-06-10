@@ -229,12 +229,6 @@ class ConsumerGroupCoordinator:
                     if self._partition_owner.get(pid) == current_owner:
                         del self._partition_owner[pid]
 
-                if pid in consumer.assigned_partitions:
-                    raise PartitionAlreadyAssignedError(
-                        f"partition {pid} is already assigned to consumer '{cid}' "
-                        f"during rebalance, possible ownership conflict"
-                    )
-
                 initial_offset = self._group_committed_offsets.get(pid, -1)
                 consumer.assign_partition(pid, initial_committed_offset=initial_offset)
 

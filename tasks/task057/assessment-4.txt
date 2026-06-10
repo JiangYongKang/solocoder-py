@@ -1,0 +1,8 @@
+产物不满意：
+1. `test_completed_thread_just_before_timeout_check_not_marked_timeout` 测试用了 delay=0.01 秒和 timeout=0.015 秒，由于 delay 小于 timeout，后台线程总是能在超时前完成投递并设置 delivered_event，结果在进入 `t.join(timeout)` 后的任何检查前 delivered_event 就已为 True。在旧代码中这个场景同样返回 SUCCESS，测试根本无法重现提示词描述的"delivered_event 判定为 False 后线程恰好完成"的 TOCTOU 竞态窗口。该测试仅验证了正常超时内完成的路径，未真正覆盖 TOCTOU 修复逻辑，delay 与 timeout 的差值过大导致竞态条件永远无法被触发。
+2. `test_background_thread_late_success_adds_success_attempt_record` 测试仅在 fanout 完成后检查 EventControlledChannel 的 `delivered_count == 1`，从未读取 ChannelResult 的 attempts_detail 来验证是否包含成功投递记录。提示词要求修复的核心问题是"返回的 ChannelResult 的 attempts_detail 中缺少实际成功投递对应的条目"，而该测试完全不涉及 attempts_detail 的断言。另一个测试 `test_delivered_event_set_before_next_attempt_records_success_attempt` 是在第一个 fanout 完成后发起第二个独立 fanout，两次调用各自拥有独立的 delivered_event，并非测试同一个 fanout 内跨轮次重试的 delivered_event 传播场景，无法验证问题 1 的修复是否生效。
+3. `test_failed_exception_after_timeout_still_returns_failed_not_timeout` 使用了快速失败渠道与 timeout=5.0 的超时配置。后台线程几乎瞬间完成并写入 error_slot，无论新旧代码路径下 `not t.is_alive()` 都为 True、error_slot 非空，最终均抛出异常返回 FAILED 状态。该用例未触发任何 TOCTOU 相关的判定分支，且与 `TestFanoutFailureScenarios` 中已有测试等效，属于冗余用例。
+
+过程不满意：
+1. 模型在编写测试时未分析两个 bug 的实际触发条件就动手编码。TOCTOU 竞态的触发条件是后台线程在 `delivered_event.is_set()` 与 `t.is_alive()` 两次检查之间恰好完成，需要 delay 与 timeout 差值极小或用同步原语精准控制时机才能重现；问题 1 的触发条件是同一 fanout 调用内前轮超时的后台线程晚到设置了 delivered_event，需要直接检查 attempt_detail 的结构。模型仅从测试名称的概念出发拼凑场景，导致新增的四个用例均未真正验证对应修复是否生效，测试通过的假象掩盖了覆盖缺失的问题。
+2. 模型完成测试运行后因"72 个测试全部通过"即认定修复完成，未逐个审查新增测试的断言覆盖范围。`test_background_thread_late_success_adds_success_attempt_record` 只有一个 `assert ch.delivered_count == 1` 的渠道级断言，完全没有触及提示词要求修复的"attempts_detail 中缺少成功投递条目"这一核心产物问题。模型在总结中声称"消除了所有 TOCTOU 窗口"和"attempts_detail 包含成功条目"，但测试并未为这些声明提供证据支撑，属于以表象验证代替实质验证。

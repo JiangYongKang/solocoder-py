@@ -153,13 +153,24 @@ class FanoutEngine:
             if delay > 0:
                 self._sleeper(delay)
 
-            if delivered_event.is_set():
-                final_status = ChannelDeliveryStatus.SUCCESS
-                break
-
             attempt_start = self._time_provider()
             attempt_success = False
             attempt_error: Optional[Exception] = None
+
+            if delivered_event.is_set():
+                attempt_success = True
+                final_status = ChannelDeliveryStatus.SUCCESS
+                attempt_duration = self._time_provider() - attempt_start
+                attempts_detail.append(
+                    ChannelAttempt(
+                        attempt_number=attempt,
+                        executed_at=attempt_start,
+                        success=True,
+                        error=None,
+                        duration=attempt_duration,
+                    )
+                )
+                break
 
             try:
                 self._deliver_with_timeout(
@@ -231,17 +242,18 @@ class FanoutEngine:
         t.start()
         t.join(timeout=timeout)
 
-        if delivered_event.is_set():
+        if not t.is_alive():
+            if delivered_event.is_set():
+                return
+            exc = error_slot[0]
+            if exc is not None:
+                error_slot[0] = None
+                if isinstance(exc, Exception):
+                    raise exc
+                raise Exception(str(exc))
             return
 
-        if t.is_alive():
-            raise ChannelTimeoutError(channel.name, timeout)
-
-        exc = error_slot[0]
-        if exc is not None:
-            error_slot[0] = None
-            if isinstance(exc, Exception):
-                raise exc
-            raise Exception(str(exc))
+        if delivered_event.is_set():
+            return
 
         raise ChannelTimeoutError(channel.name, timeout)

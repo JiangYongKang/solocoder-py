@@ -1,0 +1,4 @@
+你实现的配额管理模块第三轮修复后仍存在以下问题，需要在 "src/solocoder_py/quota/" 范围内修复：
+1. manager.py 的 _maybe_reset_global_period 方法在重置所有租户的 used 为 0 时没有逐一获取各租户的 tenant_lock，而 reset_global_quota 方法执行相同操作时会获取 tenant_lock，两个方法对同一操作使用的锁策略不一致。如果将来 _maybe_reset_global_period 被新增的未持锁调用路径触发，租户 used 字段可能被并发访问线程观察到中间状态。
+2. models.py 的 GlobalQuota 和 TenantQuota 的 __post_init__ 方法移除了 used > limit 的校验，外部代码绕过工厂函数直接构造这两个数据类时不会触发任何错误提示，数据合法性屏障被削弱。应保留校验同时让 copy() 方法能正常工作。
+3. 修复后运行 "poetry run pytest tests/quota/ -q"，确保该模块测试通过。

@@ -1,0 +1,4 @@
+你实现的通知扇出模块第三轮修复后仍存在以下问题，需要在 "src/solocoder_py/notification_fanout/" 范围内修复：
+1. fanout_engine.py 的 _deliver_with_retries 方法在检测到 delivered_event 被上一轮超时后台线程置位后，仅将 final_status 设为 SUCCESS 并 break 跳出，但跳过了追加成功尝试记录的步骤。导致返回的 ChannelResult 的 status 为 SUCCESS 但 attempts_detail 中仅包含失败的尝试记录，缺少实际成功投递对应的条目，attempts 计数与真实投递次数不一致。
+2. fanout_engine.py 的 _deliver_with_timeout 方法中 delivered_event.is_set() 与 t.is_alive() 两个检查之间存在 TOCTOU 竞态窗口：后台线程可能在 delivered_event 被判定为 False 之后、t.is_alive() 判定之前恰好完成投递并置位 delivered_event，导致实际已成功的投递被错误标记为超时。
+3. 修复后运行 "poetry run pytest tests/notification_fanout/ -q"，确保该模块测试通过。

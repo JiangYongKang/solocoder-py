@@ -519,32 +519,47 @@ class TestBackpressureIsolation:
         for i in range(1, BUFFER_SIZE + 1):
             broker_with_topic.publish("test-topic", i, message_id=f"blk-{i}")
 
-        time.sleep(0.1)
+        time.sleep(0.2)
         buf_size = broker_with_topic.get_subscriber_buffer_size("test-topic", "block-sub")
         assert buf_size == BUFFER_SIZE
 
+        late_msg_recorded_before = broker_with_topic.get_delivery_records(
+            message_id="blk-late"
+        )
+        assert len(late_msg_recorded_before) == 0
+
         broker_with_topic.publish("test-topic", "late", message_id="blk-late")
-        time.sleep(0.1)
+        time.sleep(0.2)
+
         buf_size_after_late = broker_with_topic.get_subscriber_buffer_size(
             "test-topic", "block-sub"
         )
         assert buf_size_after_late == BUFFER_SIZE
 
+        late_records = broker_with_topic.get_delivery_records(
+            message_id="blk-late", subscriber_id="block-sub"
+        )
+        assert len(late_records) == 0 or (
+            len(late_records) == 1 and late_records[0].status == DeliveryStatus.DROPPED
+        )
+
         can_proceed.set()
-        time.sleep(0.5)
+        time.sleep(0.6)
+
+        buf_size_after_release = broker_with_topic.get_subscriber_buffer_size(
+            "test-topic", "block-sub"
+        )
+        assert buf_size_after_release == 0
 
         records = broker_with_topic.get_delivery_records(subscriber_id="block-sub")
         statuses = {r.message_id: r.status for r in records}
         for i in range(BUFFER_SIZE + 1):
             assert f"blk-{i}" in statuses, f"blk-{i} missing from records"
+            assert statuses[f"blk-{i}"] == DeliveryStatus.SUCCESS
+
         assert "blk-late" in statuses
-        success_count = sum(
-            1 for s in statuses.values() if s == DeliveryStatus.SUCCESS
-        )
-        dropped_count = sum(
-            1 for s in statuses.values() if s == DeliveryStatus.DROPPED
-        )
-        assert success_count + dropped_count == BUFFER_SIZE + 2
+        assert statuses["blk-late"] == DeliveryStatus.SUCCESS
+        assert len(received) == BUFFER_SIZE + 2
 
     def test_block_subscriber_does_not_block_other_subscribers(self, broker_with_topic: PubSubBroker):
         fast_received: List[Message] = []
@@ -760,8 +775,10 @@ class TestBackpressureIsolation:
         broker_with_topic.create_topic("other-topic")
         received: List[Message] = []
         handler_event = threading.Event()
+        handler_started = threading.Event()
 
         def handler(msg: Message) -> None:
+            handler_started.set()
             handler_event.wait(timeout=5.0)
             received.append(msg)
 
@@ -781,18 +798,25 @@ class TestBackpressureIsolation:
             broker_with_topic.publish("test-topic", i, message_id=f"clear-{i}")
         broker_with_topic.publish("other-topic", "other-msg", message_id="other-1")
 
-        time.sleep(0.3)
+        handler_started.wait(timeout=2.0)
+        assert handler_started.is_set()
+        time.sleep(0.1)
+
+        buf_size_before = broker_with_topic.get_subscriber_buffer_size(
+            "test-topic", "clear-sub"
+        )
+        assert buf_size_before == 2
 
         pre_clear_records = broker_with_topic.get_delivery_records()
         assert len(pre_clear_records) >= 1
-
-        handler_event.set()
-        time.sleep(0.3)
 
         broker_with_topic.clear()
 
         assert broker_with_topic.list_topics() == []
         assert broker_with_topic.get_delivery_records() == []
+
+        handler_event.set()
+        time.sleep(0.2)
 
     def test_inactive_subscriber_does_not_receive(self, broker_with_topic: PubSubBroker):
         received: List[Message] = []

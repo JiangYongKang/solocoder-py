@@ -1,0 +1,3 @@
+你实现的灰度发布模块第三轮修复后仍存在以下问题，需要在 "src/solocoder_py/canary/" 范围内修复：
+1. router.py 的 route 方法恢复请求计数后，TestTrafficRouterMetricsSeparation 类中的 test_baseline_p99_latency 测试仍直接调用 record_metrics 而未先调用 route，导致 baseline_requests 始终为零，延迟样本虽被记录但请求计数缺失形成统计死角。
+2. 修复后运行 "poetry run pytest tests/canary/ -q"，确保该模块测试通过。

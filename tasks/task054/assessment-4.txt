@@ -1,0 +1,4 @@
+产物不满意：
+1. 模型在 test_rbac.py 中将测试 test_permission_with_both_wildcards_rejected_at_creation 改为 test_adding_permission_with_both_wildcards_rejected，但修复是无效的。make_engine() 创建的引擎和 create_role("superadmin") 创建的角色依然是死代码，因为 Permission(action="*", resource="*") 在传给 add_permission_to_role 之前就在 __post_init__ 中抛出了 ValueError，异常路径与修复前完全相同，add_permission_to_role 从未被执行到。提示词明确要求解决"引擎创建的引擎和角色在断言中从未被使用"的问题，但模型只是把抛异常的代码从单独一行挪到函数参数位置，本质未变。根因是模型不理解 Python 的参数求值顺序，构造阶段的异常拦截在引擎层之前。正确做法是在引擎的 add_permission_to_role 中增加对双通配权限的校验逻辑，在引擎层面主动拒绝，而非依赖构造阶段被动抛异常。
+过程不满意：
+1. 模型在改完测试代码运行 pytest 看到 110 passed 后，在思考过程中声称"引擎代码真正被使用"、"engine 和 superadmin 角色在断言中被真正使用"，并总结"测试从引擎接口层面验证了双通配权限被拒绝的行为"。但 Python 的参数求值语义决定了 Permission 构造函数中的 __post_init__ 先于 add_permission_to_role 执行，异常仍来自构造路径而非引擎路径，engine 和角色在异常发生时从未被执行到。模型只做了代码表面重组而未推演验证修改是否真正改变了异常抛出链，属于幻觉与虚假完成行为。正确做法是先阅读 Permission 的 __post_init__ 确认异常抛出位置，再阅读 engine.add_permission_to_role 确认引擎层有无通配校验，理解异常链后再决定修改策略，而非只看测试表面做文本替换后就宣称修复完成。

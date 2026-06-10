@@ -1,0 +1,7 @@
+产物不满意：
+1. 模型只在 test_baseline_p99_latency 中添加了 route 调用和 `set_traffic_percentage("test", 0)`，但没有对 TestTrafficRouterMetricsSeparation 类中其余测试做系统性排查。虽然 test_baseline_error_rate 和 test_baseline_and_candidate_metrics_separated 在前序轮次已包含 route 调用，但模型在修复过程中完全未查看这两个方法的代码状态，只是机械地按提示词点名的测试方法打了补丁。如果同类中还有其他方法同样缺少 route 调用，模型不会发现。根本原因是模型采用了"提示词提到哪个就修哪个"的被动响应策略，而不是先通读整个测试类确认所有需要使用请求计数的测试是否都已正确调用 route，再统一修复。
+2. 模型在修复过程中没有验证 router.py 的 route 方法确实已恢复了请求计数逻辑。提示词说"router.py 的 route 方法恢复请求计数后"，但模型未打开 router.py 确认 route 方法内部是否真有 `state.stats.baseline_requests += 1` 这类递增逻辑就盲目修改了测试。虽然最终 88 个测试全部通过表明 route 确实已恢复计数，但模型跳过了"验证前置条件"这一步，万一前序轮次的修复不完整或者 route 方法实现有误，仅靠测试通过来反向推断会掩盖更深层的问题。
+
+过程不满意：
+1. 模型在收到提示词后立即说"让我先查看这个测试并修复"，未经任何分析就确定了修复方向，然后直接执行了 view_files（查看整个 test_canary.py 文件，927 行）和 edit_file_search_replace（修改目标测试方法），整个思考过程只包含三次工具调用。模型没有先运行 `poetry run pytest tests/canary/test_canary.py::TestTrafficRouterMetricsSeparation::test_baseline_p99_latency -v` 来实际观察这个测试的失败信息，无法区分测试失败是因为 baseline_requests 永远为零还是因为 p99 延迟计算逻辑本身存在问题。在未确认失败模式的情况下就动手修改，属于跳过诊断直接治疗的推理习惯，虽然在简单场景下碰巧修对了，但遇到复杂问题时容易误判根因。
+2. 模型调用 view_files 读取了 tests/canary/test_canary.py 的全部 927 行代码，但思考和总结中只提到了 test_baseline_p99_latency 这一个方法。这说明模型虽然一次性加载了完整的测试文件，却没有利用这些信息做交叉比对，比如检查 test_baseline_error_rate 是否也存在同样的 route 缺失问题。模型实际上是把"查看文件"当成了获取目标代码片段的通道，而非理解整体测试结构的手段。正确做法应该是读完整个文件后，先横向比对 TestTrafficRouterMetricsSeparation 中所有测试方法的请求计数调用模式，确认问题影响范围后再精准修改。

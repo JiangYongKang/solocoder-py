@@ -694,11 +694,13 @@ class TestEdgeCases:
         assert engine.check_permission("u", "read", "project:doc:999") is True
         assert engine.check_permission("u", "read", "project:img:1") is False
 
-    def test_permission_with_both_wildcards_rejected_at_creation(self):
+    def test_adding_permission_with_both_wildcards_rejected(self):
         engine = make_engine()
         engine.create_role("superadmin")
         with pytest.raises(ValueError, match=r"action cannot be '\*'"):
-            Permission(action="*", resource="*")
+            engine.add_permission_to_role(
+                "superadmin", Permission(action="*", resource="*")
+            )
 
     def test_get_role_inheritance_chain_not_found(self):
         engine = make_engine()
