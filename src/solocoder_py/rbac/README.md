@@ -7,7 +7,7 @@
 1. **角色与权限模型**：支持定义角色、权限项和用户-角色绑定关系，权限项包含操作动作（action）与资源标识（resource）。
 2. **角色继承**：子角色自动继承父角色的全部权限，允许多级继承，校验时正确展开继承链，并检测循环继承。
 3. **权限并集求值**：用户可绑定多个角色，最终有效权限为各角色权限并集，重复权限自动去重。
-4. **通配资源匹配**：仅权限资源（`resource`）字段支持通配符匹配（如 `project:*`、`project:read:*`、`*`），动作（`action`）字段必须精确匹配，校验请求资源时按匹配规则判定是否允许。
+4. **通配资源匹配**：仅权限资源（`resource`）字段支持通配符匹配（如 `project:*`、`project:read:*`、`*`），动作（`action`）字段必须精确匹配且在创建权限时禁止使用 `"*"`（防止管理员误以为授予了全部操作权限），校验请求资源时按匹配规则判定是否允许。
 5. **线程安全与深层继承稳定**：所有操作均受 `RLock` 保护，支持多线程并发调用；角色继承链使用迭代 DFS 展开，可支持任意深度的继承层级而不触发递归栈溢出。
 6. **防御性封装**：通过 `create_role`、`get_role`、`list_roles` 返回的 `Role` 对象均为内部状态的防御性副本，外部直接修改返回对象不会影响引擎内部状态，所有变更必须通过 `RBACEngine` 提供的接口完成（从而保证父角色存在性校验、循环继承检测等约束不会被绕过）。
 
@@ -69,7 +69,7 @@ admin  (delete:project:*) →  admin  有效权限 = {read, write, delete}
    - 匹配要求模式和值的段数必须相同。
    - 每一段逐一比较：模式段为 `*` 则匹配任意值，否则必须完全相等。
 
-3. **`action` 字段不支持通配**：即便权限声明为 `action="*"`，也仅当请求动作精确等于字符串 `"*"` 时才匹配，不会扩大为任意操作。
+3. **`action` 字段禁止使用通配**：`"*"` 作为动作值在权限创建时会被直接拒绝（无论通过构造函数还是 `Permission.parse()`），抛出 `ValueError`，从源头防止管理员误以为授予了全部操作权限。通配符匹配仅在 `resource` 字段上生效。
 
 ### 匹配示例
 
@@ -77,14 +77,12 @@ admin  (delete:project:*) →  admin  有效权限 = {read, write, delete}
 |---------|--------|---------|
 | `action="read"`, `resource="project:123"` | `read`, `project:123` | ✅ 精确匹配 |
 | `action="read"`, `resource="project:123"` | `write`, `project:123` | ❌ action 不匹配 |
-| `action="*"`, `resource="project:123"` | `write`, `project:123` | ❌ action 必须精确等于 `"*"` |
-| `action="*"`, `resource="project:123"` | `*`, `project:123` | ✅ action 精确匹配 `"*"` |
 | `action="read"`, `resource="project:*"` | `read`, `project:123` | ✅ 段通配 |
 | `action="read"`, `resource="project:*"` | `read`, `doc:123` | ❌ 首段不匹配 |
 | `action="read"`, `resource="project:read:*"` | `read`, `project:read:456` | ✅ 三段通配末段 |
 | `action="read"`, `resource="project:*"` | `read`, `project` | ❌ 段数不同 |
 | `action="read"`, `resource="*"` | `read`, `any:thing:here` | ✅ 顶层 resource 通配 |
-| `action="*"`, `resource="*"` | `anything`, `any:thing` | ❌ action 不匹配 |
+| `action="*"`, `resource="..."` | — | ❌ 创建时即抛出 `ValueError` |
 
 ## 使用示例
 

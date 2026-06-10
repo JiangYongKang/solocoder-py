@@ -193,6 +193,34 @@ class TestRebalanceOffsetInheritance:
         assert len(next_msgs) == 1
         assert next_msgs[0].offset == committed_before + 1
 
+    def test_seek_backward_then_rebalance_inherits_regressed_offset(
+        self, coordinator: ConsumerGroupCoordinator
+    ):
+        for i in range(20):
+            coordinator.topic.produce_to_partition(1, "k", f"v-{i}")
+
+        c1 = coordinator.join_group("c1")
+
+        msgs = c1.poll(1, max_messages=20)
+        for i in range(10):
+            c1.commit(1, i)
+        assert c1.get_committed_offset(1) == 9
+
+        c1.seek(1, 2)
+        assert c1.get_committed_offset(1) == 2
+
+        c2 = coordinator.join_group("c2")
+
+        assert 1 in c2.assigned_partitions
+        assert 1 not in c1.assigned_partitions
+
+        assert c2.get_committed_offset(1) == 2
+        assert coordinator.get_group_committed_offset(1) == 2
+
+        next_msg = c2.poll(1, max_messages=1)
+        assert len(next_msg) == 1
+        assert next_msg[0].offset == 3
+
     def test_rebalance_preserves_offset_across_multiple_rebalances(
         self, coordinator: ConsumerGroupCoordinator
     ):
@@ -250,24 +278,37 @@ class TestRebalanceOffsetInheritance:
 
 
 class TestRebalanceOrderingGuarantee:
-    def test_revoke_returns_uncommitted_messages(self, coordinator: ConsumerGroupCoordinator):
-        c1 = coordinator.join_group("c1")
+    def test_revoke_partition_returns_uncommitted_messages(self, topic: PartitionedTopic):
+        consumer = OrderedPartitionConsumer(consumer_id="c1", topic=topic)
+        consumer.assign_partition(0)
 
         for i in range(5):
-            coordinator.topic.produce_to_partition(0, "k", f"v-{i}")
+            topic.produce_to_partition(0, "k", f"v-{i}")
 
-        c1.poll(0, max_messages=5)
-        c1.commit(0, 0)
-        c1.commit(0, 1)
+        msgs = consumer.poll(0, max_messages=5)
+        assert len(msgs) == 5
 
-        coordinator.join_group("c2")
+        consumer.commit(0, 0)
+        consumer.commit(0, 1)
+        assert consumer.get_committed_offset(0) == 1
 
-        if 0 in c1.assigned_partitions:
-            remaining = c1.get_in_flight_count(0)
-            assert remaining == 3
-        else:
-            assert 0 not in c1.assigned_partitions
-            assert coordinator.get_group_committed_offset(0) == 1
+        revoked = consumer.revoke_partition(0)
+
+        assert len(revoked) == 3
+        assert [m.offset for m in revoked] == [2, 3, 4]
+        assert [m.value for m in revoked] == ["v-2", "v-3", "v-4"]
+
+    def test_revoke_returns_empty_when_no_in_flight(self, topic: PartitionedTopic):
+        consumer = OrderedPartitionConsumer(consumer_id="c1", topic=topic)
+        consumer.assign_partition(0)
+
+        revoked = consumer.revoke_partition(0)
+        assert revoked == []
+
+    def test_revoke_unassigned_partition_returns_empty(self, topic: PartitionedTopic):
+        consumer = OrderedPartitionConsumer(consumer_id="c1", topic=topic)
+        revoked = consumer.revoke_partition(99)
+        assert revoked == []
 
 
 class TestForceRebalance:
@@ -279,34 +320,60 @@ class TestForceRebalance:
         assert new_gen == gen + 1
         assert coordinator.generation_id == new_gen
 
-    def test_force_rebalance_during_rebalance_raises(
+    def test_force_rebalance_during_rebalance_raises_via_listener(
         self, coordinator: ConsumerGroupCoordinator
     ):
-        coordinator.join_group("c1")
-        coordinator._rebalancing = True
-        try:
-            with pytest.raises(RebalanceInProgressError):
+        caught = []
+
+        def listener(event: RebalanceEvent):
+            try:
                 coordinator.force_rebalance()
-        finally:
-            coordinator._rebalancing = False
+            except RebalanceInProgressError as e:
+                caught.append(e)
 
-    def test_join_during_rebalance_raises(self, coordinator: ConsumerGroupCoordinator):
-        coordinator.join_group("c1")
-        coordinator._rebalancing = True
-        try:
-            with pytest.raises(RebalanceInProgressError):
-                coordinator.join_group("c2")
-            with pytest.raises(RebalanceInProgressError):
+        coordinator.join_group("c1", listener=listener)
+
+        assert len(caught) == 1
+        assert isinstance(caught[0], RebalanceInProgressError)
+        assert coordinator.is_rebalancing is False
+
+    def test_join_during_rebalance_raises_via_listener(
+        self, coordinator: ConsumerGroupCoordinator
+    ):
+        join_errors = []
+        leave_errors = []
+
+        def listener(event: RebalanceEvent):
+            try:
+                coordinator.join_group("intruder")
+            except RebalanceInProgressError as e:
+                join_errors.append(e)
+            try:
                 coordinator.leave_group("c1")
-        finally:
-            coordinator._rebalancing = False
+            except RebalanceInProgressError as e:
+                leave_errors.append(e)
 
-    def test_is_rebalancing_reflects_state(self, coordinator: ConsumerGroupCoordinator):
+        coordinator.join_group("c1", listener=listener)
+
+        assert len(join_errors) == 1
+        assert len(leave_errors) == 1
+        assert isinstance(join_errors[0], RebalanceInProgressError)
+        assert isinstance(leave_errors[0], RebalanceInProgressError)
         assert coordinator.is_rebalancing is False
-        coordinator._rebalancing = True
-        assert coordinator.is_rebalancing is True
-        coordinator._rebalancing = False
+        assert coordinator.get_consumer_count() == 1
+
+    def test_is_rebalancing_reflects_state_via_listener(
+        self, coordinator: ConsumerGroupCoordinator
+    ):
+        observed_states = []
+
+        def listener(event: RebalanceEvent):
+            observed_states.append(coordinator.is_rebalancing)
+
         assert coordinator.is_rebalancing is False
+        coordinator.join_group("c1", listener=listener)
+        assert coordinator.is_rebalancing is False
+        assert observed_states == [True]
 
 
 class TestDuplicateAssignmentDetection:
@@ -342,6 +409,22 @@ class TestDuplicateAssignmentDetection:
         coordinator.force_rebalance()
         coordinator.force_rebalance()
         assert coordinator.get_consumer_count() == 2
+
+    def test_ownership_conflict_detected_on_force_rebalance_public_path(
+        self, coordinator: ConsumerGroupCoordinator
+    ):
+        c1 = coordinator.join_group("c1")
+        c2 = coordinator.join_group("c2")
+
+        assert 0 in c1.assigned_partitions
+        assert 1 in c2.assigned_partitions
+
+        c2.assign_partition(0)
+        assert 0 in c1.assigned_partitions
+        assert 0 in c2.assigned_partitions
+
+        with pytest.raises(PartitionAlreadyAssignedError, match="multiple consumers"):
+            coordinator.force_rebalance()
 
 
 class TestConsumerLeaveEmptiesPartitionOwner:

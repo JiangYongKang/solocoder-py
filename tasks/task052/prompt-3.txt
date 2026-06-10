@@ -1,0 +1,4 @@
+你实现的灰度发布模块第二轮修复后仍存在以下问题，需要在 "src/solocoder_py/canary/" 范围内修复：
+1. router.py 的 route 方法中原有请求计数逻辑被移除后，route 和 record_metrics 之间没有任何强制关联，调用方漏调 record_metrics 时统计数据会静默丢失。
+2. controller.py 的 _take_metrics_snapshot 方法生成的 MetricsSnapshot 快照中只记录了 candidate 侧的错误率和延迟，baseline 侧虽然在 TrafficStats 中已正确计算但未纳入快照，回滚审计时缺失基线对比数据。
+3. 修复后运行 "poetry run pytest tests/canary/ -q"，确保该模块测试通过。

@@ -117,14 +117,35 @@ class TestPolicyValidation:
         assert p.is_explicit_deny is False
 
     def test_permit_policy_cannot_be_marked_explicit_deny(self):
+        with pytest.raises(
+            InvalidPolicyError,
+            match="is_explicit_deny=True can only be used with effect=PolicyEffect.DENY",
+        ):
+            Policy(
+                policy_id="p1",
+                name="permit",
+                effect=PolicyEffect.PERMIT,
+                is_explicit_deny=True,
+            )
+
+    def test_deny_policy_can_be_marked_explicit_deny(self):
         p = Policy(
             policy_id="p1",
-            name="permit",
-            effect=PolicyEffect.PERMIT,
+            name="explicit deny",
+            effect=PolicyEffect.DENY,
             is_explicit_deny=True,
         )
-        assert p.effect == PolicyEffect.PERMIT
+        assert p.effect == PolicyEffect.DENY
         assert p.is_explicit_deny is True
+
+    def test_deny_policy_default_not_explicit(self):
+        p = Policy(
+            policy_id="p1",
+            name="normal deny",
+            effect=PolicyEffect.DENY,
+        )
+        assert p.effect == PolicyEffect.DENY
+        assert p.is_explicit_deny is False
 
     def test_is_explicit_deny_must_be_bool(self):
         with pytest.raises(InvalidPolicyError, match="is_explicit_deny must be a boolean"):
@@ -897,6 +918,65 @@ class TestExplicitDenyOverride:
         assert result.decision == Decision.DENY
         assert result.resolved_by == "HIGHEST_PRIORITY"
         assert "High priority normal deny" in result.reason
+
+    def test_explicit_deny_filter_requires_both_flag_and_effect_deny(self):
+        from solocoder_py.abac import PolicyHit
+        import time
+
+        engine = ABACEngine(conflict_strategy=ConflictResolutionStrategy.PERMIT_OVERRIDES)
+
+        fake_hit_flag_only = PolicyHit(
+            policy_id="fake_permit_with_flag",
+            policy_name="Fake Permit with is_explicit_deny=True",
+            effect=PolicyEffect.PERMIT,
+            priority=10,
+            is_explicit_deny=True,
+            matched_at=time.monotonic(),
+            order=0,
+        )
+        real_hit_deny_normal = PolicyHit(
+            policy_id="real_normal_deny",
+            policy_name="Real Normal Deny",
+            effect=PolicyEffect.DENY,
+            priority=1,
+            is_explicit_deny=False,
+            matched_at=time.monotonic(),
+            order=1,
+        )
+
+        result = engine._resolve_conflicts([fake_hit_flag_only, real_hit_deny_normal])
+        assert result.decision == Decision.PERMIT
+        assert result.resolved_by == "PERMIT_OVERRIDES"
+        assert result.resolved_by != "EXPLICIT_DENY_OVERRIDE"
+
+    def test_only_deny_effect_with_explicit_flag_triggers_override(self):
+        from solocoder_py.abac import PolicyHit
+        import time
+
+        engine = ABACEngine(conflict_strategy=ConflictResolutionStrategy.PERMIT_OVERRIDES)
+
+        hit_permit = PolicyHit(
+            policy_id="p1",
+            policy_name="Permit",
+            effect=PolicyEffect.PERMIT,
+            priority=1,
+            is_explicit_deny=False,
+            matched_at=time.monotonic(),
+            order=0,
+        )
+        hit_explicit_deny = PolicyHit(
+            policy_id="p2",
+            policy_name="Explicit Deny",
+            effect=PolicyEffect.DENY,
+            priority=1,
+            is_explicit_deny=True,
+            matched_at=time.monotonic(),
+            order=1,
+        )
+
+        fake_evaluate_result = engine._resolve_conflicts([hit_permit, hit_explicit_deny])
+        assert fake_evaluate_result.resolved_by == "PERMIT_OVERRIDES"
+        assert fake_evaluate_result.decision == Decision.PERMIT
 
 
 # =============================

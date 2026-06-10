@@ -1,0 +1,5 @@
+你实现的发布订阅模块第二轮修复后仍存在以下问题，需要在 "src/solocoder_py/pubsub/" 范围内修复：
+1. pubsub.py 的 publish 方法是按顺序遍历订阅者逐个入队的，一个 BLOCK 订阅者缓冲区满会阻塞整个 publish 调用，排在后面的其他订阅者最长可能错过这条消息，破坏了背压隔离。README 中隔离机制一节仍保留着不会阻塞发布线程的旧说法，与新实现矛盾。
+2. pubsub.py 的 _stop_subscriber_dispatch 方法停止分发线程时不处理缓冲区残留消息，调用 unsubscribe、delete_topic 或 clear 后这些已入队的消息既没有投递记录也没有 DROPPED 记录，与提示词要求的投递状态准确相违背。
+3. BLOCK 策略的测试只覆盖了阻塞后成功投递的路径，_enqueue_for_subscriber 中的等待超时丢弃和订阅者停止丢弃两条分支完全没有测试。现有 test_single_message_cannot_be_both_success_and_dropped 只发一条消息且缓冲区为空，根本不可能触发丢弃，属于形式化测试，没有真正验证互斥语义。
+4. 修复后运行 "poetry run pytest tests/pubsub/ -q"，确保该模块测试通过。

@@ -34,8 +34,6 @@ class GlobalQuota:
             raise InvalidQuotaAmountError("limit cannot be negative")
         if self.used < 0:
             raise InvalidQuotaAmountError("used cannot be negative")
-        if self.used > self.limit:
-            raise InvalidQuotaAmountError("used cannot exceed limit")
 
     @property
     def remaining(self) -> int:
@@ -70,8 +68,6 @@ class TenantQuota:
             raise InvalidQuotaAmountError("limit cannot be negative")
         if self.used < 0:
             raise InvalidQuotaAmountError("used cannot be negative")
-        if self.used > self.limit:
-            raise InvalidQuotaAmountError("used cannot exceed limit")
 
     @property
     def remaining(self) -> int:

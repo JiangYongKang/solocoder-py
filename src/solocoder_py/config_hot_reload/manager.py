@@ -52,7 +52,7 @@ class ConfigHotReloadManager:
                     ConfigChange(
                         key=key,
                         change_type=ChangeType.REMOVED,
-                        old_value=old_data[key],
+                        old_value=copy.deepcopy(old_data[key]),
                         new_value=None,
                     )
                 )
@@ -62,7 +62,7 @@ class ConfigHotReloadManager:
                         key=key,
                         change_type=ChangeType.ADDED,
                         old_value=None,
-                        new_value=new_data[key],
+                        new_value=copy.deepcopy(new_data[key]),
                     )
                 )
             else:
@@ -73,8 +73,8 @@ class ConfigHotReloadManager:
                         ConfigChange(
                             key=key,
                             change_type=ChangeType.MODIFIED,
-                            old_value=old_val,
-                            new_value=new_val,
+                            old_value=copy.deepcopy(old_val),
+                            new_value=copy.deepcopy(new_val),
                         )
                     )
 
@@ -111,7 +111,6 @@ class ConfigHotReloadManager:
                 version=version_str,
                 timestamp=timestamp,
                 data=snapshot,
-                is_rollback=False,
             )
 
             self._versions[version_str] = config_version
@@ -132,8 +131,10 @@ class ConfigHotReloadManager:
         with self._lock:
             if self._current_version is None:
                 raise NoActiveVersionError("No active configuration version")
-            value = self._versions[self._current_version].get(key, default)
-            return copy.deepcopy(value)
+            version_data = self._versions[self._current_version].data
+            if key in version_data:
+                return copy.deepcopy(version_data[key])
+            return default
 
     def get_all(self) -> Dict[str, Any]:
         with self._lock:

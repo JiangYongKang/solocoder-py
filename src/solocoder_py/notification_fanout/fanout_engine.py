@@ -38,7 +38,9 @@ class FanoutEngine:
 
         if channels:
             for name, ch in channels.items():
-                self.register_channel(name, ch, channel_configs.get(name) if channel_configs else None)
+                self.register_channel(
+                    name, ch, channel_configs.get(name) if channel_configs else None
+                )
 
     @property
     def registered_channels(self) -> list[str]:
@@ -101,7 +103,17 @@ class FanoutEngine:
         threads: list[threading.Thread] = []
 
         def _worker(ch_name: str) -> None:
-            result = self._deliver_with_retries(ch_name, notification)
+            try:
+                result = self._deliver_with_retries(ch_name, notification)
+            except BaseException as exc:
+                result = ChannelResult(
+                    channel_name=ch_name,
+                    status=ChannelDeliveryStatus.FAILED,
+                    attempts=0,
+                    attempts_detail=[],
+                    final_error=exc if isinstance(exc, Exception) else Exception(str(exc)),
+                    total_duration=0.0,
+                )
             with results_lock:
                 channel_results[ch_name] = result
 
@@ -132,17 +144,32 @@ class FanoutEngine:
         last_error: Optional[Exception] = None
         final_status: Optional[ChannelDeliveryStatus] = None
 
+        delivered_event = threading.Event()
+        delivery_lock = threading.Lock()
+        error_slot: list[Optional[BaseException]] = [None]
+
         for attempt in range(1, config.max_attempts + 1):
             delay = config.calculate_delay(attempt)
             if delay > 0:
                 self._sleeper(delay)
+
+            if delivered_event.is_set():
+                final_status = ChannelDeliveryStatus.SUCCESS
+                break
 
             attempt_start = self._time_provider()
             attempt_success = False
             attempt_error: Optional[Exception] = None
 
             try:
-                self._deliver_with_timeout(channel, notification, config.timeout)
+                self._deliver_with_timeout(
+                    channel,
+                    notification,
+                    config.timeout,
+                    delivered_event,
+                    delivery_lock,
+                    error_slot,
+                )
                 attempt_success = True
                 final_status = ChannelDeliveryStatus.SUCCESS
             except ChannelTimeoutError as exc:
@@ -183,22 +210,38 @@ class FanoutEngine:
         channel: NotificationChannel,
         notification: Notification,
         timeout: float,
+        delivered_event: threading.Event,
+        delivery_lock: threading.Lock,
+        error_slot: list[Optional[BaseException]],
     ) -> None:
-        result_container: list[Optional[BaseException]] = [None]
-
         def _target() -> None:
-            try:
-                channel.deliver(notification)
-            except BaseException as exc:
-                result_container[0] = exc
+            if delivered_event.is_set():
+                return
+            with delivery_lock:
+                if delivered_event.is_set():
+                    return
+                try:
+                    channel.deliver(notification)
+                except BaseException as exc:
+                    error_slot[0] = exc
+                    return
+                delivered_event.set()
 
         t = threading.Thread(target=_target, daemon=True)
         t.start()
         t.join(timeout=timeout)
 
+        if delivered_event.is_set():
+            return
+
         if t.is_alive():
             raise ChannelTimeoutError(channel.name, timeout)
 
-        exc = result_container[0]
+        exc = error_slot[0]
         if exc is not None:
-            raise exc
+            error_slot[0] = None
+            if isinstance(exc, Exception):
+                raise exc
+            raise Exception(str(exc))
+
+        raise ChannelTimeoutError(channel.name, timeout)

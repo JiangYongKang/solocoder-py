@@ -1,0 +1,7 @@
+产物不满意：
+1. manager.py 中 _maybe_reset_global_period 方法在重置所有租户的 used 为 0 时只持有 _global_lock，没有像 reset_global_quota 方法那样逐一获取各租户的 tenant_lock。虽然当前所有调用路径（_maybe_reset_tenant_period、get_global_quota、list_tenants）都先取得了 _global_lock 保证了线程安全，但两个方法对同一操作使用的锁策略不一致。如果将来 _maybe_reset_global_period 被新增的未持锁调用路径触发，将产生并发数据竞争，租户 used 字段可能被并发访问线程观察到中间状态。应在 _maybe_reset_global_period 的租户遍历中引入 tenant_lock 获取以保持一致性。
+2. models.py 中 GlobalQuota 和 TenantQuota 的 __post_init__ 方法移除了 used > limit 的校验，模型是考虑到限额调小后 used 可能大于 limit 且 copy() 需要正常工作。但直接移除校验后，外部代码绕过工厂函数直接构造这两个数据类时（如 GlobalQuota(quota_id='x', limit=10, used=9999)），不会触发任何错误提示，数据合法性屏障被移除。正确做法是保留 __post_init__ 中的 used > limit 校验，同时修改 copy() 方法使用 object.__setattr__ 构造副本以绕过 __post_init__ 的校验流程，仅在复制场景下允许超限状态存在。
+
+过程不满意：
+1. 模型在第三轮修复开始阶段，读完 manager.py、models.py 和 test_quota.py 后，连续对这三个文件执行了至少七八次代码编辑，期间没有运行过任何一次 pytest 来验证中间状态的正确性，直到所有修改完成后才第一次运行测试。这种批量编辑后统一验证的做法增加了问题定位的难度，如果多个编辑各自引入了不同类型的错误，无法快速判断是哪个改动导致了哪个失败。正确做法是每完成一个独立修复模块就立即运行相关测试子集，确保每步都验证通过后再继续下一步。
+2. 模型在编写 test_monthly_period_leap_year_feb_29_to_next_feb_non_leap 测试用例时，初始版本的时间跳转场景设计有误：从 2024-02-29 直接 set 到 2025-02-27，中间跨越了十一个月之久，导致在途中的 get_tenant_quota 调用时已触发了多轮月度重置、used 已变为 0，后续 assert used==70 的预期因此失败。第一次 pytest 运行就因这个测试场景本身的逻辑错误而失败。这说明模型在编写时间相关测试时没有完整推演时间线中各次 reset 触发的顺序和预期结果，实现后靠测试失败来发现自己的逻辑漏洞，效率低于先画出时间线推演每一步 boundary 计算和 reset 触发时机再编码。

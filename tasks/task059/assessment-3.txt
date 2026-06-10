@@ -1,0 +1,6 @@
+产物不满意：
+1. test_clear_records_dropped_for_buffered_messages 在 clear() 前调用 handler_event.set() 释放 handler 消费了缓冲区消息，导致 clear 时缓冲区为空，_stop_subscriber_dispatch 中的残留消息 DROPPED 循环从未被执行。提示词要求停止时残留消息应有 DROPPED 记录，但该测试只验证了 clear 清空了主题和记录，未覆盖真正的残留处理路径。应改为先 clear 再释放 handler，确保缓冲区有消息时触发残留消息的 DROPPED 记录逻辑。
+2. test_block_strategy_bounds_buffer 在 BLOCK 改为异步入队后被大幅简化，删除了对 "late" 消息排队等待后成功投递路径的时序验证。修改后只断言 `success_count + dropped_count == BUFFER_SIZE + 2` 允许 SUCCESS 与 DROPPED 任意组合，未验证 BLOCK 策略"等待后成功"的核心语义。新增的 test_block_subscriber_does_not_block_other_subscribers 只验证了发布不阻塞，缺少对 BLOCK 订阅者最终收到所有消息的确认，该测试不应只断言 fast 订阅者收到消息。
+过程不满意：
+1. 模型收到提示词后第一步就创建 TodoList，然后才用 view_files 读取 pubsub.py 源代码去理解问题。根据标注规范应先分析代码确认每个问题对应的具体代码行和模块位置，再制定有针对性的修复计划。先规划再分析的流程倒置导致 todo 条目过于宽泛，如"修复 publish 的背压隔离问题"未细化到 BLOCK 策略需要独立入队线程这个具体方案，降低了规划对实施的指导价值。
+2. 编写 test_clear_records_dropped_for_buffered_messages 测试时先释放 handler 再 clear 的顺序设计导致 _stop_subscriber_dispatch 的残留消息循环从未被触发。模型运行 pytest 看到 69 个测试全部通过后就声称修复完成，没有返回检查新增测试是否真正覆盖了目标代码路径。应在每个新增测试通过后审查其执行路径是否与测试命名一致，确保 clear 场景下的残留消息 DROPPED 记录逻辑确实被测试执行到。

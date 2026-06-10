@@ -1,0 +1,5 @@
+你实现的配置热更新模块第二轮修复后仍存在以下问题，需要在 "src/solocoder_py/config_hot_reload/" 范围内修复：
+1. manager.py 的 publish 和 rollback 方法通知监听器时，ConfigChange 事件携带的 old_value 和 new_value 是内部快照字典的原始引用，监听器原地修改事件里的值会污染内部配置快照。
+2. manager.py 的 get 方法对返回值无条件深拷贝，连调用方传入的 default 参数也会被深拷贝一份返回，导致键不存在时调用方无法用哨兵对象判断配置缺失。
+3. models.py 中 ConfigVersion 的 is_rollback 字段改为不回滚后成为永远为假的死字段，README 核心类职责表仍写着记录是否为回滚版本，readme 与实现矛盾且死字段无实际用途。
+4. 修复后运行 "poetry run pytest tests/config_hot_reload/ -q"，确保该模块测试通过。

@@ -1,0 +1,6 @@
+你实现的配额管理模块第二轮修复后仍存在以下问题，需要在 "src/solocoder_py/quota/" 范围内修复：
+1. manager.py 处理月度周期时用 period_start.replace 把月份加一来推算周期边界，当周期起始日是 29 到 31 号时，下个月没有对应日期会抛出 ValueError，配额服务直接崩溃。代码顶部已导入 calendar 模块但未使用。
+2. manager.py 的全局周期到期处理在两个方法中语义不一致：_maybe_reset_tenant_period 发现全局到期时只重置当前被访问的租户并推进全局 period_start，其他租户用量被永久遗留在新周期；而 get_global_quota 则全量重置所有租户，同一次到期的行为取决于先调用哪个方法。
+3. manager.py 的 _reclaim_tenant_usage_for_global 方法在调小全局上限时只是按租户字典序截断各租户的 used，但租户实际持有的资源没有归还，之后释放真实持有的资源时仍会抛 ReleaseExceedUsedError，与第二轮提示词第 3 条描述的问题完全相同。
+4. 周期重置相关测试只覆盖了 HOURLY 和 DAILY 两种周期，缺少 MONTHLY 和 WEEKLY 的到期用例，尤其需要覆盖月末 29-31 号这类日历边界场景。
+5. 修复后运行 "poetry run pytest tests/quota/ -q"，确保该模块测试通过。

@@ -36,7 +36,6 @@ class ConfigVersion:
     version: str
     timestamp: datetime
     data: Dict[str, Any] = field(default_factory=dict)
-    is_rollback: bool = False
 
     def __post_init__(self) -> None:
         if not self.version:

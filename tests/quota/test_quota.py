@@ -50,11 +50,13 @@ class TestModels:
         with pytest.raises(InvalidQuotaAmountError):
             make_tenant_quota("t", -1)
 
-    def test_quota_used_exceeds_limit_raises(self):
-        with pytest.raises(InvalidQuotaAmountError):
-            GlobalQuota(quota_id="q", limit=10, used=20)
-        with pytest.raises(InvalidQuotaAmountError):
-            TenantQuota(tenant_id="t", limit=10, used=20)
+    def test_quota_used_can_exceed_limit_after_adjustment(self):
+        gq = GlobalQuota(quota_id="q", limit=10, used=20)
+        assert gq.used == 20
+        assert gq.remaining == -10
+        tq = TenantQuota(tenant_id="t", limit=10, used=20)
+        assert tq.used == 20
+        assert tq.remaining == -10
 
     def test_quota_copy_is_independent(self):
         tq = make_tenant_quota("t1", 100)
@@ -94,13 +96,14 @@ class TestGlobalQuotaManagement:
         gq = mgr.set_global_quota(500)
         assert gq.limit == 500
 
-    def test_update_global_quota_truncates_used(self):
+    def test_update_global_quota_preserves_used(self):
         mgr = make_manager()
         mgr.set_global_quota(1000)
         mgr.create_tenant_quota("t1", 1000)
         mgr.acquire("t1", 800)
         gq = mgr.set_global_quota(500)
-        assert gq.used == 500
+        assert gq.used == 800
+        assert gq.remaining == -300
 
     def test_get_global_quota_not_set_raises(self):
         mgr = make_manager()
@@ -175,13 +178,14 @@ class TestTenantManagement:
         tq = mgr.update_tenant_quota_limit("t1", 500)
         assert tq.limit == 500
 
-    def test_update_tenant_quota_limit_truncates_used(self):
+    def test_update_tenant_quota_limit_preserves_used(self):
         mgr = make_manager()
         mgr.set_global_quota(1000)
         mgr.create_tenant_quota("t1", 500)
         mgr.acquire("t1", 400)
         tq = mgr.update_tenant_quota_limit("t1", 200)
-        assert tq.used == 200
+        assert tq.used == 400
+        assert tq.remaining == -200
 
     def test_update_tenant_quota_negative_limit_raises(self):
         mgr = make_manager()
@@ -435,14 +439,15 @@ class TestBoundaryConditions:
             mgr.acquire("t2", 50)
         assert exc.value.reason == "global_insufficient"
 
-    def test_update_limit_below_used_truncates(self):
+    def test_update_limit_below_used_preserves_used(self):
         mgr = make_manager()
         mgr.set_global_quota(1000)
         mgr.create_tenant_quota("t1", 500)
         mgr.acquire("t1", 400)
         mgr.update_tenant_quota_limit("t1", 200)
-        assert mgr.get_tenant_quota("t1").used == 200
-        assert mgr.get_tenant_quota("t1").remaining == 0
+        assert mgr.get_tenant_quota("t1").used == 400
+        assert mgr.get_tenant_quota("t1").remaining == -200
+        assert mgr.get_global_quota().used == 400
 
     def test_zero_limit_quota(self):
         mgr = make_manager()
@@ -747,6 +752,150 @@ class TestPeriodicReset:
         assert mgr.get_tenant_quota("t1").used == 0
         assert mgr.get_tenant_quota("t2").used == 0
 
+    def test_weekly_period_auto_reset(self):
+        from datetime import datetime
+        from solocoder_py.quota import ManualClock, QuotaPeriod
+
+        clock = ManualClock(datetime(2025, 3, 12, 10, 0, 0))
+        mgr = make_manager(clock)
+        mgr.set_global_quota(200, period=QuotaPeriod.WEEKLY)
+        mgr.create_tenant_quota("t1", 200, period=QuotaPeriod.WEEKLY)
+        mgr.acquire("t1", 150)
+        assert mgr.get_tenant_quota("t1").used == 150
+
+        clock.advance_seconds(6 * 24 * 60 * 60 + 23 * 60 * 60)
+        assert mgr.get_tenant_quota("t1").used == 150
+
+        clock.advance_seconds(2 * 60 * 60)
+        assert mgr.get_tenant_quota("t1").used == 0
+        assert mgr.get_global_quota().used == 0
+        mgr.acquire("t1", 200)
+        assert mgr.get_tenant_quota("t1").used == 200
+
+    def test_monthly_period_auto_reset_normal_day(self):
+        from datetime import datetime
+        from solocoder_py.quota import ManualClock, QuotaPeriod
+
+        clock = ManualClock(datetime(2025, 3, 15, 9, 0, 0))
+        mgr = make_manager(clock)
+        mgr.set_global_quota(500, period=QuotaPeriod.MONTHLY)
+        mgr.create_tenant_quota("t1", 500, period=QuotaPeriod.MONTHLY)
+        mgr.acquire("t1", 300)
+        assert mgr.get_tenant_quota("t1").used == 300
+
+        clock.set(datetime(2025, 4, 14, 23, 59, 59))
+        assert mgr.get_tenant_quota("t1").used == 300
+
+        clock.set(datetime(2025, 4, 15, 9, 0, 0))
+        assert mgr.get_tenant_quota("t1").used == 0
+        assert mgr.get_global_quota().used == 0
+
+    def test_monthly_period_end_of_month_31st_to_february(self):
+        from datetime import datetime
+        from solocoder_py.quota import ManualClock, QuotaPeriod
+
+        clock = ManualClock(datetime(2025, 1, 31, 12, 0, 0))
+        mgr = make_manager(clock)
+        mgr.set_global_quota(500, period=QuotaPeriod.MONTHLY)
+        mgr.create_tenant_quota("t1", 500, period=QuotaPeriod.MONTHLY)
+        mgr.acquire("t1", 400)
+        assert mgr.get_tenant_quota("t1").used == 400
+
+        clock.set(datetime(2025, 2, 27, 23, 59, 59))
+        assert mgr.get_tenant_quota("t1").used == 400
+
+        clock.set(datetime(2025, 2, 28, 12, 0, 0))
+        assert mgr.get_tenant_quota("t1").used == 0
+        assert mgr.get_global_quota().used == 0
+        mgr.acquire("t1", 500)
+        assert mgr.get_tenant_quota("t1").used == 500
+
+    def test_monthly_period_end_of_month_30th_to_31st(self):
+        from datetime import datetime
+        from solocoder_py.quota import ManualClock, QuotaPeriod
+
+        clock = ManualClock(datetime(2025, 4, 30, 8, 0, 0))
+        mgr = make_manager(clock)
+        mgr.set_global_quota(100, period=QuotaPeriod.MONTHLY)
+        mgr.create_tenant_quota("t1", 100, period=QuotaPeriod.MONTHLY)
+        mgr.acquire("t1", 80)
+
+        clock.set(datetime(2025, 5, 29, 23, 59, 59))
+        assert mgr.get_tenant_quota("t1").used == 80
+
+        clock.set(datetime(2025, 5, 30, 8, 0, 0))
+        assert mgr.get_tenant_quota("t1").used == 0
+
+    def test_monthly_period_leap_year_feb_29_next_month(self):
+        from datetime import datetime
+        from solocoder_py.quota import ManualClock, QuotaPeriod
+
+        clock = ManualClock(datetime(2024, 2, 29, 14, 0, 0))
+        mgr = make_manager(clock)
+        mgr.set_global_quota(100, period=QuotaPeriod.MONTHLY)
+        mgr.create_tenant_quota("t1", 100, period=QuotaPeriod.MONTHLY)
+        mgr.acquire("t1", 60)
+
+        clock.set(datetime(2024, 3, 28, 23, 59, 59))
+        assert mgr.get_tenant_quota("t1").used == 60
+
+        clock.set(datetime(2024, 3, 29, 14, 0, 0))
+        assert mgr.get_tenant_quota("t1").used == 0
+        assert mgr.get_global_quota().used == 0
+
+    def test_monthly_period_leap_year_feb_29_to_next_feb_non_leap(self):
+        from datetime import datetime
+        from solocoder_py.quota import ManualClock, QuotaPeriod
+
+        clock = ManualClock(datetime(2024, 2, 29, 10, 0, 0))
+        mgr = make_manager(clock)
+        mgr.set_global_quota(100, period=QuotaPeriod.MONTHLY)
+        mgr.create_tenant_quota("t1", 100, period=QuotaPeriod.MONTHLY)
+        mgr.acquire("t1", 70)
+        mgr.get_tenant_quota("t1")
+
+        clock.set(datetime(2025, 1, 29, 9, 59, 59))
+        assert mgr.get_tenant_quota("t1").used == 0
+
+        clock.set(datetime(2025, 2, 27, 23, 59, 59))
+        mgr.acquire("t1", 50)
+        assert mgr.get_tenant_quota("t1").used == 50
+
+        clock.set(datetime(2025, 2, 28, 10, 0, 0))
+        assert mgr.get_tenant_quota("t1").used == 0
+
+    def test_monthly_period_31st_crosses_several_months(self):
+        from datetime import datetime
+        from solocoder_py.quota import ManualClock, QuotaPeriod
+
+        clock = ManualClock(datetime(2025, 1, 31, 0, 0, 0))
+        mgr = make_manager(clock)
+        mgr.set_global_quota(100, period=QuotaPeriod.MONTHLY)
+        mgr.create_tenant_quota("t1", 100, period=QuotaPeriod.MONTHLY)
+        mgr.acquire("t1", 50)
+
+        clock.set(datetime(2025, 3, 30, 23, 59, 59))
+        assert mgr.get_tenant_quota("t1").used == 0
+
+    def test_tenant_period_reset_via_acquire_triggers_global_when_expired(self):
+        from datetime import datetime
+        from solocoder_py.quota import ManualClock, QuotaPeriod
+
+        clock = ManualClock(datetime(2025, 6, 1, 10, 0, 0))
+        mgr = make_manager(clock)
+        mgr.set_global_quota(1000, period=QuotaPeriod.HOURLY)
+        mgr.create_tenant_quota("t1", 500, period=QuotaPeriod.HOURLY)
+        mgr.create_tenant_quota("t2", 500, period=QuotaPeriod.HOURLY)
+        mgr.acquire("t1", 200)
+        mgr.acquire("t2", 300)
+        assert mgr.get_global_quota().used == 500
+
+        clock.advance_seconds(60 * 60 + 5)
+        mgr.acquire("t1", 1)
+        assert mgr.get_tenant_quota("t1").used == 1
+        assert mgr.get_tenant_quota("t2").used == 0
+        assert mgr.get_global_quota().used == 1
+
 
 class TestConcurrencyInterleaved:
     def test_global_reset_interleaved_with_acquire(self):
@@ -828,7 +977,7 @@ class TestConcurrencyInterleaved:
 
 
 class TestLimitAdjustmentConsistency:
-    def test_tenant_limit_reduced_syncs_global_used(self):
+    def test_tenant_limit_reduced_keeps_sum_unchanged(self):
         mgr = make_manager()
         mgr.set_global_quota(1000)
         mgr.create_tenant_quota("t1", 500)
@@ -840,23 +989,37 @@ class TestLimitAdjustmentConsistency:
         mgr.update_tenant_quota_limit("t1", 200)
         tq = mgr.get_tenant_quota("t1")
         gq = mgr.get_global_quota()
-        assert tq.used == 200
-        assert gq.used == 500
+        assert tq.used == 400
+        assert tq.remaining == -200
+        assert gq.used == 700
         tq2 = mgr.get_tenant_quota("t2")
         assert tq2.used == 300
         assert tq.used + tq2.used == gq.used
 
-    def test_tenant_limit_reduced_can_release_remaining(self):
+    def test_tenant_limit_reduced_can_release_full_held_amount(self):
         mgr = make_manager()
         mgr.set_global_quota(1000)
         mgr.create_tenant_quota("t1", 500)
         mgr.acquire("t1", 400)
         mgr.update_tenant_quota_limit("t1", 200)
-        mgr.release("t1", 200)
+        mgr.release("t1", 400)
         assert mgr.get_tenant_quota("t1").used == 0
         assert mgr.get_global_quota().used == 0
 
-    def test_global_limit_reduced_syncs_tenant_used(self):
+    def test_tenant_limit_reduced_release_partial_still_works(self):
+        mgr = make_manager()
+        mgr.set_global_quota(1000)
+        mgr.create_tenant_quota("t1", 500)
+        mgr.acquire("t1", 400)
+        mgr.update_tenant_quota_limit("t1", 200)
+        mgr.release("t1", 150)
+        assert mgr.get_tenant_quota("t1").used == 250
+        assert mgr.get_global_quota().used == 250
+        mgr.release("t1", 250)
+        assert mgr.get_tenant_quota("t1").used == 0
+        assert mgr.get_global_quota().used == 0
+
+    def test_global_limit_reduced_preserves_all_usage(self):
         mgr = make_manager()
         mgr.set_global_quota(1000)
         mgr.create_tenant_quota("a", 600)
@@ -869,12 +1032,13 @@ class TestLimitAdjustmentConsistency:
         gq = mgr.get_global_quota()
         ta = mgr.get_tenant_quota("a")
         tb = mgr.get_tenant_quota("b")
-        assert gq.used == 500
-        assert ta.used + tb.used == 500
-        assert ta.used <= ta.limit
-        assert tb.used <= tb.limit
+        assert gq.used == 900
+        assert gq.remaining == -400
+        assert ta.used + tb.used == gq.used
+        assert ta.used == 500
+        assert tb.used == 400
 
-    def test_global_limit_reduced_keeps_below_each_tenant_limit(self):
+    def test_global_limit_reduced_can_release_full_held_amounts(self):
         mgr = make_manager()
         mgr.set_global_quota(1000)
         mgr.create_tenant_quota("a", 300)
@@ -884,13 +1048,11 @@ class TestLimitAdjustmentConsistency:
         assert mgr.get_global_quota().used == 600
 
         mgr.set_global_quota(200)
-        gq = mgr.get_global_quota()
-        ta = mgr.get_tenant_quota("a")
-        tb = mgr.get_tenant_quota("b")
-        assert gq.used == 200
-        assert ta.used + tb.used == 200
-        assert ta.used <= 300
-        assert tb.used <= 300
+        mgr.release("a", 300)
+        mgr.release("b", 300)
+        assert mgr.get_global_quota().used == 0
+        assert mgr.get_tenant_quota("a").used == 0
+        assert mgr.get_tenant_quota("b").used == 0
 
     def test_tenant_limit_increased_keeps_consistency(self):
         mgr = make_manager()
@@ -904,16 +1066,12 @@ class TestLimitAdjustmentConsistency:
         assert gq.used == 80
         assert tq.remaining == 420
 
-    def test_adjust_limit_after_multiple_tenants_sum_consistent(self):
+    def test_adjust_limit_multiple_tenants_sum_always_equals_global(self):
         mgr = make_manager()
         mgr.set_global_quota(2000)
         for i in range(5):
             mgr.create_tenant_quota(f"t{i}", 500)
             mgr.acquire(f"t{i}", 200)
-        total_used_before = sum(
-            mgr.get_tenant_quota(f"t{i}").used for i in range(5)
-        )
-        assert total_used_before == mgr.get_global_quota().used
 
         for i in range(5):
             mgr.update_tenant_quota_limit(f"t{i}", 100)
@@ -922,3 +1080,15 @@ class TestLimitAdjustmentConsistency:
             mgr.get_tenant_quota(f"t{i}").used for i in range(5)
         )
         assert total_used_after == mgr.get_global_quota().used
+        assert total_used_after == 1000
+
+    def test_shrinking_tenant_limit_does_not_block_subsequent_releases(self):
+        mgr = make_manager()
+        mgr.set_global_quota(1000)
+        mgr.create_tenant_quota("t1", 800)
+        mgr.acquire("t1", 600)
+        mgr.update_tenant_quota_limit("t1", 100)
+        for _ in range(6):
+            mgr.release("t1", 100)
+        assert mgr.get_tenant_quota("t1").used == 0
+        assert mgr.get_global_quota().used == 0

@@ -1,0 +1,5 @@
+产物不满意：
+1. coordinator.py 新增的 _validate_ownership_consistency 方法包含三个校验分支：多消费者同时持有同一分区、协调器记录的 _partition_owner 与实际消费者持有的分区不一致、协调器记录所有者但该消费者未持有对应分区。但 test_coordinator.py 中只有 test_ownership_conflict_detected_on_force_rebalance_public_path 覆盖了"多消费者冲突"这一个分支，其余两个一致性校验分支（owner 记录不匹配与 consumer 未持有分区）没有任何测试覆盖。模型在总结中声称"该检测通过公共接口路径完全可达"，但实际只验证了三分之一的校验逻辑在生产路径上是否生效，另外两个分支的正确性未被证明。
+2. coordinator.py _do_rebalance 方法第 232-236 行原有的"if pid in consumer.assigned_partitions: raise PartitionAlreadyAssignedError"重复分配异常检查在新增加的 _validate_ownership_consistency 之后变成了不可达代码，因为一致性校验在重平衡开始时（第 184 行）已提前检测了所有多消费者冲突场景，到达分配循环时不可能再有重复分配。模型添加了新校验但未移除旧代码，保留了永远不会执行的异常保护分支，造成代码冗余和维护混淆。
+过程不满意：
+1. 模型在给 _validate_ownership_consistency 编写测试时，只通过 c2.assign_partition(0) 越权占用分区 0 构造了"多消费者冲突"场景并验证，但对两个"ownership record 不匹配"分支未编写任何测试用例，也没有在思考过程中提及这两个分支是否需要测试或如何构造触发条件。模型在总结中声称检测"完全可达"属于过度总结，没有对方法的分支覆盖率做自检，应在写完方法后逐一检查每个分支的可达性并补充测试或记录不可达原因。

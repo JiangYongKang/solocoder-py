@@ -57,12 +57,13 @@ class TestPermissionModel:
         assert p.matches("write", "project:123") is False
         assert p.matches("read", "project:456") is False
 
-    def test_permission_matches_action_wildcard_not_supported(self):
-        p = Permission(action="*", resource="project:123")
-        assert p.matches("*", "project:123") is True
-        assert p.matches("read", "project:123") is False
-        assert p.matches("write", "project:123") is False
-        assert p.matches("delete", "project:123") is False
+    def test_permission_action_wildcard_rejected_at_construction(self):
+        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
+            Permission(action="*", resource="project:123")
+
+    def test_permission_action_wildcard_rejected_via_parse(self):
+        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
+            Permission.parse("*:project:123")
 
     def test_permission_matches_resource_wildcard_top(self):
         p = Permission(action="read", resource="*")
@@ -82,11 +83,11 @@ class TestPermissionModel:
         assert p.matches("read", "project:read:456") is True
         assert p.matches("read", "project:write:123") is False
 
-    def test_permission_matches_action_wildcard_ignored_but_resource_wildcard_works(self):
-        p = Permission(action="*", resource="*")
-        assert p.matches("*", "thing:else") is True
-        assert p.matches("*", "bar:baz:qux") is True
-        assert p.matches("any", "thing:else") is False
+    def test_permission_action_wildcard_rejected_even_with_resource_wildcard(self):
+        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
+            Permission(action="*", resource="*")
+        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
+            Permission.parse("*:*")
 
     def test_permission_matches_segment_count_mismatch(self):
         p = Permission(action="read", resource="project:123")
@@ -536,15 +537,13 @@ class TestPermissionChecking:
         with pytest.raises(ValueError, match="resource cannot be empty"):
             engine.check_permission("user-1", "read", "")
 
-    def test_check_permission_action_wildcard_not_granted(self):
+    def test_adding_permission_with_wildcard_action_rejected(self):
         engine = make_engine()
         engine.create_role("admin")
-        p = Permission(action="*", resource="project:123")
-        engine.add_permission_to_role("admin", p)
-        engine.bind_user_to_roles("user-1", ["admin"])
-        assert engine.check_permission("user-1", "*", "project:123") is True
-        assert engine.check_permission("user-1", "read", "project:123") is False
-        assert engine.check_permission("user-1", "write", "project:123") is False
+        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
+            engine.add_permission_to_role(
+                "admin", Permission(action="*", resource="project:123")
+            )
 
     def test_check_permission_with_wildcard_resource(self):
         engine = make_engine()
@@ -695,15 +694,11 @@ class TestEdgeCases:
         assert engine.check_permission("u", "read", "project:doc:999") is True
         assert engine.check_permission("u", "read", "project:img:1") is False
 
-    def test_action_wildcard_does_not_grant_all_actions(self):
+    def test_permission_with_both_wildcards_rejected_at_creation(self):
         engine = make_engine()
         engine.create_role("superadmin")
-        p = Permission(action="*", resource="*")
-        engine.add_permission_to_role("superadmin", p)
-        engine.bind_user_to_roles("u", ["superadmin"])
-        assert engine.check_permission("u", "*", "something") is True
-        assert engine.check_permission("u", "*", "something:else") is True
-        assert engine.check_permission("u", "anything", "something") is False
+        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
+            Permission(action="*", resource="*")
 
     def test_get_role_inheritance_chain_not_found(self):
         engine = make_engine()
@@ -824,7 +819,7 @@ class TestEncapsulationAndDeepInheritance:
 
     def test_very_deep_inheritance_chain(self):
         engine = make_engine()
-        depth = 500
+        depth = 2000
         for i in range(depth):
             engine.create_role(f"level-{i}")
             engine.add_permission_to_role(
@@ -840,7 +835,7 @@ class TestEncapsulationAndDeepInheritance:
 
     def test_very_deep_inheritance_user_permission_check(self):
         engine = make_engine()
-        depth = 500
+        depth = 2000
         for i in range(depth):
             engine.create_role(f"lvl-{i}")
         for i in range(1, depth):

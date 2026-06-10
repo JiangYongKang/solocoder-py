@@ -151,7 +151,10 @@ class TestTrafficRouterMetricsSeparation:
         assert stats.baseline_p99_latency_ms >= 400.0
 
     def test_baseline_error_rate(self):
+        self.router.set_traffic_percentage("test", 0)
         for i in range(100):
+            _, vtype = self.router.route("test", f"u-{i}")
+            assert vtype == VersionType.BASELINE
             self.router.record_metrics(
                 "test",
                 VersionType.BASELINE,
@@ -159,6 +162,7 @@ class TestTrafficRouterMetricsSeparation:
                 is_error=(i < 10),
             )
         stats = self.router.get_stats("test")
+        assert stats.baseline_requests == 100
         assert stats.baseline_error_rate == pytest.approx(0.10)
 
     def test_empty_stats_properties_return_zero(self):
@@ -739,25 +743,31 @@ class TestCanaryMetricsRecordingSeparation:
         config = CanaryReleaseConfig(
             baseline_version="v1",
             candidate_version="v2",
-            traffic_steps=[100],
+            traffic_steps=[50],
             max_error_rate=0.05,
             min_requests_for_evaluation=10,
         )
         controller.create_release("isolated", config)
         controller.start_release("isolated")
 
-        for i in range(200):
-            controller.route_request("isolated", f"u-{i}")
-            controller.record_candidate_metrics(
-                "isolated", latency_ms=50.0, is_error=False
-            )
-
-        for i in range(100):
-            controller.record_baseline_metrics(
-                "isolated", latency_ms=10.0, is_error=True
-            )
+        baseline_count = 0
+        candidate_count = 0
+        for i in range(400):
+            _, vtype = controller.route_request("isolated", f"u-{i}")
+            if vtype == VersionType.CANDIDATE:
+                controller.record_candidate_metrics(
+                    "isolated", latency_ms=50.0, is_error=False
+                )
+                candidate_count += 1
+            else:
+                controller.record_baseline_metrics(
+                    "isolated", latency_ms=10.0, is_error=True
+                )
+                baseline_count += 1
 
         stats = controller.get_traffic_stats("isolated")
+        assert stats.candidate_requests == candidate_count
+        assert stats.baseline_requests == baseline_count
         assert stats.candidate_error_rate == 0.0
         assert stats.baseline_error_rate == 1.0
 

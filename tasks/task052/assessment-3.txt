@@ -1,0 +1,9 @@
+产物不满意：
+1. router.py 的 route 方法添加计数逻辑后，TestTrafficRouterMetricsSeparation 类中 test_baseline_p99_latency 测试仍直接调用 record_metrics 而未先调用 route，在新设计下 baseline_requests 始终为零，延迟样本虽被记录但请求计数缺失形成统计死角。模型只被动修复了 pytest 失败的 2 个测试，未主动扫描其余测试是否符合"先 route 再 record_metrics"的新调用约定，应 grep 所有 record_metrics 调用点逐一检查是否有前置 route 调用并补全缺失的调用。
+
+过程不满意：
+1. 模型在打开 prompt-3.txt 后的第一步就创建了 TodoList，未先分析问题直接规划任务步骤。session-cot-3.md 第一行即"我来分析这两个问题并进行修复。先创建任务计划："随后立即执行 todo_write。这违反了工作区规范中的"不能刚收到任务时就直接创建 TodoList，应先分析问题再规划"原则，正确的做法是先阅读 router.py、controller.py、models.py 三者理解变更范围后再制定计划。
+
+2. session-cot-3.md 中模型连续两次调用 view_files 读取 test_canary.py（第一次位于第 177 行附近返回文件内容，第二次位于第 186 行附近再次读取同一文件），两次读取之间没有任何代码修改操作属于无意义重复读取。正确的做法是第一次读取后记录内容，在需要修改前直接编辑而非再次全量读取。
+
+3. 模型在全部测试通过后的总结中声称为"第二轮修复完成，88 个测试全部通过"，但本轮为第三次会话（prompt-3），之前的 assessment-1.txt 和 assessment-2.txt 已分别对应第一轮功能开发和第二轮缺陷修复。模型在总结阶段错误标记了迭代轮次，属于对当前任务上下文的理解偏差，应在输出总结前确认当前会话序号。

@@ -28,7 +28,6 @@ class TestConfigVersionModel:
         assert cv.version == "v1"
         assert cv.timestamp == now
         assert cv.data == data
-        assert cv.is_rollback is False
 
     def test_config_version_empty_version_raises(self):
         with pytest.raises(ValueError, match="version cannot be empty"):
@@ -60,15 +59,6 @@ class TestConfigVersionModel:
             data={"b": 2, "a": 1, "c": 3},
         )
         assert cv.keys() == ("a", "b", "c")
-
-    def test_config_version_is_rollback(self):
-        cv = ConfigVersion(
-            version="v2",
-            timestamp=datetime.now(),
-            data={"a": 1},
-            is_rollback=True,
-        )
-        assert cv.is_rollback is True
 
 
 class TestConfigChangeModel:
@@ -118,7 +108,6 @@ class TestPublishVersion:
 
         assert cv.version == "v1"
         assert cv.data == config
-        assert cv.is_rollback is False
         assert manager.version_count() == 1
 
         current = manager.get_current_version()
@@ -170,6 +159,36 @@ class TestReadCurrentConfig:
         assert manager.get("b") == 2
         assert manager.get("c") is None
         assert manager.get("c", "default") == "default"
+
+    def test_get_returns_default_identity_not_deepcopy(self):
+        manager = make_manager()
+        manager.publish({"a": 1})
+
+        sentinel = object()
+        result = manager.get("nonexistent", sentinel)
+        assert result is sentinel
+
+    def test_get_default_mutable_not_deepcopied(self):
+        manager = make_manager()
+        manager.publish({"a": 1})
+
+        default_list = [1, 2, 3]
+        result = manager.get("nonexistent", default_list)
+        result.append(999)
+        assert default_list == [1, 2, 3, 999]
+        assert result is default_list
+
+    def test_get_existing_key_returns_deepcopy(self):
+        manager = make_manager()
+        manager.publish({"nested": {"inner": [1, 2]}})
+
+        value = manager.get("nested")
+        value["inner"].append(999)
+        value["extra"] = "injected"
+
+        stored = manager.get("nested")
+        assert stored == {"inner": [1, 2]}
+        assert "extra" not in stored
 
     def test_get_no_active_version_raises(self):
         manager = make_manager()
@@ -405,6 +424,63 @@ class TestChangeListener:
             manager.publish({"a": 1})
 
         assert len(events) == 1
+
+
+class TestListenerEventSnapshotIsolation:
+    def test_listener_modifying_new_value_does_not_pollute_internal(self):
+        manager = make_manager()
+
+        def mutate_listener(event: ChangeEvent):
+            for change in event.changes:
+                if change.new_value is not None and isinstance(change.new_value, dict):
+                    change.new_value["injected"] = "evil"
+                    if "inner" in change.new_value:
+                        change.new_value["inner"].append(999)
+
+        manager.subscribe(mutate_listener)
+        manager.publish({"nested": {"inner": [1, 2]}})
+
+        stored = manager.get("nested")
+        assert stored == {"inner": [1, 2]}
+        assert "injected" not in stored
+
+    def test_listener_modifying_old_value_does_not_pollute_internal(self):
+        manager = make_manager()
+        manager.publish({"nested": {"inner": [1, 2]}})
+
+        def mutate_listener(event: ChangeEvent):
+            for change in event.changes:
+                if change.old_value is not None and isinstance(change.old_value, dict):
+                    change.old_value["injected"] = "evil"
+                    if "inner" in change.old_value:
+                        change.old_value["inner"].append(999)
+
+        manager.subscribe(mutate_listener)
+        manager.publish({"nested": {"inner": [3, 4]}})
+
+        v1 = manager.get_version("v1")
+        assert v1.data["nested"] == {"inner": [1, 2]}
+        assert "injected" not in v1.data["nested"]
+
+    def test_rollback_listener_modifying_values_does_not_pollute(self):
+        manager = make_manager()
+        manager.publish({"cfg": {"list": [1, 2]}})
+        manager.publish({"cfg": {"list": [3, 4]}})
+
+        def mutate_listener(event: ChangeEvent):
+            for change in event.changes:
+                if change.new_value is not None and isinstance(change.new_value, dict):
+                    change.new_value["list"].append(999)
+                if change.old_value is not None and isinstance(change.old_value, dict):
+                    change.old_value["list"].append(888)
+
+        manager.subscribe(mutate_listener)
+        manager.rollback("v1")
+
+        v1 = manager.get_version("v1")
+        v2 = manager.get_version("v2")
+        assert v1.data["cfg"] == {"list": [1, 2]}
+        assert v2.data["cfg"] == {"list": [3, 4]}
 
 
 class TestRollback:

@@ -106,6 +106,12 @@ class TrafficRouter:
                 target_version = state.baseline_version
                 target_type = VersionType.BASELINE
 
+            state.stats.total_requests += 1
+            if target_type == VersionType.BASELINE:
+                state.stats.baseline_requests += 1
+            else:
+                state.stats.candidate_requests += 1
+
             return target_version, target_type
 
     def record_metrics(
@@ -122,15 +128,12 @@ class TrafficRouter:
             state = self._get_release_state_or_raise(release_name)
             stats = state.stats
 
-            stats.total_requests += 1
             if version_type == VersionType.BASELINE:
-                stats.baseline_requests += 1
                 stats.baseline_total_latency_ms += latency_ms
                 stats.baseline_latency_samples.append(latency_ms)
                 if is_error:
                     stats.baseline_errors += 1
             elif version_type == VersionType.CANDIDATE:
-                stats.candidate_requests += 1
                 stats.candidate_total_latency_ms += latency_ms
                 stats.candidate_latency_samples.append(latency_ms)
                 if is_error:

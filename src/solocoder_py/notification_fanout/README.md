@@ -127,20 +127,25 @@
 1. 校验目标渠道均已注册，否则抛出 `UnknownChannelError`
 2. 为**每个目标渠道**分配独立的后台线程（daemon 线程），各渠道同时启动投递流程
 3. **不依赖线程池队列**：无论 `max_workers` 配置多少，所有渠道均并行启动，不会因 worker 数不足而排队，确保各渠道独立执行、互不阻塞
-4. 等待所有渠道线程完成（通过 `threading.Thread.join()`），收集各渠道结果
+4. **异常兜底**：每个渠道线程的 `_worker` 入口包裹 `try/except BaseException`，即使投递循环抛出非预期异常（如 `SystemExit`、`KeyboardInterrupt`），也会生成一条 `status=FAILED` 的 `ChannelResult` 写入结果集，保证 `FanoutResult.channel_results` 中永远包含全部目标渠道，调用方不会静默丢失结果
+5. 等待所有渠道线程完成（通过 `threading.Thread.join()`），收集各渠道结果
 
 ### 单渠道投递、超时与重试
 每个渠道在自己的线程内独立执行投递循环：
-1. 按配置计算本次尝试前的退避延迟（首次为 0），通过 `sleeper` 等待
-2. 为单次投递再启动一个独立子线程执行 `channel.deliver()`，使用 `threading.Thread.join(timeout=timeout)` 实现超时控制
+1. 该渠道维护一个线程安全的 `delivered_event`（`threading.Event`），作为「该通知已成功投递」的全局标志
+2. 按配置计算本次尝试前的退避延迟（首次为 0），通过 `sleeper` 等待
+3. 每次尝试开始前检查 `delivered_event`：若已被之前某次（含后台超时线程）的投递置位，则直接判定整体成功，不再发起新的投递，避免重复发送
+4. 为单次投递再启动一个独立子线程执行 `channel.deliver()`，使用 `threading.Thread.join(timeout=timeout)` 实现超时控制
    - **超时语义**：若投递在 `timeout` 秒内未返回，立即判定为超时（`ChannelTimeoutError`），不再等待底层投递线程结束；底层线程会作为 daemon 线程在后台继续运行直至自然结束，不会阻塞结果返回
-3. 投递成功则立即结束，状态为 `SUCCESS`
-4. 失败（含超时）时记录异常，若仍有剩余尝试次数则按退避策略继续下一轮
-5. 超过最大次数后，根据最后一次异常类型标记 `FAILED`（普通异常）或 `TIMEOUT`（超时异常）
+   - **去重语义**：投递子线程在真正执行 `channel.deliver()` 前后都会检查 `delivered_event`；若后台线程晚到并最终成功，会置位 `delivered_event`，后续尝试会识别并跳过，确保同一条通知最多被实际发送一次
+5. 本次投递成功则置位 `delivered_event`，循环结束，状态为 `SUCCESS`
+6. 失败（含超时）时记录异常，若仍有剩余尝试次数则按退避策略继续下一轮
+7. 超过最大次数后，根据最后一次异常类型标记 `FAILED`（普通异常）或 `TIMEOUT`（超时异常）
 
 ### 结果聚合
 所有渠道任务完成后：
 - 收集各 `ChannelResult`，记录每个渠道的状态、尝试次数、错误原因
+- 保证每个目标渠道在结果集中都有对应条目（即使该渠道线程抛出异常）
 - 计算整体耗时 `total_duration`
 - 返回 `FanoutResult`，提供便捷属性和 `summary()` 方法供上层使用
 

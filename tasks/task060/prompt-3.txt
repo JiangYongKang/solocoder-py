@@ -1,0 +1,5 @@
+你实现的分区有序消费模块第二轮修复后仍存在以下问题，需要在 "src/solocoder_py/partition_ordering/" 范围内修复：
+1. coordinator.py 的 _snapshot_offsets 方法向组级存储写位点时采用新值更大才更新的策略，但当消费者先提交到 9 再 seek 回退到 2 重新处理消息时，重平衡发生后新所有者会从组级存储继承 9 而不是 2，待重新处理的消息被整体跳过。
+2. coordinator.py 的重复分配异常分支在重平衡公共接口流程下实际不可达，因为分配前必然先撤销旧所有者，配套测试通过直接修改私有属性 _rebalancing 触发异常而非通过真实场景构造，异常保护逻辑在生产路径上是否生效没有被验证。
+3. test_coordinator.py 的 test_revoke_returns_uncommitted_messages 方法名字声称验证撤销时返回未提交消息，但函数体从头到尾没有接收和断言 revoke_partition 的返回值，核心语义完全没有被测试覆盖。
+4. 修复后运行 "poetry run pytest tests/partition_ordering/ -q"，确保该模块测试通过。

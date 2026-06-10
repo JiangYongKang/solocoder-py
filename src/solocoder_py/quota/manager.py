@@ -34,6 +34,15 @@ def _period_delta(period: QuotaPeriod) -> Optional[timedelta]:
     return None
 
 
+def _add_months(dt: datetime, months: int) -> datetime:
+    total_month = dt.month - 1 + months
+    new_year = dt.year + total_month // 12
+    new_month = total_month % 12 + 1
+    _, max_day = calendar.monthrange(new_year, new_month)
+    new_day = min(dt.day, max_day)
+    return dt.replace(year=new_year, month=new_month, day=new_day)
+
+
 def _is_period_expired_since(
     period_start: datetime, now: datetime, period: QuotaPeriod
 ) -> bool:
@@ -44,20 +53,8 @@ def _is_period_expired_since(
         elapsed = now - period_start
         return elapsed >= delta
     if period == QuotaPeriod.MONTHLY:
-        year_diff = now.year - period_start.year
-        month_diff = now.month - period_start.month
-        total_months = year_diff * 12 + month_diff
-        if total_months > 1:
-            return True
-        if total_months == 1:
-            return now.day >= period_start.day or (
-                now.day < period_start.day
-                and now >= period_start.replace(
-                    year=period_start.year + (period_start.month // 12),
-                    month=(period_start.month % 12) + 1,
-                )
-            )
-        return False
+        boundary = _add_months(period_start, 1)
+        return now >= boundary
     return False
 
 
@@ -111,12 +108,15 @@ class QuotaManager:
         global_expired = self._is_period_expired(
             self._global_quota.period_start, self._global_quota.period, now
         )
+        if global_expired:
+            self._maybe_reset_global_period()
+            return
         tenant_expired = self._is_period_expired(
             self._tenant_quotas[tenant_id].period_start,
             self._tenant_quotas[tenant_id].period,
             now,
         )
-        if global_expired or tenant_expired:
+        if tenant_expired:
             released = self._tenant_quotas[tenant_id].used
             self._global_quota.used -= released
             if self._global_quota.used < 0:
@@ -124,9 +124,6 @@ class QuotaManager:
             self._tenant_quotas[tenant_id].used = 0
             self._tenant_quotas[tenant_id].period_start = now
             self._tenant_quotas[tenant_id].reset_at = now
-            if global_expired:
-                self._global_quota.period_start = now
-                self._global_quota.reset_at = now
 
     def set_global_quota(
         self, limit: int, period: QuotaPeriod = QuotaPeriod.NONE
@@ -140,28 +137,11 @@ class QuotaManager:
                 if period != QuotaPeriod.NONE:
                     self._global_quota.period_start = now
             else:
-                old_limit = self._global_quota.limit
                 self._global_quota.limit = limit
                 self._global_quota.period = period
                 if period != QuotaPeriod.NONE and self._global_quota.period_start is None:
                     self._global_quota.period_start = now
-                if limit < old_limit and self._global_quota.used > limit:
-                    overage = self._global_quota.used - limit
-                    self._global_quota.used = limit
-                    self._reclaim_tenant_usage_for_global(overage)
             return self._global_quota.copy()
-
-    def _reclaim_tenant_usage_for_global(self, overage: int) -> None:
-        remaining = overage
-        for tenant_id in sorted(self._tenant_quotas.keys()):
-            if remaining <= 0:
-                break
-            tenant_lock = self._get_or_create_tenant_lock(tenant_id)
-            with tenant_lock:
-                tenant_used = self._tenant_quotas[tenant_id].used
-                reclaim = min(tenant_used, remaining)
-                self._tenant_quotas[tenant_id].used -= reclaim
-                remaining -= reclaim
 
     def get_global_quota(self) -> GlobalQuota:
         with self._global_lock:
@@ -197,19 +177,11 @@ class QuotaManager:
             tenant_lock = self._get_or_create_tenant_lock(tenant_id)
             with tenant_lock:
                 self._maybe_reset_tenant_period(tenant_id)
-                old_limit = self._tenant_quotas[tenant_id].limit
-                old_used = self._tenant_quotas[tenant_id].used
                 self._tenant_quotas[tenant_id].limit = limit
                 if period is not None:
                     self._tenant_quotas[tenant_id].period = period
                     if period != QuotaPeriod.NONE and self._tenant_quotas[tenant_id].period_start is None:
                         self._tenant_quotas[tenant_id].period_start = self._clock.now()
-                if limit < old_limit and old_used > limit:
-                    overage = old_used - limit
-                    self._tenant_quotas[tenant_id].used = limit
-                    self._global_quota.used -= overage
-                    if self._global_quota.used < 0:
-                        self._global_quota.used = 0
                 return self._tenant_quotas[tenant_id].copy()
 
     def get_tenant_quota(self, tenant_id: str) -> TenantQuota:

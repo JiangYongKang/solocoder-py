@@ -82,8 +82,7 @@ class ConsumerGroupCoordinator:
 
             for pid in list(consumer.assigned_partitions):
                 stored = consumer.get_stored_committed_offset(pid)
-                if stored > self._group_committed_offsets.get(pid, -1):
-                    self._group_committed_offsets[pid] = stored
+                self._group_committed_offsets[pid] = stored
                 consumer.revoke_partition(pid)
                 self._partition_owner.pop(pid, None)
 
@@ -129,6 +128,37 @@ class ConsumerGroupCoordinator:
                 )
             return result
 
+    def _validate_ownership_consistency(self) -> None:
+        partition_to_consumer: dict[int, list[str]] = {}
+        for cid, consumer in self._consumers.items():
+            for pid in consumer.assigned_partitions:
+                partition_to_consumer.setdefault(pid, []).append(cid)
+
+        for pid, owners in partition_to_consumer.items():
+            if len(owners) > 1:
+                raise PartitionAlreadyAssignedError(
+                    f"partition {pid} is assigned to multiple consumers: {owners}, "
+                    f"possible ownership conflict detected during rebalance"
+                )
+
+            recorded_owner = self._partition_owner.get(pid)
+            if recorded_owner is not None and recorded_owner != owners[0]:
+                raise PartitionAlreadyAssignedError(
+                    f"partition {pid} ownership mismatch: "
+                    f"coordinator records '{recorded_owner}' but actual owner is '{owners[0]}'"
+                )
+
+        for pid, recorded_owner in self._partition_owner.items():
+            if recorded_owner not in self._consumers:
+                continue
+            consumer = self._consumers[recorded_owner]
+            if pid not in consumer.assigned_partitions:
+                raise PartitionAlreadyAssignedError(
+                    f"partition {pid} ownership mismatch: "
+                    f"coordinator records '{recorded_owner}' as owner "
+                    f"but consumer does not have partition assigned"
+                )
+
     def _trigger_rebalance(self) -> None:
         self._rebalancing = True
         self._generation_id += 1
@@ -142,8 +172,7 @@ class ConsumerGroupCoordinator:
             if owner_id in self._consumers:
                 consumer = self._consumers[owner_id]
                 stored = consumer.get_stored_committed_offset(pid)
-                if stored > self._group_committed_offsets.get(pid, -1):
-                    self._group_committed_offsets[pid] = stored
+                self._group_committed_offsets[pid] = stored
 
     def _do_rebalance(self) -> None:
         consumer_ids = sorted(self._consumers.keys())
@@ -151,6 +180,8 @@ class ConsumerGroupCoordinator:
         if num_consumers == 0:
             self._partition_owner.clear()
             return
+
+        self._validate_ownership_consistency()
 
         self._snapshot_offsets()
 
@@ -180,8 +211,7 @@ class ConsumerGroupCoordinator:
             revoked = sorted(revoked_map.get(cid, []))
             for pid in revoked:
                 stored = consumer.get_stored_committed_offset(pid)
-                if stored > self._group_committed_offsets.get(pid, -1):
-                    self._group_committed_offsets[pid] = stored
+                self._group_committed_offsets[pid] = stored
                 consumer.revoke_partition(pid)
 
         for cid in consumer_ids:
@@ -194,8 +224,7 @@ class ConsumerGroupCoordinator:
                         old_consumer = self._consumers[current_owner]
                         if pid in old_consumer.assigned_partitions:
                             stored = old_consumer.get_stored_committed_offset(pid)
-                            if stored > self._group_committed_offsets.get(pid, -1):
-                                self._group_committed_offsets[pid] = stored
+                            self._group_committed_offsets[pid] = stored
                             old_consumer.revoke_partition(pid)
                     if self._partition_owner.get(pid) == current_owner:
                         del self._partition_owner[pid]

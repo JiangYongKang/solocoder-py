@@ -320,9 +320,13 @@ class CanaryController:
             timestamp=time.time(),
             current_traffic_percentage=release.current_traffic_percentage,
             total_requests=stats.total_requests,
+            baseline_requests=stats.baseline_requests,
             candidate_requests=stats.candidate_requests,
+            baseline_error_rate=stats.baseline_error_rate,
             candidate_error_rate=stats.candidate_error_rate,
+            baseline_p99_latency_ms=stats.baseline_p99_latency_ms,
             candidate_p99_latency_ms=stats.candidate_p99_latency_ms,
+            baseline_avg_latency_ms=stats.baseline_avg_latency_ms,
             candidate_avg_latency_ms=stats.candidate_avg_latency_ms,
         )
 

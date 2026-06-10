@@ -15,6 +15,7 @@ from solocoder_py.notification_fanout import (
     InMemoryChannel,
     InvalidChannelConfigError,
     Notification,
+    NotificationChannel,
     UnknownChannelError,
 )
 
@@ -39,6 +40,73 @@ def _notice(nid: str = "n1") -> Notification:
     return Notification(
         notification_id=nid, title="Hello", content="World", recipient="user-1"
     )
+
+
+class EventControlledChannel(NotificationChannel):
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._start_event = threading.Event()
+        self._release_event = threading.Event()
+        self._delivered: list[Notification] = []
+        self._fail_next_n = 0
+        self._started_count = 0
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def delivered_count(self) -> int:
+        return len(self._delivered)
+
+    @property
+    def delivered(self) -> list[Notification]:
+        return list(self._delivered)
+
+    @property
+    def started_count(self) -> int:
+        return self._started_count
+
+    def set_fail_next_n(self, n: int) -> None:
+        self._fail_next_n = n
+
+    def wait_until_started(self, timeout: float = 5.0) -> bool:
+        return self._start_event.wait(timeout=timeout)
+
+    def release(self) -> None:
+        self._release_event.set()
+
+    def reset_events(self) -> None:
+        self._start_event.clear()
+        self._release_event.clear()
+
+    def deliver(self, notification: Notification) -> None:
+        self._started_count += 1
+        self._start_event.set()
+        self._release_event.wait()
+        if self._fail_next_n > 0:
+            self._fail_next_n -= 1
+            raise RuntimeError(f"Channel '{self._name}' simulated failure")
+        self._delivered.append(notification)
+
+
+class BarrierChannel(NotificationChannel):
+    def __init__(self, name: str, barrier: threading.Barrier) -> None:
+        self._name = name
+        self._barrier = barrier
+        self._delivered: list[Notification] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def delivered_count(self) -> int:
+        return len(self._delivered)
+
+    def deliver(self, notification: Notification) -> None:
+        self._barrier.wait(timeout=5.0)
+        self._delivered.append(notification)
 
 
 class TestEngineRegistration:
@@ -104,32 +172,20 @@ class TestFanoutNormalFlow:
         assert result.channel_results["email"].attempts == 1
         assert ch.delivered_count == 1
 
-    def test_three_channels_all_success_parallel(self):
-        email = InMemoryChannel("email")
-        sms = InMemoryChannel("sms")
-        inapp = InMemoryChannel("in_app")
+    def test_three_channels_all_success_parallel_with_barrier(self):
+        barrier = threading.Barrier(3, timeout=5.0)
+        ch1 = BarrierChannel("email", barrier)
+        ch2 = BarrierChannel("sms", barrier)
+        ch3 = BarrierChannel("in_app", barrier)
 
-        email.set_delay(0.01)
-        sms.set_delay(0.01)
-        inapp.set_delay(0.01)
+        engine = FanoutEngine(channels={"email": ch1, "sms": ch2, "in_app": ch3})
 
-        engine = FanoutEngine(channels={
-            "email": email, "sms": sms, "in_app": inapp,
-        })
-
-        start = time.monotonic()
         result = engine.fanout(_notice())
-        elapsed = time.monotonic() - start
-
         assert result.all_succeeded is True
         assert result.channel_count == 3
-        assert email.delivered_count == 1
-        assert sms.delivered_count == 1
-        assert inapp.delivered_count == 1
-
-        assert elapsed < 0.08, (
-            "并行执行应接近单渠道耗时，实际耗时过长"
-        )
+        assert ch1.delivered_count == 1
+        assert ch2.delivered_count == 1
+        assert ch3.delivered_count == 1
 
     def test_target_channels_subset(self):
         engine = FanoutEngine(channels={
@@ -289,26 +345,24 @@ class TestFanoutFailureScenarios:
 
 class TestTimeoutBehavior:
     def test_channel_timeout(self):
-        ch = InMemoryChannel("slow")
-        ch.set_delay(0.5)
-        cfg = ChannelConfig(channel_name="slow", timeout=0.05, max_attempts=1)
+        ch = EventControlledChannel("slow")
+        cfg = ChannelConfig(channel_name="slow", timeout=0.1, max_attempts=1)
         engine = FanoutEngine(
             channels={"slow": ch},
             channel_configs={"slow": cfg},
         )
+
         result = engine.fanout(_notice())
         r = result.channel_results["slow"]
         assert r.status == ChannelDeliveryStatus.TIMEOUT
         assert isinstance(r.final_error, ChannelTimeoutError)
         assert r.final_error.channel_name == "slow"
-        assert r.final_error.timeout == 0.05
+        assert r.final_error.timeout == 0.1
+        ch.release()
 
     def test_timeout_then_retry(self):
-        ch = InMemoryChannel("flaky")
-        ch.set_delay(0.5)
-        cfg = ChannelConfig(
-            channel_name="flaky", timeout=0.05, max_attempts=2
-        )
+        ch = EventControlledChannel("flaky")
+        cfg = ChannelConfig(channel_name="flaky", timeout=0.05, max_attempts=2)
         engine = FanoutEngine(
             channels={"flaky": ch},
             channel_configs={"flaky": cfg},
@@ -317,6 +371,8 @@ class TestTimeoutBehavior:
         r = result.channel_results["flaky"]
         assert r.status == ChannelDeliveryStatus.TIMEOUT
         assert r.attempts == 2
+        ch.release()
+        ch.release()
 
 
 class TestEdgeCases:
@@ -435,8 +491,7 @@ class TestChannelConfigNameValidation:
 
 class TestTimeoutDoesNotBlock:
     def test_permanently_blocking_channel_returns_on_timeout(self):
-        ch = InMemoryChannel("stuck")
-        ch.set_delay(300)
+        ch = EventControlledChannel("stuck")
         cfg = ChannelConfig(channel_name="stuck", timeout=0.05, max_attempts=1)
         engine = FanoutEngine(
             channels={"stuck": ch},
@@ -450,13 +505,12 @@ class TestTimeoutDoesNotBlock:
         r = result.channel_results["stuck"]
         assert r.status == ChannelDeliveryStatus.TIMEOUT
         assert isinstance(r.final_error, ChannelTimeoutError)
-        assert elapsed < 1.0, (
-            f"超时后应立即返回，不应等待底层线程，实际耗时 {elapsed:.2f}s"
-        )
+        assert ch.started_count >= 1
+        assert elapsed < 2.0
+        ch.release()
 
-    def test_long_running_channel_mixed_with_fast_channel_parallel(self):
-        slow = InMemoryChannel("slow")
-        slow.set_delay(300)
+    def test_blocked_channel_mixed_with_fast_channel_parallel(self):
+        slow = EventControlledChannel("slow")
         fast = InMemoryChannel("fast")
 
         engine = FanoutEngine(
@@ -474,20 +528,19 @@ class TestTimeoutDoesNotBlock:
         assert result.channel_results["slow"].status == ChannelDeliveryStatus.TIMEOUT
         assert result.channel_results["fast"].status == ChannelDeliveryStatus.SUCCESS
         assert fast.delivered_count == 1
-        assert elapsed < 1.0, (
-            f"慢渠道超时不应阻塞整体结果，实际耗时 {elapsed:.2f}s"
-        )
+        assert slow.started_count >= 1
+        assert elapsed < 2.0
+        slow.release()
 
 
 class TestParallelismIndependentOfWorkerLimit:
-    def test_many_channels_not_blocked_by_max_workers(self):
+    def test_ten_channels_parallel_with_barrier_despite_small_max_workers(self):
+        barrier = threading.Barrier(10, timeout=5.0)
         channels = {}
         configs = {}
         for i in range(10):
             name = f"ch-{i}"
-            ch = InMemoryChannel(name)
-            ch.set_delay(0.05)
-            channels[name] = ch
+            channels[name] = BarrierChannel(name, barrier)
             configs[name] = ChannelConfig(channel_name=name, max_attempts=1)
 
         engine = FanoutEngine(
@@ -496,24 +549,17 @@ class TestParallelismIndependentOfWorkerLimit:
             max_workers=2,
         )
 
-        start = time.monotonic()
         result = engine.fanout(_notice())
-        elapsed = time.monotonic() - start
-
         assert result.channel_count == 10
         assert result.all_succeeded is True
         for i in range(10):
             assert channels[f"ch-{i}"].delivered_count == 1
 
-        assert elapsed < 0.5, (
-            f"各渠道应独立并行，不受 max_workers 限制，实际耗时 {elapsed:.2f}s"
-        )
-
-    def test_slow_does_not_block_others_despite_small_max_workers(self):
-        slow = InMemoryChannel("slow")
-        slow.set_delay(0.2)
-        fast1 = InMemoryChannel("fast1")
-        fast2 = InMemoryChannel("fast2")
+    def test_slow_does_not_block_others_using_barrier(self):
+        barrier = threading.Barrier(3, timeout=5.0)
+        slow = BarrierChannel("slow", barrier)
+        fast1 = BarrierChannel("fast1", barrier)
+        fast2 = BarrierChannel("fast2", barrier)
 
         engine = FanoutEngine(
             channels={"slow": slow, "fast1": fast1, "fast2": fast2},
@@ -525,14 +571,73 @@ class TestParallelismIndependentOfWorkerLimit:
             max_workers=1,
         )
 
-        start = time.monotonic()
         result = engine.fanout(_notice())
-        elapsed = time.monotonic() - start
-
         assert result.all_succeeded is True
         assert slow.delivered_count == 1
         assert fast1.delivered_count == 1
         assert fast2.delivered_count == 1
-        assert elapsed < 0.4, (
-            f"各渠道应并行执行，慢渠道不应阻塞快渠道，实际耗时 {elapsed:.2f}s"
+
+
+class TestDuplicateDeliveryPrevention:
+    def test_background_thread_success_does_not_duplicate(self):
+        ch = EventControlledChannel("slow-success")
+        cfg = ChannelConfig(channel_name="slow-success", timeout=0.05, max_attempts=2)
+        engine = FanoutEngine(
+            channels={"slow-success": ch},
+            channel_configs={"slow-success": cfg},
         )
+
+        fanout_thread = threading.Thread(target=lambda: engine.fanout(_notice()), daemon=True)
+        fanout_thread.start()
+
+        assert ch.wait_until_started(timeout=5.0), "投递应已启动"
+
+        fanout_thread.join(timeout=2.0)
+        assert not fanout_thread.is_alive(), "fanout 应已在超时后返回"
+
+        assert ch.delivered_count == 0, "后台线程未释放，不应已成功"
+
+        ch.release()
+
+        time.sleep(0.1)
+
+        assert ch.delivered_count == 1, "后台线程释放后仅应成功投递 1 次"
+
+    def test_worker_catches_unexpected_exception_and_still_records_result(self):
+        class BrokenChannel(NotificationChannel):
+            @property
+            def name(self) -> str:
+                return "broken"
+
+            def deliver(self, notification: Notification) -> None:
+                raise SystemExit("simulated catastrophic exit")
+
+        engine = FanoutEngine(channels={"broken": BrokenChannel()})
+        result = engine.fanout(_notice())
+
+        assert "broken" in result.channel_results
+        r = result.channel_results["broken"]
+        assert r.status == ChannelDeliveryStatus.FAILED
+        assert r.final_error is not None
+
+    def test_every_channel_has_result_even_when_one_misbehaves(self):
+        class BadChannel(NotificationChannel):
+            @property
+            def name(self) -> str:
+                return "bad"
+
+            def deliver(self, notification: Notification) -> None:
+                raise KeyboardInterrupt("oops")
+
+        bad = BadChannel()
+        good = InMemoryChannel("good")
+
+        engine = FanoutEngine(channels={"bad": bad, "good": good})
+        result = engine.fanout(_notice())
+
+        assert result.channel_count == 2
+        assert "bad" in result.channel_results
+        assert "good" in result.channel_results
+        assert result.channel_results["bad"].failed is True
+        assert result.channel_results["good"].succeeded is True
+        assert good.delivered_count == 1

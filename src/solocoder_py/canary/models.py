@@ -84,9 +84,13 @@ class MetricsSnapshot:
     timestamp: float
     current_traffic_percentage: int
     total_requests: int
+    baseline_requests: int
     candidate_requests: int
+    baseline_error_rate: float
     candidate_error_rate: float
+    baseline_p99_latency_ms: float
     candidate_p99_latency_ms: float
+    baseline_avg_latency_ms: float
     candidate_avg_latency_ms: float
 
 

@@ -81,7 +81,10 @@ class ABACEngine:
                 resolved_by=None,
             )
 
-        explicit_denies = [h for h in matched_policies if h.is_explicit_deny]
+        explicit_denies = [
+            h for h in matched_policies
+            if h.is_explicit_deny and h.effect == PolicyEffect.DENY
+        ]
         if explicit_denies:
             top_deny = max(explicit_denies, key=lambda h: h.priority)
             return EvaluationResult(

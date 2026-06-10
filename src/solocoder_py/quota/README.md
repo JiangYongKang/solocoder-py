@@ -150,29 +150,21 @@ assert manager.get_tenant_quota("t1").used == 0   # 自动重置
 
 ## 限额调整语义
 
-调小配额上限时可能导致当前 `used > limit`，此时会**同步回收**已用量，始终保证两级用量一致：
+配额上限调整（无论调大还是调小）**只会改变 `limit` 字段，绝不会修改 `used` 字段**。`used` 始终反映租户真实持有的资源量，保证后续 `release` 行为与实际持有量一致。
 
-### 调小租户配额上限
+### 调小配额上限
 
-当 `update_tenant_quota_limit(tenant_id, new_limit)` 中 `new_limit < old_limit` 且 `tenant.used > new_limit` 时：
+当调小 `limit` 后若出现 `used > limit`：
 
-- `tenant.used = new_limit`（截断到新上限）
-- `global.used -= (old_used - new_limit)`（同步回收全局用量）
+- `used` 保持不变，`remaining = limit - used` 会是负数（表示「超限状态」）
+- 后续新的 `acquire` 会因为 `remaining < amount` 被正常拒绝
+- 后续 `release` 可以按真实持有量正常释放，直到 `used` 归零
 
-这样 `sum(tenant_used) == global_used` 恒成立，后续 `release` 不会因为「租户已用量被截断而全局未同步」而出现失败。
-
-### 调小全局配额上限
-
-当 `set_global_quota(new_limit)` 中 `new_limit < old_limit` 且 `global.used > new_limit` 时：
-
-- `global.used = new_limit`（截断到新上限）
-- 按租户 ID 字典序遍历，依次从各租户的 `used` 中回收差额，直到补齐 `overage = old_global_used - new_limit`
-
-回收顺序是确定性的（按租户 ID 升序），保证并发或重复调用的结果一致。
+`sum(tenant_used) == global_used` 恒成立，因为限额调整不改动任何 `used`。
 
 ### 调大配额上限
 
-调大配额上限时不会触发已用量调整，仅更新 `limit`，已用量保持不变。
+仅更新 `limit`，已用量保持不变，`remaining` 随之增加。
 
 ## 并发一致性保证
 
@@ -190,7 +182,7 @@ assert manager.get_tenant_quota("t1").used == 0   # 自动重置
 
 该策略保证：
 1. 无死锁：任意两个线程获取锁的顺序一致，不会出现循环等待
-2. 原子性：双层配额的扣减/释放/截断在同一临界区内完成，用量不会出现中间可见状态
+2. 原子性：双层配额的扣减/释放在同一临界区内完成，用量不会出现中间可见状态
 3. `sum(tenant_used) == global_used` 恒成立
 
 ## 封装保护
@@ -281,7 +273,7 @@ print(manager.get_tenant_quota("tenant-002").used)  # 0
 print(manager.get_global_quota().used)              # 0
 ```
 
-### 调小配额上限保持用量一致
+### 调小配额上限不影响真实持有，可正常释放
 
 ```python
 manager.set_global_quota(1000)
@@ -292,10 +284,16 @@ manager.acquire("t2", 300)
 assert manager.get_global_quota().used == 700
 
 manager.update_tenant_quota_limit("t1", 200)  # 调小 t1 上限
-assert manager.get_tenant_quota("t1").used == 200  # 截断到新上限
-assert manager.get_global_quota().used == 500      # 同步回收全局 200
-assert manager.get_tenant_quota("t2").used == 300  # 其他租户不受影响
-# sum(t1.used=200, t2.used=300) == global.used=500 ✓
+assert manager.get_tenant_quota("t1").used == 400  # used 不变，反映真实持有
+assert manager.get_tenant_quota("t1").remaining == -200  # 处于超限状态
+assert manager.get_global_quota().used == 700
+assert manager.get_tenant_quota("t2").used == 300
+assert (manager.get_tenant_quota("t1").used
+        + manager.get_tenant_quota("t2").used) == manager.get_global_quota().used
+
+manager.release("t1", 400)  # 可以按真实持有量全部释放
+assert manager.get_tenant_quota("t1").used == 0
+assert manager.get_global_quota().used == 300
 ```
 
 ## 运行测试
@@ -307,8 +305,10 @@ poetry run pytest tests/quota/ -q
 测试覆盖以下场景：
 
 - **正常流程**：全局/租户配额创建、资源申请、释放、手动重置、周期自动重置
-- **边界条件**：租户配额等于全局配额、申请量刚好等于剩余额度、重置临界时刻（重置前后行为差异）、周期到期前后行为差异、HOURLY/DAILY 周期边界
+- **周期重置**：HOURLY、DAILY、WEEKLY、MONTHLY 四种周期到期检测与自动重置，MONTHLY 覆盖月末 30→31、31→28（非闰年2月）、闰年 2月29→3月29、2月29→次年2月28 等日历边界
+- **边界条件**：租户配额等于全局配额、申请量刚好等于剩余额度、重置临界时刻（重置前后行为差异）、周期到期前后行为差异
 - **异常分支**：未知租户申请、释放超过已用量、负数/零数额校验、全局配额未设置时操作、超限原因精确区分（租户不足/全局不足/两者都不足）
-- **限额调整一致性**：调小租户限额时两级用量同步、调小全局限额时按顺序同步回收租户用量、调大限额不影响已用量、多租户场景下 `sum(tenant_used) == global_used` 恒成立
+- **限额调整语义**：调小限额不截断 used（真实持有量不变）、remaining 可为负（超限状态）、后续 release 可按真实持有量正常释放、调大限额不影响已用量、多租户场景下 `sum(tenant_used) == global_used` 恒成立
+- **全局周期重置一致性**：无论从 `get_global_quota` 入口还是 `get_tenant_quota/acquire/release` 入口检测到全局周期到期，都会全量重置所有租户用量
 - **并发一致性**：多线程并发申请无超发、并发申请与释放无异常、全局重置与申请/释放交错执行无死锁且一致性成立
 - **封装保护**：返回对象均为独立副本，修改返回值不影响内部状态

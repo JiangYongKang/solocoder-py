@@ -1,0 +1,3 @@
+你实现的 ABAC 模块第二轮修复后仍存在以下问题，需要在 "src/solocoder_py/abac/" 范围内修复：
+1. models.py 的 Policy 校验只检查了 is_explicit_deny 必须是布尔值，没有校验 effect=PERMIT 的策略不应设置 is_explicit_deny=True 的语义约束。engine.py 显式拒绝过滤逻辑只检查 is_explicit_deny 字段而不检查 effect 是否为 DENY，导致 PERMIT + is_explicit_deny=True 的组合会错误触发显式拒绝优先并直接返回 DENY。
+2. 修复后运行 "poetry run pytest tests/abac/ -q"，确保该模块测试通过。

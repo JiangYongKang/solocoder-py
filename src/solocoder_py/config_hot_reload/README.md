@@ -29,7 +29,7 @@
 | `ChangeType` | 变更类型枚举：`ADDED`（新增）、`MODIFIED`（修改）、`REMOVED`（删除） |
 | `ConfigChange` | 单条配置变更记录：记录 key、变更类型、旧值、新值 |
 | `ChangeEvent` | 变更事件：记录版本号、时间戳、变更列表（可能为空元组）、是否为回滚操作 |
-| `ConfigVersion` | 配置版本快照：记录版本号、发布时间、完整配置数据、是否为回滚版本；提供 `get()`、`has_key()`、`keys()` 等便捷方法 |
+| `ConfigVersion` | 配置版本快照：记录版本号、发布时间、完整配置数据；提供 `get()`、`has_key()`、`keys()` 等便捷方法 |
 | `ConfigListener` | 监听器回调类型别名：`Callable[[ChangeEvent], None]` |
 
 ### manager.py

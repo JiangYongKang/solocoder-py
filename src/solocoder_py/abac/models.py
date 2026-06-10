@@ -120,6 +120,11 @@ class Policy:
         if not isinstance(self.is_explicit_deny, bool):
             from .exceptions import InvalidPolicyError
             raise InvalidPolicyError("is_explicit_deny must be a boolean")
+        if self.is_explicit_deny and self.effect != PolicyEffect.DENY:
+            from .exceptions import InvalidPolicyError
+            raise InvalidPolicyError(
+                "is_explicit_deny=True can only be used with effect=PolicyEffect.DENY"
+            )
 
 
 @dataclass

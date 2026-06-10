@@ -207,7 +207,16 @@ class PubSubBroker:
                     error_message="Subscriber is inactive",
                 )
                 continue
-            self._enqueue_for_subscriber(sub_rt, message, topic_name)
+            if sub_rt.subscriber.backpressure_strategy == BackpressureStrategy.BLOCK:
+                enqueue_thread = threading.Thread(
+                    target=self._enqueue_for_subscriber,
+                    args=(sub_rt, message, topic_name),
+                    daemon=True,
+                    name=f"pubsub-enqueue-{sub_rt.subscriber.id[:8]}",
+                )
+                enqueue_thread.start()
+            else:
+                self._enqueue_for_subscriber(sub_rt, message, topic_name)
 
         return message
 
@@ -300,6 +309,18 @@ class PubSubBroker:
         if sub_rt.dispatch_thread is not None:
             sub_rt.dispatch_thread.join(timeout=1.0)
             sub_rt.dispatch_thread = None
+
+        with sub_rt.buffer_lock:
+            while sub_rt.buffer:
+                leftover = sub_rt.buffer.popleft()
+                sub_rt.dropped_count += 1
+                self._record_delivery(
+                    message_id=leftover.id,
+                    subscriber_id=sub_rt.subscriber.id,
+                    topic=leftover.topic,
+                    status=DeliveryStatus.DROPPED,
+                    error_message="Subscriber dispatch stopped, dropped buffered message",
+                )
 
     def _dispatch_loop(self, sub_rt: _SubscriberRuntime) -> None:
         while not sub_rt.stopped:
