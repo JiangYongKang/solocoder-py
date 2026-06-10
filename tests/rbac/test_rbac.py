@@ -57,13 +57,16 @@ class TestPermissionModel:
         assert p.matches("write", "project:123") is False
         assert p.matches("read", "project:456") is False
 
-    def test_permission_action_wildcard_rejected_at_construction(self):
-        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
-            Permission(action="*", resource="project:123")
+    def test_permission_action_wildcard_created_but_matches_only_literal_star(self):
+        p = Permission(action="*", resource="project:123")
+        assert p.matches("*", "project:123") is True
+        assert p.matches("read", "project:123") is False
+        assert p.matches("write", "project:123") is False
 
-    def test_permission_action_wildcard_rejected_via_parse(self):
-        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
-            Permission.parse("*:project:123")
+    def test_permission_action_wildcard_via_parse_same_behavior(self):
+        p = Permission.parse("*:project:123")
+        assert p.matches("*", "project:123") is True
+        assert p.matches("read", "project:123") is False
 
     def test_permission_matches_resource_wildcard_top(self):
         p = Permission(action="read", resource="*")
@@ -83,11 +86,14 @@ class TestPermissionModel:
         assert p.matches("read", "project:read:456") is True
         assert p.matches("read", "project:write:123") is False
 
-    def test_permission_action_wildcard_rejected_even_with_resource_wildcard(self):
+    def test_permission_both_wildcards_created_but_engine_rejects(self):
+        p = Permission(action="*", resource="*")
+        assert p.matches("*", "anything:here") is True
+        assert p.matches("read", "anything:here") is False
+        engine = make_engine()
+        engine.create_role("admin")
         with pytest.raises(ValueError, match=r"action cannot be '\*'"):
-            Permission(action="*", resource="*")
-        with pytest.raises(ValueError, match=r"action cannot be '\*'"):
-            Permission.parse("*:*")
+            engine.add_permission_to_role("admin", p)
 
     def test_permission_matches_segment_count_mismatch(self):
         p = Permission(action="read", resource="project:123")

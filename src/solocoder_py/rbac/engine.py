@@ -71,6 +71,10 @@ class RBACEngine:
     def add_permission_to_role(self, role_name: str, permission: Permission) -> None:
         if not role_name:
             raise ValueError("role name cannot be empty")
+        if permission.action == "*":
+            raise ValueError(
+                "action cannot be '*'; wildcard matching is only supported on resource"
+            )
         with self._lock:
             role = self._roles.get(role_name)
             if role is None:

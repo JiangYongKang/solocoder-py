@@ -1,8 +1,7 @@
 产物不满意：
-1. test_clear_records_dropped_for_buffered_messages 中模型将 clear() 提前到 handler 阻塞时，使残留消息 DROPPED 路径变得可执行。但 clear() 后仍是"主题为空""记录为空"两个断言，与修复前相同。clear() 内部先创建 DROPPED 记录再清空 _delivery_records，若 DROPPED 循环因 bug 未执行，clear 无条件清空仍能通过。正确做法是 clear 之前检查 delivery records 或 dropped_count，确认 DROPPED 创建后，才真正覆盖了处理路径。
-2. test_block_strategy_bounds_buffer 中模型新增了 late_records 断言允许 blk-late 被标记为 DROPPED。但 _enqueue_for_subscriber 的 BLOCK 策略有 1.0 秒超时丢弃机制，测试仅 sleep 0.2 秒就接受 DROPPED，后续又强制断言 blk-late 必须为 SUCCESS，两个断言逻辑矛盾。若超时真被触发，中间断言通过但最终断言失败，测试会间歇性崩掉。根因是模型未阅读生产代码，不了解 BLOCK 的超时丢弃逻辑，加入了与最终目标矛盾的容错子句。
-
+1. test_clear_records_dropped_for_buffered_messages 中模型将 clear() 提前到 handler 阻塞时使 DROPPED 路径变得可执行，但 clear() 后仍是主题为空记录为空两个断言与修复前相同。clear() 内部先创建 DROPPED 再清空 _delivery_records，若 DROPPED 循环因 bug 未执行 clear 无条件清空仍能通过。应 clear 前检查 delivery records 或 dropped_count 确认 DROPPED 创建后才能真正覆盖处理路径。
+2. test_block_strategy_bounds_buffer 中模型新增了 late_records 断言允许 blk-late 被标记 DROPPED，但 _enqueue_for_subscriber 的 BLOCK 策略有 1.0 秒超时丢弃机制，测试仅 sleep 0.2 秒就接受 DROPPED 后续又强制断言 blk-late 必须 SUCCESS，两断言逻辑矛盾。若超时真被触发中间断言通过但最终断言失败测试间歇崩掉。根因是模型未阅读生产代码不了解 BLOCK 超时丢弃逻辑加入与最终目标矛盾的容错子句。
 过程不满意：
-1. 模型收到提示词后未经分析直接创建了 todo_write 子任务，然后才查看 test_pubsub.py。这违反了标注规范中 "先分析问题再规划" 的要求。在未理解代码结构的情况下预设修复方案，导致全程只看了测试文件而从未阅读 pubsub.py 生产代码，对 BLOCK 超时机制和 DROPPED 记录清除时机缺乏理解。
-2. 模型始终未阅读生产代码 pubsub.py。提示词提到的 DROPPED 循环在 _stop_subscriber_dispatch 实现，BLOCK 异步入队在 publish 和 _enqueue_for_subscriber 实现且含超时丢弃。不了解核心方法就修改断言，导致 test_block_strategy_bounds_buffer 中加入与最终断言矛盾的 DROPPED 容错子句，本质是 "不知生产代码行为，先让测试怎么都能过" 的容错写法。正确做法是先读生产代码再设计测试。
-3. 模型在总结中声称 "验证 clear() 后主题和记录均被清空" 即为覆盖了 DROPPED 路径，但这与修复前的断言完全相同。模型把 "让代码路径变得可执行" 等同于 "验证了路径的正确输出"，属于幻觉与虚假完成。代码可执行不代表输出已验证，这是在未检查 _stop_subscriber_dispatch 实际产出的情况下声称完成了验证。
+1. 模型收到提示词后未经分析直接建 todo_write 再查看测试，违反先分析问题再规划。在未理解代码结构时预设修复方案，导致全程只看测试文件从未阅读 pubsub.py 生产代码，对 BLOCK 超时机制和 DROPPED 记录清除时机缺乏理解。
+2. 模型始终未读生产代码 pubsub.py。提示词提到的 DROPPED 循环在 _stop_subscriber_dispatch 实现 BLOCK 异步入队在 publish 和 _enqueue_for_subscriber 且含超时丢弃。不了解核心方法就修改断言导致测试中加入与最终断言矛盾的 DROPPED 容错子句，本质是不知生产代码行为先让测试怎么都能过的容错写法。应先读生产代码再设计测试。
+3. 模型在总结中声称验证 clear() 后主题和记录被清空即为覆盖 DROPPED 路径，但这与修复前断言完全相同。模型把让代码路径变得可执行等同于验证了路径正确输出属幻觉与虚假完成。代码可执行不代表输出已验证，这是在未检查 _stop_subscriber_dispatch 实际产出的情况下声称完成验证。

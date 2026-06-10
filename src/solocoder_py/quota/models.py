@@ -26,11 +26,8 @@ class GlobalQuota:
     created_at: datetime = field(default_factory=datetime.now)
     period_start: Optional[datetime] = None
     reset_at: Optional[datetime] = None
-    _skip_validation: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self._skip_validation:
-            return
         if not self.quota_id:
             raise ValueError("quota_id cannot be empty")
         if self.limit < 0:
@@ -45,16 +42,15 @@ class GlobalQuota:
         return self.limit - self.used
 
     def copy(self) -> "GlobalQuota":
-        return GlobalQuota(
-            quota_id=self.quota_id,
-            limit=self.limit,
-            period=self.period,
-            used=self.used,
-            created_at=self.created_at,
-            period_start=self.period_start,
-            reset_at=self.reset_at,
-            _skip_validation=True,
-        )
+        new = object.__new__(GlobalQuota)
+        new.quota_id = self.quota_id
+        new.limit = self.limit
+        new.period = self.period
+        new.used = self.used
+        new.created_at = self.created_at
+        new.period_start = self.period_start
+        new.reset_at = self.reset_at
+        return new
 
 
 @dataclass
@@ -66,11 +62,8 @@ class TenantQuota:
     created_at: datetime = field(default_factory=datetime.now)
     period_start: Optional[datetime] = None
     reset_at: Optional[datetime] = None
-    _skip_validation: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self._skip_validation:
-            return
         if not self.tenant_id:
             raise ValueError("tenant_id cannot be empty")
         if self.limit < 0:
@@ -85,16 +78,15 @@ class TenantQuota:
         return self.limit - self.used
 
     def copy(self) -> "TenantQuota":
-        return TenantQuota(
-            tenant_id=self.tenant_id,
-            limit=self.limit,
-            period=self.period,
-            used=self.used,
-            created_at=self.created_at,
-            period_start=self.period_start,
-            reset_at=self.reset_at,
-            _skip_validation=True,
-        )
+        new = object.__new__(TenantQuota)
+        new.tenant_id = self.tenant_id
+        new.limit = self.limit
+        new.period = self.period
+        new.used = self.used
+        new.created_at = self.created_at
+        new.period_start = self.period_start
+        new.reset_at = self.reset_at
+        return new
 
 
 def make_global_quota(limit: int, period: QuotaPeriod = QuotaPeriod.NONE) -> GlobalQuota:

@@ -434,11 +434,14 @@ class TestDuplicateAssignmentDetection:
 
         assert 0 in c1.assigned_partitions
         assert 1 in c2.assigned_partitions
+        assert coordinator.get_partition_owner(0) == "c1"
 
-        coordinator._partition_owner[0] = "c2"
+        c1.revoke_partition(0)
+        c2.assign_partition(0)
 
-        assert 0 in c1.assigned_partitions
-        assert coordinator._partition_owner[0] == "c2"
+        assert 0 not in c1.assigned_partitions
+        assert 0 in c2.assigned_partitions
+        assert coordinator.get_partition_owner(0) == "c1"
 
         with pytest.raises(PartitionAlreadyAssignedError, match="ownership mismatch"):
             coordinator.force_rebalance()

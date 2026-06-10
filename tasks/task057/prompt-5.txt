@@ -1,0 +1,4 @@
+你实现的通知扇出模块第四轮修复中新增了4个测试用例，但这些测试均未真正验证对应 bug 的修复是否生效，需要在 "src/solocoder_py/notification_fanout/" 范围内修复：
+1. TestNoTimeoutTOCTOU 类的 test_completed_thread_just_before_timeout_check_not_marked_timeout 测试使用了 delay=0.01 秒和 timeout=0.015 秒，delay 小于 timeout 导致后台线程总是在超时前完成，delivered_event 在进入任何检查前就已为 True，竞态窗口从未被触发。旧代码在这一场景下同样返回 SUCCESS，测试无法区分新旧逻辑的行为差异。需要构造 delay 与 timeout 的差值极小或用同步原语精准控制时机，使后台线程恰好在 delivered_event.is_set() 与 t.is_alive() 两次检查之间完成投递，从而真正验证 TOCTOU 窗口已被消除。
+2. TestLateSuccessRecordedCorrectly 类的 test_background_thread_late_success_adds_success_attempt_record 测试在 fanout 完成后仅检查了 EventControlledChannel 的 delivered_count == 1，从未读取 FanoutResult 的 channel_results 中的 attempts_detail 结构来验证是否包含成功投递记录。提示词上一轮要求修复的核心产物问题是"attempts_detail 中缺少实际成功投递对应的条目"，而该测试完全不涉及 attempts_detail 的断言，无法证明修复生效。应在验证 delivered_count 之外，额外检查 ChannelResult 的 attempts_detail 确实包含一条 success=True 的 ChannelAttempt 记录。
+3. 修复后运行 "poetry run pytest tests/notification_fanout/ -q"，确保该模块测试通过。

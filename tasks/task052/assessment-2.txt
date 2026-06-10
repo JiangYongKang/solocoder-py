@@ -1,8 +1,7 @@
 产物不满意：
-1. router.py 的 route 方法中原有的请求计数逻辑（total_requests、baseline_requests、candidate_requests 递增）被完全移除，统计完全迁移至 record_metrics 方法。route 与 record_metrics 之间通过调用方手动传递 version_type 实现关联，但两者间无任何编译时或运行时约束保证调用方一定会调用 record_metrics，漏调用时统计数据将静默丢失且没有任何异常或日志警告。应在 record_metrics 中增加防御性校验，或至少将 total_requests 的递增保留在 route 方法中确保请求路由与计数的基本一致性。
-2. controller.py 的 _take_metrics_snapshot 方法中 MetricsSnapshot 数据类只有 candidate_requests、candidate_error_rate 和 candidate_p99_latency_ms 三个指标字段，baseline 相关的 baseline_error_rate 和 baseline_p99_latency_ms 虽然在 TrafficStats 中已正确计算，但快照中完全未记录基线侧数据，导致回滚时的审计快照只包含候选侧维度而丢失基线侧对比信息。应在 MetricsSnapshot 中同步记录 baseline 的核心指标以形成完整的基线-候选对照审计记录。
-
+1. router.py 的 route 方法原有的请求计数逻辑被完全移除统计迁移至 record_metrics，route 与 record_metrics 之间靠调用方手动传 version_type 关联，但无任何约束保证调用方一定调用 record_metrics，漏调用时统计数据静默丢失且无异常警告。应在 record_metrics 中增加防御性校验或至少将 total_requests 递增保留在 route 中确保请求路由与计数的基本一致性。
+2. controller.py 的 _take_metrics_snapshot 中 MetricsSnapshot 只有候选侧的三个指标字段，baseline 侧的 error_rate 和 p99_latency 虽在 TrafficStats 中已计算但快照中完全未记录，回滚审计快照只含候选维度丢失基线对比信息。应在 MetricsSnapshot 中同步记录基线核心指标形成完整对照审计记录。
 过程不满意：
-1. 模型在第 3 步（刚收到提示词）就创建了包含 7 项子任务的 TodoList，但直到第 16 步才开始读取 router.py、controller.py 等源文件。模型没有先通过读文件和 git diff 理解当前代码的具体缺陷位置和严重程度就制定了修复计划，不符合"先分析问题再规划任务列表"的流程要求。正确做法是先通读问题相关文件理解现有实现，再根据分析结果规划修复步骤。
-2. 模型在调试测试失败时连续四次读取同一个文件 test_canary.py（第 383 行读 150 行、第 412 行续读 150 行、第 435 行再续读 150 行、第 450 行又续读 150 行），每次读取固定长度的片段，没有使用搜索工具定位到具体失败的测试函数名，也没有一次性读取完整文件内容。这种零散分片读取的方式效率低下，且在多轮间丢失了文件结构全局视野，正确做法是用 grep 搜索失败测试函数名然后针对性读取。
-3. 模型在未做任何增量验证的情况下直接使用 Write 工具完整重写了 router.py 和 controller.py 两个核心文件，初版运行 pytest 后出现 6 个测试失败。失败原因是 route 方法中的请求计数逻辑与 record_metrics 的调用模式不一致（double count 与未 count 交替出现），模型在同一个计数问题上先后做了三轮修改才最终收敛——先删掉 route 中计数、再调整 record_metrics 调用约定、最后同步修改测试期望值。这属于典型的试错式迭代，应先分析 route 和 record_metrics 之间的数据流关系再一次性统一修改。
+1. 模型第 3 步刚收到提示词就建 7 项子任务但第 16 步才开始读源文件，没先通过读文件和 git diff 理解代码缺陷位置就制定计划，不符合先分析问题再规划的要求。应先通读相关文件理解实现再根据分析结果规划修复步骤。
+2. 模型调试测试失败时连续四次读取 test_canary.py 每次读 150 行固定片段，没使用搜索定位失败测试函数名也没一次性读全。这种零散分片读取效率低下丢失文件结构全局视野，应用 grep 搜索失败测试名再针对性读取。
+3. 模型未做增量验证直接用 Write 重写 router.py 和 controller.py，初版出现 6 个测试失败。因 route 计数逻辑与 record_metrics 调用模式不一致，模型在同一计数问题上三轮修改才收敛。应先分析 route 和 record_metrics 的数据流关系再一次性统一修改。

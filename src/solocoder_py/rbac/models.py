@@ -12,10 +12,6 @@ class Permission:
     def __post_init__(self) -> None:
         if not self.action:
             raise ValueError("action cannot be empty")
-        if self.action == "*":
-            raise ValueError(
-                "action cannot be '*'; wildcard matching is only supported on resource"
-            )
         if not self.resource:
             raise ValueError("resource cannot be empty")
 

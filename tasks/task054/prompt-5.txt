@@ -1,0 +1,3 @@
+你实现的 RBAC 模块第四轮修复后仍存在一个根本性问题，需要在 "src/solocoder_py/rbac/" 范围内修复：
+1. test_adding_permission_with_both_wildcards_rejected 测试虽然把 Permission(action="*", resource="*") 放到了 engine.add_permission_to_role() 的调用参数中，但由于 Python 的参数求值顺序是先计算实参再调用函数，Permission.__post_init__ 在构造阶段就抛出了 ValueError，add_permission_to_role 从未被执行到。make_engine() 创建的引擎和 create_role("superadmin") 创建的角色依然是死代码，提示词上一轮要求的"让引擎和角色被真正使用"实际并未达成。正确的做法是在引擎的 add_permission_to_role 方法中增加对双通配权限（action 和 resource 同时为通配符）的主动校验，在引擎层面拒绝而非仅依赖构造阶段被动抛异常，这样测试中的引擎和角色才会在异常抛出前真正参与到执行路径中。
+2. 修复后运行 "poetry run pytest tests/rbac/ -q"，确保该模块测试通过。

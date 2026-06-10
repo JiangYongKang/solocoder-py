@@ -1,0 +1,3 @@
+你实现的分区有序消费模块第四轮修复后仍存在以下问题，需要在 "src/solocoder_py/partition_ordering/" 范围内修复：
+1. test_owner_record_mismatch_with_actual_holder_via_public_path 测试的方法签名声明通过公共路径触发，但关键的状态不一致构造步骤 coordinator._partition_owner[0] = "c2" 直接写入了以单下划线标记的内部字段，未通过任何 ConsumerGroupCoordinator 提供的公共接口来制造"记录所有者与实际持有者不一致"的场景。该测试的异常状态完全依赖人工注入的内部数据篡改，无法真实反映公共 API 操作路径下的一致性检测能力。如果分支2（_partition_owner 记录的所有者与实际持有分区消费者不一致）在正常公共 API 操作中确实无法触发，则该分支本身可能是 _validate_ownership_consistency 中的死代码，应考虑将其移除而非用篡改内部状态的方式强行测试。
+2. 修复后运行 "poetry run pytest tests/partition_ordering/ -q"，确保该模块测试通过。

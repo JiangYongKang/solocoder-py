@@ -1,0 +1,4 @@
+你实现的发布订阅模块第四轮修复后的测试用例仍存在以下问题，需要在 "src/solocoder_py/pubsub/" 范围内修复：
+1. test_clear_records_dropped_for_buffered_messages 测试将 clear() 提前到 handler 阻塞时，确实让 _stop_subscriber_dispatch 中的残留消息 DROPPED 循环变得可执行，但 clear() 后仍然只有"主题为空"和"记录为空"两个断言，与修复前完全相同。clear() 内部先创建 DROPPED 记录再清空 _delivery_records，若 DROPPED 循环因 bug 未执行，clear() 的无条件清空操作同样能让空集合断言通过。正确做法是在 clear() 执行之前，先通过 get_delivery_records 检查残留消息确实已被标记为 DROPPED 状态，然后再执行 clear 和空集合断言，这样才真正覆盖了处理路径的产出验证。
+2. test_block_strategy_bounds_buffer 测试新增的 late_records 断言允许 blk-late 消息被标记为 DROPPED（第38-40行），但 _enqueue_for_subscriber 中的 BLOCK 策略有 1.0 秒超时丢弃机制，测试仅 sleep 0.2 秒就接受了 DROPPED 这一中间状态。随后又在第46-47行强制断言 blk-late 必须为 SUCCESS，导致两个断言逻辑矛盾——如果 1.0 秒超时真被触发，中间断言通过但最终断言会失败，测试在慢速环境下会间歇性崩掉。应分析 BLOCK 超时机制的实际行为后统一断言方向，移除与最终断言矛盾的容错子句。
+3. 修复后运行 "poetry run pytest tests/pubsub/ -q"，确保该模块测试通过。

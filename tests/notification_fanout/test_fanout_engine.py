@@ -644,84 +644,112 @@ class TestDuplicateDeliveryPrevention:
 
 
 class TestLateSuccessRecordedCorrectly:
-    def test_background_thread_late_success_adds_success_attempt_record(self):
+    def test_background_thread_late_success_captured_in_attempts_detail(self):
         ch = EventControlledChannel("late")
         cfg = ChannelConfig(
             channel_name="late",
             timeout=0.05,
-            max_attempts=3,
+            max_attempts=2,
             backoff_type=BackoffType.FIXED,
-            fixed_interval=0.02,
+            fixed_interval=0.01,
         )
         engine = FanoutEngine(
             channels={"late": ch},
             channel_configs={"late": cfg},
         )
 
-        fanout_thread = threading.Thread(target=lambda: engine.fanout(_notice()), daemon=True)
+        result_slot: list[FanoutResult] = []
+
+        def _run() -> None:
+            result_slot.append(engine.fanout(_notice("n-late")))
+
+        fanout_thread = threading.Thread(target=_run, daemon=True)
         fanout_thread.start()
 
         assert ch.wait_until_started(timeout=5.0), "第一次投递应已启动"
-        fanout_thread.join(timeout=2.0)
-        assert not fanout_thread.is_alive(), "fanout 应已在耗尽尝试后返回"
-
-        assert ch.delivered_count == 0, "后台线程未释放，此时不应已成功"
-
-        ch.release()
-        ch.release()
-        ch.release()
 
         time.sleep(0.1)
-
-        assert ch.delivered_count == 1, "释放后应仅成功 1 次"
-
-    def test_delivered_event_set_before_next_attempt_records_success_attempt(self):
-        ch = EventControlledChannel("pre-set")
-        cfg = ChannelConfig(
-            channel_name="pre-set",
-            timeout=0.05,
-            max_attempts=2,
-            backoff_type=BackoffType.FIXED,
-            fixed_interval=0.02,
-        )
-        engine = FanoutEngine(
-            channels={"pre-set": ch},
-            channel_configs={"pre-set": cfg},
-        )
-
-        fanout_thread = threading.Thread(target=lambda: engine.fanout(_notice()), daemon=True)
-        fanout_thread.start()
-
-        assert ch.wait_until_started(timeout=5.0), "第一次投递应已启动"
         ch.release()
 
-        fanout_thread.join(timeout=2.0)
+        fanout_thread.join(timeout=3.0)
         assert not fanout_thread.is_alive(), "fanout 应已结束"
 
-        result = engine.fanout(_notice())
-        r = result.channel_results["pre-set"]
-        assert r.status == ChannelDeliveryStatus.SUCCESS
-        assert len(r.attempts_detail) >= 1
-        assert any(a.success for a in r.attempts_detail)
+        assert len(result_slot) == 1
+        result = result_slot[0]
+        r = result.channel_results["late"]
+
+        assert r.status == ChannelDeliveryStatus.SUCCESS, (
+            f"后台线程释放后应最终成功，实际状态={r.status}, error={r.final_error}"
+        )
+        assert ch.delivered_count == 1, "实际投递应只发生一次"
+        assert any(a.success for a in r.attempts_detail), (
+            f"attempts_detail 中必须至少包含一条成功记录，实际: "
+            f"{[(a.attempt_number, a.success) for a in r.attempts_detail]}"
+        )
+        assert len(r.attempts_detail) >= 2, (
+            f"至少应有一次超时尝试 + 一次捕获后台成功的尝试，实际尝试次数={len(r.attempts_detail)}"
+        )
+        assert r.attempts == len(r.attempts_detail)
+        assert r.attempts_detail[-1].success is True, "最后一条尝试记录应为成功"
 
 
 class TestNoTimeoutTOCTOU:
-    def test_completed_thread_just_before_timeout_check_not_marked_timeout(self):
-        for _ in range(50):
-            ch = InMemoryChannel("edge")
-            ch.set_delay(0.01)
-            cfg = ChannelConfig(channel_name="edge", timeout=0.015, max_attempts=1)
-            engine = FanoutEngine(
-                channels={"edge": ch},
-                channel_configs={"edge": cfg},
-            )
-            result = engine.fanout(_notice())
-            r = result.channel_results["edge"]
-            assert r.status != ChannelDeliveryStatus.TIMEOUT, (
-                f"线程在超时窗口内完成不应被标记为 TIMEOUT，实际状态={r.status}"
-            )
-            assert r.status == ChannelDeliveryStatus.SUCCESS
-            assert ch.delivered_count == 1
+    def test_thread_finishes_between_two_checks_not_marked_timeout(self):
+        class TOCTOUChannel(NotificationChannel):
+            def __init__(self, name: str) -> None:
+                self._name = name
+                self.entered_deliver = threading.Event()
+                self.proceed = threading.Event()
+                self.done_deliver = threading.Event()
+                self._delivered: list[Notification] = []
+
+            @property
+            def name(self) -> str:
+                return self._name
+
+            @property
+            def delivered_count(self) -> int:
+                return len(self._delivered)
+
+            def deliver(self, notification: Notification) -> None:
+                self.entered_deliver.set()
+                self.proceed.wait()
+                self._delivered.append(notification)
+                self.done_deliver.set()
+
+        ch = TOCTOUChannel("toctou")
+        cfg = ChannelConfig(channel_name="toctou", timeout=0.05, max_attempts=1)
+        engine = FanoutEngine(
+            channels={"toctou": ch},
+            channel_configs={"toctou": cfg},
+        )
+
+        result_slot: list[FanoutResult] = []
+
+        def _run() -> None:
+            result_slot.append(engine.fanout(_notice("n-toctou")))
+
+        fanout_thread = threading.Thread(target=_run, daemon=True)
+        fanout_thread.start()
+
+        assert ch.entered_deliver.wait(timeout=5.0), "后台线程应已进入 deliver"
+        time.sleep(0.2)
+        ch.proceed.set()
+        assert ch.done_deliver.wait(timeout=5.0), "后台线程应已完成 deliver"
+
+        fanout_thread.join(timeout=5.0)
+        assert not fanout_thread.is_alive(), "fanout 应已结束"
+
+        assert len(result_slot) == 1
+        result = result_slot[0]
+        r = result.channel_results["toctou"]
+
+        assert ch.delivered_count == 1, "后台线程应实际完成了一次投递"
+        assert r.status == ChannelDeliveryStatus.SUCCESS, (
+            f"投递实际成功，但被误判为 {r.status}, error={r.final_error}"
+        )
+        assert r.final_error is None
+        assert any(a.success for a in r.attempts_detail)
 
     def test_failed_exception_after_timeout_still_returns_failed_not_timeout(self):
         ch = InMemoryChannel("fail-fast")

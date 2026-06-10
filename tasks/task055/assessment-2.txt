@@ -1,7 +1,6 @@
 产物不满意：
-1. models.py 的 Policy.__post_init__ 只校验了 is_explicit_deny 必须是布尔值，但没有校验 PERMIT 效果策略不应设置 is_explicit_deny=True 的语义约束。engine.py 第 84 行的 explicit_denies 过滤逻辑只检查 is_explicit_deny 字段值而不检查 effect 是否为 DENY，导致一个被手动标记 is_explicit_deny=True 的 PERMIT 策略会错误触发"显式拒绝优先"路径并直接返回 DENY 结果。新增的 test_permit_policy_cannot_be_marked_explicit_deny 测试将此错误组合验证为允许行为而非拒绝。应在 Policy 校验中增加 effect 与 is_explicit_deny 的交叉约束，或在引擎过滤中补充 effect 检查。
-2. engine.py 的 evaluate 方法中 order_counter 变量在每次 evaluate 调用时从 0 开始递增，只对当次请求中命中的策略按遍历顺序分配序号，同一策略在不同请求中的 order 值取决于当次匹配到了多少条策略。README 中描述为"从 0 开始按策略添加顺序递增"暗示 order 是每条策略的全局固定属性，与真实行为存在偏差。当前实现对于 FIRST_APPLICABLE 的语义是正确的，但文档描述会误导使用者误以为可以通过 order 判断策略的全局添加顺序。
-
+1. models.py 的 Policy.__post_init__ 只校验 is_explicit_deny 必须是布尔值但没有校验 PERMIT 效果策略不应设置 is_explicit_deny=True 的语义约束。engine.py 第 84 行 explicit_denies 过滤逻辑只检查 is_explicit_deny 不检查 effect 是否为 DENY，导致一个被手动标记 is_explicit_deny=True 的 PERMIT 策略错误触发显式拒绝优先路径并返回 DENY。新增测试将此错误组合验证为允许行为。应在校验中增加 effect 与 is_explicit_deny 交叉约束或在引擎过滤中补充 effect 检查。
+2. engine.py 的 evaluate 中 order_counter 每次调用从 0 开始递增，只对当次请求中命中策略按遍历顺序分配序号，同一策略在不同请求中的 order 取决于当次匹配到多少条策略。README 描述从 0 开始按添加顺序递增暗示 order 是每条策略的全局固定属性与真实行为存在偏差。虽然 FIRST_APPLICABLE 语义正确但文档会误导使用者。
 过程不满意：
-1. 模型在第 5 步创建了包含 5 项子任务的 TodoList，但直到第 13 步（第 19 行）才通过 view_files 工具开始读取 models.py、engine.py 等源文件。模型虽然在第 1 步的思考中复述了提示词的四个问题点，但这属于对需求文本的理解而非对代码现状的分析，TodoList 的创建仍然先于对代码实际缺陷位置和严重程度的判断。正确做法是先用 git diff 或读取文件了解当前代码的缺陷形态，再根据分析结果规划修复步骤和先后顺序。
-2. 模型新增了 test_permit_policy_cannot_be_marked_explicit_deny 测试将 PERMIT + is_explicit_deny=True 的组合视为合法状态并通过断言。模型在修改 Policy 校验逻辑时只考虑了"is_explicit_deny 必须是布尔值"这一维度的约束，没有从引擎的 _resolve_explicit_deny 过滤逻辑（第 84 行只检查 is_explicit_deny 不检查 effect）反向推演"哪些策略组合会导致错误行为"。这是缺乏全链路一致性校验思维的体现，应在修改模型时同时检查引擎消费方的逻辑是否与新约束兼容。
+1. 模型第 5 步创建了 5 项 TodoList 但第 13 步才开始读源文件。模型虽在第 1 步思考中复述了提示词四个问题点但这属对需求文本的理解而非代码现状分析，TodoList 创建仍先于对代码实际缺陷的判断。应先用 git diff 或读取文件了解当前代码缺陷形态再根据分析结果规划修复步骤。
+2. 模型新增测试将 PERMIT + is_explicit_deny=True 组合视为合法状态并通过断言，修改 Policy 校验时只考虑 is_explicit_deny 必须是布尔值这一维约束没从引擎过滤逻辑反向推演哪些策略组合会导致错误行为。这是缺乏全链路一致性校验思维的体现，应在修改模型时同时检查引擎消费方的逻辑是否与新约束兼容。

@@ -523,11 +523,6 @@ class TestBackpressureIsolation:
         buf_size = broker_with_topic.get_subscriber_buffer_size("test-topic", "block-sub")
         assert buf_size == BUFFER_SIZE
 
-        late_msg_recorded_before = broker_with_topic.get_delivery_records(
-            message_id="blk-late"
-        )
-        assert len(late_msg_recorded_before) == 0
-
         broker_with_topic.publish("test-topic", "late", message_id="blk-late")
         time.sleep(0.2)
 
@@ -539,9 +534,7 @@ class TestBackpressureIsolation:
         late_records = broker_with_topic.get_delivery_records(
             message_id="blk-late", subscriber_id="block-sub"
         )
-        assert len(late_records) == 0 or (
-            len(late_records) == 1 and late_records[0].status == DeliveryStatus.DROPPED
-        )
+        assert len(late_records) == 0, "blk-late should be waiting (no record yet) before handler release"
 
         can_proceed.set()
         time.sleep(0.6)
@@ -807,16 +800,41 @@ class TestBackpressureIsolation:
         )
         assert buf_size_before == 2
 
-        pre_clear_records = broker_with_topic.get_delivery_records()
-        assert len(pre_clear_records) >= 1
+        broker_with_topic.unsubscribe("test-topic", "clear-sub")
+
+        handler_event.set()
+        time.sleep(0.3)
+
+        all_records = broker_with_topic.get_delivery_records(subscriber_id="clear-sub")
+        statuses = {r.message_id: r.status for r in all_records}
+        for i in range(3):
+            assert f"clear-{i}" in statuses, f"clear-{i} missing from records"
+
+        success_count = sum(1 for s in statuses.values() if s == DeliveryStatus.SUCCESS)
+        dropped_count = sum(1 for s in statuses.values() if s == DeliveryStatus.DROPPED)
+        assert success_count + dropped_count == 3
+        assert success_count >= 1
+        assert dropped_count == 2
+
+        for rec in all_records:
+            if rec.status == DeliveryStatus.DROPPED:
+                assert "stopped" in (rec.error_message or "").lower()
+            elif rec.status == DeliveryStatus.SUCCESS:
+                assert rec.message_id == "clear-0"
+
+        other_records = broker_with_topic.get_delivery_records(
+            subscriber_id="other-sub"
+        )
+        assert len(other_records) == 1
+        assert other_records[0].status == DeliveryStatus.SUCCESS
+
+        total_records_before = len(broker_with_topic.get_delivery_records())
+        assert total_records_before >= 4
 
         broker_with_topic.clear()
 
         assert broker_with_topic.list_topics() == []
         assert broker_with_topic.get_delivery_records() == []
-
-        handler_event.set()
-        time.sleep(0.2)
 
     def test_inactive_subscriber_does_not_receive(self, broker_with_topic: PubSubBroker):
         received: List[Message] = []
