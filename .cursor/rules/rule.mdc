@@ -48,16 +48,16 @@ alwaysApply: true
 标注规范
 1. 每个会话的标注放在 tasks/taskXXX/assessment-N.txt 中（N 为会话序号）。
 2. 标注文件为纯文本格式，不使用任何 Markdown 符号，只使用最基础的逗号，句号，双引号，错误信息使用反引号作为代码块。
-3. 每一条标注内容不能过长也不能过短，必须在 150 ~ 250 字之间。
+3. 每一条标注内容不能过长也不能过短，必须在 150 ~ 300 字之间。
 4. 标注内容要忽略一些细节，比如第 xxx 行，比如第 xxx 步，只需要描述哪个文件中或者哪个方法中即可。
 5. 段落结构分为两段：
     - 产物不满意：列出代码实现中的具体缺陷。
     - 过程不满意：从模型思考过程中分析模型行为和决策路径的问题。
 6. 只关注当前任务所在包的代码。例如被测模型在 A 包下开发了功能代码、单元测试、文档。那么审查代码，执行单测，分析思考轨迹都只针对 A 包。涉及到 B 包的问题，不应纳入当前任务的标注内容。
 
-标注要素：一条合格的不满意原因必须同时具备以下五个要素，每个要素用一句话说清楚，采用自然口语化的中文表达，避免过度专业术语：
-1. 触发节点（When）：模型在哪个步骤或者使用哪个工具调用出了问题？
-2. 实际行为（What）：模型做错了什么？
+标注要素：一条合格的不满意原因尽量具备以下五个要素，每个要素用一句话说清楚，采用自然口语化的中文表达，避免过度专业术语：
+1. 触发节点（When）：在什么情况下触发的问题？
+2. 实际行为（What）：触发的问题是什么？
 3. 业务影响（Impact）：这个错误导致了什么后果？
 4. 根本原因（Root Cause）：造成这个问题的原因是什么？
 5. 解决方案（Solution）：解决这个问题的正确做法是什么？
@@ -91,34 +91,34 @@ alwaysApply: true
 标注示例一
 ```
 产物不满意：
-1. state_machine.py 中的 transition 方法实现了正常流转但提示词要求的退款分支完全未实现，状态机无任何 refund 相关状态或转移逻辑，fulfillment.py 调用退款时抛 NotImplementedError 无法处理售后。应先列出所有状态和转移矩阵再编码。
-2. promotion.py 中的 apply_promotions 方法满减和折扣叠加时直接相加无互斥校验，同时命中两个促销时金额被双重扣减少了 15%，与提示词要求不能同时生效矛盾。模型没考虑到需要维护互斥规则表，应先按互斥规则分组同组内只选最优方案。
-3. fulfillment.py 中的 ship_line_item 方法在部分发货时将发货量累加到订单整体计数器而非按 line_item 维度更新，test_partial_fulfillment 失败报 assert 3 == 2，第二次发货后履约数超出。应在 line_item 上维护独立的 fulfilled_qty 字段。
+1. 在编写状态机时 transition 方法只实现了待支付到已支付的正常流转分支，退款相关的 REFUND_REQUESTED 和 REFUNDED 状态及对应的 transfer 路径完全缺失，fulfillment 调用退款时直接抛 NotImplementedError 导致售后场景无法处理。原因是没先列出完整状态转移矩阵就动手编码，应先梳理所有状态和合法转移再实现。
+2. promotion.py 的 apply_promotions 方法对满减和折扣两类促销采用了简单累加策略，两个互斥促销同时命中时金额被双重优惠扣减了 15%，与提示词要求互斥促销不能同时生效矛盾。原因是没先设计互斥规则表对促销做分组处理，应在互斥组内只选取优惠力度最大的方案而非简单累加全部活动的折扣。
+3. fulfillment.py 的 ship_line_item 方法在部分发货时将已发数量累加到订单级别而非行项目级别，第二次发货后 test_partial_fulfillment 断言失败报 `assert 3 == 2`，已履约数量超出预期。原因是混淆了订单维度和行项目维度的履约计数器，应在每个 line_item 上维护独立的 fulfilled_qty 字段。
 过程不满意：
-1. 连续两次读取 state_machine.py 内容完全一致属于无意义重复读取，浪费推理时间。应记录已读取区域避免重复查看。
-2. 写完 promotion.py 后在回复中声称促销模块已全部完成但未运行 pytest 验证，直到后续才发现互斥逻辑缺失，属于幻觉与虚假完成。应每个模块写完后立即运行对应测试验证。
+1. 模型在刚收到提示词后未经分析就直接用 todo_write 创建了 6 项子任务计划，之后才开始阅读 docs 目录下的需求文档和现有代码结构，导致计划的粒度划分与实际模块边界不匹配，后续多次在 state_machine 和 fulfillment 之间反复调整架构。正确做法是先分析需求文档和代码骨架，理清模块职责边界后再制定执行计划。
+2. 写完 promotion.py 后模型在回复中声称促销模块已完成但并未运行 `poetry run pytest tests/order/` 验证代码正确性，直到后续编写集成测试时才通过失败用例反推出互斥校验逻辑完全缺失。这属于典型的幻觉与虚假完成，模型把代码写完了等同于功能实现了而跳过了测试验证环节。正确做法是每完成一个模块就立即运行对应单元测试以失败结果驱动下一轮修复。
 ```
 
 标注示例二
 ```
 产物不满意：
-1. 提示词要求修复惰性过期回收但只在 lru_cache.py 的 get 中添加了 TTL 检查，遗漏 __setitem__ 和 __contains__ 两个入口。test_expired_entry_in_setitem 和 test_expired_entry_in_contains 均失败报 `Expected None for expired key`。模型只修补了 get 路径未系统性扫描所有缓存入口，应先 grep 所有访问缓存的方法再逐一添加过期检查。
-2. lru_cache.py _evict_if_needed 中 lock 获取放在 for 循环外面，驱逐大容量缓存时持锁超过 3 秒导致 test_concurrent_read_during_eviction 超时失败。锁粒度太粗，应在循环内部逐条目加锁或使用读写锁分离。
-3. lru_cache.py 中的 _is_expired 方法用 time.time() 而 _cleanup_expired 用 time.monotonic()，同一时刻两个方法对过期与否的判断相差约 17 亿秒，同一条目在 get 返回有效数据后 0.1 秒内被 cleanup 误回收。应统一使用 time.monotonic() 作为内部时间基准。
+1. 提示词要求修复惰性过期回收，但模型只在 lru_cache.py 的 get 方法里添加了 TTL 检查，__setitem__ 和 __contains__ 这两个同样会访问缓存数据的方法完全没有处理过期逻辑。test_expired_entry_in_setitem 和 test_expired_entry_in_contains 均失败报 `Expected None for expired key`。原因是只修补了最显眼的 get 入口而没系统性扫描所有访问点，应先 grep 找出全部读取缓存的方法再逐一添加过期驱逐。
+2. lru_cache.py 的 _evict_if_needed 方法把线程锁的获取放在 for 循环外层，当缓存容量较大时驱逐操作持锁超过 3 秒，导致 test_concurrent_read_during_eviction 超时失败。根因是锁粒度过粗把不需要串行化的清理操作也纳入了临界区，应改为在循环内部按条目逐次加锁或采用读写锁分离读和写路径。
+3. lru_cache.py 中 _is_expired 方法使用 time.time() 获取当前时间，而 _cleanup_expired 使用 time.monotonic()，两个函数在同一时刻返回的时间戳相差约 17 亿秒，导致同一条目在 get 返回有效数据后 0.1 秒内就被 cleanup 当作过期条目误回收。根因是模块内时间源不统一，应全模块统一使用 time.monotonic() 作为内部时间基准。
 过程不满意：
-1. 执行 pytest 测试失败后没有查看失败测试的堆栈信息就直接修改 lru_cache.py 三处代码，再次测试发现新引入 `IndentationError` 又改回去。属于试错式调试，遇到错误盲改而非先分析错误信息缩小范围，同一处代码两轮未修正。应先读堆栈定位具体行再做最小修正。
-2. 重写 test_concurrency.py 新增 unittest.mock.patch('threading.Lock') 规避多线程测试复杂性，但生产代码本身使用 threading.Lock，mock 后测试覆盖的是 mock 对象而非真实并发行为。属于生产代码向测试妥协，应使用 Barrier 同步线程执行时机而非绕过测试难点。
+1. 执行 pytest 发现测试失败后模型没有先阅读失败用例的堆栈信息就直接修改 lru_cache.py 中的三处代码，再次运行测试又引入了 `IndentationError`，随后又把刚才的修改撤了回去。这是典型试错式调试，同一处代码两轮修改仍未修正，正确做法是先读堆栈定位具体错误行再只对出错行做最小范围的修改。
+2. 在编写多线程并发测试时模型重写了 test_concurrency.py 并在其中使用 `unittest.mock.patch('threading.Lock')` 来规避真实并发场景的复杂度，但生产代码本身依赖 threading.Lock，mock 后测试覆盖的是 mock 对象而非真实的并发控制行为。这是生产代码向测试妥协，正确做法是用 Barrier 同步线程执行时机而非用 mock 绕过并发难点。
 ```
 
 标注示例三
 ```
 产物不满意：
-1. move_to_dlq 方法中的消息超过最大重试后转移到死信队列，但未记录投递次数和首次入队时间。提示词要求支持死信重试，缺失溯源信息无法判断死信是否值得再次投递。模型只关注转移动作忽略重试上下文，应在死信消息中保留 original_enqueue_time 和 delivery_count 字段。
-2. receive_message 中超时计时器只在消费者显式调用 ack 时停止，若消费者崩溃未调用 ack 则消息永久不可见。test_visibility_timeout_on_crash 失败报 `Expected message to be visible again after timeout`。原因是只实现了显式 ack 路径未实现被动超时检测的后台扫描，应添加定时扫描线程将超时未 ack 消息重新放回可见队列。
-3. publish 方法中去重逻辑只比较消息 body 内容未校验 message_id，两条 body 相同但 id 不同的消息被误判为重复导致丢弃。test_message_deduplication 失败报 assert 2 == 1。模型混淆了投递去重与内容去重，应以 message_id 作为去重唯一键。
+1. dead_letter.py 的 move_to_dlq 方法在消息超过最大重试次数后将其转移到死信队列，但转移时丢失了原消息的首次入队时间和已投递次数。提示词要求支持死信消息的二次重试，缺失这些溯源信息根本无法判断一条死信是否还值得重新投递。原因是只关注转移动作本身而忽略了重试决策所需的上下文，应在死信消息体中保留 original_enqueue_time 和 delivery_count。
+2. receive_message 方法中的可见性超时机制只在消费者显式调用 ack 时才停止计时器，如果消费者进程异常崩溃没有执行 ack 该消息就会永远对其它消费者不可见。test_visibility_timeout_on_crash 测试失败报 `Expected message to be visible again after timeout`。原因是未实现超时未确认消息的被动重投，应增加后台定时扫描线程将超时未 ack 的消息重新放回可见队列。
+3. publish 方法的去重校验只比较消息体的内容而忽略了 message_id 字段，导致两条 body 完全相同但 id 不同的独立消息被错误判定为重复而丢弃。test_message_deduplication 失败报 `assert 2 == 1`。根因是把消息内容去重和投递幂等性两个概念混淆了，应以 message_id 作为去重的唯一键而不是比较消息体内容。
 过程不满意：
-1. 创建 tests/queue/test_queue.py 但运行 pytest 时找不到导入路径报 `ModuleNotFoundError`。原因是缺少项目基础设施的前置分析，未先阅读 pyproject.toml 了解 pytest 的 pythonpath 配置。应先理解 pyproject.toml 中的工具配置再动手写测试代码。
-2. 看到 5 个测试失败后直接选择完全重写 dead_letter.py 而非逐个分析失败原因，重写后引入新缺陷，且对去重逻辑连续做了三次相反修改（加 message_id 校验 -> 删掉 -> 又加回来）形成三轮不收敛的试错循环。应逐个分析失败用例对应的具体代码行再做最小修正。
+1. 模型在创建 tests/queue/test_queue.py 后直接运行 pytest，此时抛出 `ModuleNotFoundError` 找不到包导入路径。原因是缺少对项目基础设施的前置分析，没有先阅读 pyproject.toml 理解 pytest 的 pythonpath 配置和包的目录约定。合理做法是在开始编码前先查看项目骨架，了解构建配置、测试目录结构和导入路径规则。
+2. 看到 5 个测试用例失败后模型没有逐个阅读失败信息就直接将 dead_letter.py 整个文件重写了一遍，重写后又引入新的缺陷，其中对去重逻辑的处理经历了添加 message_id 校验、又将其删除、又重新加回来的三轮相反方向修改。这是三轮不收敛的试错循环，正确做法是依次分析每个失败用例指向的具体代码行再逐一做最小修正。
 ```
 
 目录结构
