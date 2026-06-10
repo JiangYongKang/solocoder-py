@@ -80,9 +80,9 @@ RateCapError
 - `current_count() -> int`：返回窗口内当前计数（会先驱逐过期数据）
 - `remaining() -> int`：返回剩余配额 = `max(0, limit - current_count)`
 - `count_by_tag(tag) -> int`：按标签查询该标签在窗口内的当前计数
-- `clear()`：**O(1) 清空所有计数，替代 O(n) 逐条回滚，用于 reset_global / reset_subject 主体侧
+- `clear()`：**O(1)** 清空所有计数，替代 O(n) 逐条回滚，用于 reset_global / reset_subject 主体侧
 - `remove_by_tag(tag, amount=None) -> int`：按标签精确移除指定数额（amount=None 表示移除全部），返回实际移除数量，用于 reset_subject 全局侧
-- `_rollback_last(amount=1)`：回滚最后 amount 次计数，供 manager 在跨维度联动失败时全局回滚最近一次 try_acquire 刚添加的条目（此时不需要按标签区分，因为都是当前主体自己的申请）
+- `_rollback_last(amount=1, tag=None)`：回滚最后 amount 次计数。当提供 `tag` 参数时，**按标签从尾部精确回滚**，不碰其他标签的条目（用于跨维度联动失败的场景，避免同桶内其他主体被误删）；当 `tag=None`（向后兼容）时，按插入顺序从尾部盲删。
 
 ### manager.py
 
@@ -198,10 +198,27 @@ t=61:            [==============================] (窗口: 1~61, t=0的请求已
 
 | 方法 | 设计目的 | 使用场景 | 移除策略 |
 |------|---------|---------|---------|
-| `_rollback_last(amount)` | **撤销"最近一次 `try_acquire` 刚添加的条目** | 跨维度联动失败时回滚（全局→主体失败，或窗口 N 失败时回滚窗口 1~N-1） | 从 deque/bucket **尾部盲删**，因为刚添加的条目必然位于尾部，不需要按标签区分 |
+| `_rollback_last(amount, tag=None)` | **撤销"最近一次 `try_acquire` 刚添加的 amount 条"** | 跨维度联动失败时回滚（全局→主体失败，或窗口 N 失败时回滚窗口 1~N-1） | 提供 `tag` 时**按标签从尾部精确回滚**；`tag=None` 时从尾部盲删（向后兼容） |
 | `remove_by_tag(tag, amount)` | **按主体标签精确移除任意位置的条目** | `reset_subject` 时从全局计数器扣减该主体的历史用量 | **遍历匹配标签**，不管条目处于窗口内哪个位置/哪个桶，仅扣减标签匹配的部分 |
 
-⚠️ **关键设计约束**：`_rollback_last` **绝不能用于 `reset_subject`**。在分桶模式下，如果主体 A 的操作时间早于主体 B，A 的条目位于更早的桶（deque 前端），此时调用 `_rollback_last(n)` 会从尾部删除 B 的最新条目而不是 A 的历史条目，导致 B 的计数被错误地扣减。本模块使用 `remove_by_tag` 彻底解决了此问题。
+⚠️ **关键设计约束**：`_rollback_last(amount)` **必须始终提供 `tag` 参数**（从 Manager 调用点传入 `subject_id`）。在分桶模式下，如果同一桶内先有主体 A 的条目（标签 key 先插入 dict）、然后主体 B 后插入同桶、A 又对同桶追加贡献（此时 A 的 dict key 顺序仍在 B 前面，因为对已存在 key 的更新不改变 dict 插入顺序），此时调用 `_rollback_last(n, tag=None)` 会通过 `reversed(per_tag.keys())` 先扣 B 的条目——B 根本没有需要回滚的内容，却被误删！
+
+**修复方案**：Manager 回滚路径统一调用 `_rollback_last(amount, tag=subject_id)`，`_rollback_last` 在分桶分支中：
+1. 从**最新的桶**（`_bucket_keys[-1]`）开始倒序遍历
+2. 每个桶中**只查看 `per_tag.get(tag, 0)`**，不碰其他标签的计数
+3. 桶内该标签额度够则扣完、额度不够则扣部分并继续往前一个桶找
+4. 精确模式下同样从 deque 尾部倒序遍历，**只 pop 标签匹配的条目**
+
+### 1.1 分桶模式下的时间顺序约定
+
+分桶模式（`granularity > 0`）通过 `_bucket_keys: Deque[int]` 维护桶的时间顺序，队首是最旧的桶，队尾是最新的桶。回滚操作**总是从最新的桶开始处理**，因为：
+
+- `try_acquire` 总是写入「当前时间」所在的桶（`bucket_key(now)`），它必然是最新或次新的桶
+- 跨维度联动失败的回滚发生在 `try_acquire` 之后**立刻**执行，Manager 的 RLock 保证中间没有其他操作
+- 因此「需要回滚的 amount 条」100% 位于「最后一次写入」的桶中，从最新桶开始能以最小遍历成本找到它们
+- 即使在极端边界条件下（时钟推进导致写入新桶，紧接着回滚），倒序遍历也能确保从最新桶向前找到所有刚写入的条目
+
+但对于 `remove_by_tag`（reset_subject 路径），由于目标条目可能分布在窗口的任何桶，因此从**最旧桶**开始顺序遍历，确保所有桶都被检查到。
 
 ### 2. 标签追踪的正确性保证
 
@@ -258,6 +275,8 @@ g_counter.remove_by_tag(subject_id, used)  # remove_by_tag 内部 acquire 一次
 | `TestSlidingWindowTagTracking` | 全部 9 个用例 | `count_by_tag` / `remove_by_tag` 在两种模式下的单元正确性 |
 | `TestSlidingWindowClear` | 全部 3 个用例 | `clear()` 的幂等性、清空后可继续使用 |
 | `TestManagerSubjectNotFound` | 全部 6 个用例 | `strict=True` 查未知主体抛异常、已知主体正常、strict=False 不抛错 |
+| `TestSlidingWindowRollbackWithTag` | 全部 8 个用例 | `_rollback_last(tag=...)` 同桶多主体不互影响、跨桶、部分扣减、精确模式交错、向后兼容 |
+| `TestManagerRollbackTagIsolation` | 全部 5 个用例 | Manager 回滚路径（全局/主体维度失败）按标签精确扣减、多窗口回滚、reset 后继续操作隔离、全局维度失败回滚 |
 
 ## 使用示例
 

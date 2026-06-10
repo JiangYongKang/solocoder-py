@@ -1,7 +1,6 @@
 import pytest
 
 from solocoder_py.exactly_once import (
-    CheckpointMonotonicityError,
     DedupStoreOverflowError,
     OffsetSkipWarning,
     ProcessStatus,
@@ -101,6 +100,147 @@ class TestOffsetSkipWarning:
         r = proc.process_message_at(0)
         assert r.is_new is True
         assert proc.last_skip_warning is None
+
+
+class TestSkipWarningLifecycle:
+    def test_warning_cleared_after_sequential_catches_up(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(5)
+        assert proc.last_skip_warning is not None
+
+        for _ in range(6):
+            proc.process_next()
+
+        assert proc.current_offset == 5
+        assert proc.last_skip_warning is None
+
+    def test_warning_persists_before_catching_up(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(7)
+        assert proc.last_skip_warning is not None
+
+        for _ in range(5):
+            proc.process_next()
+
+        assert proc.current_offset == 4
+        assert proc.last_skip_warning is not None
+
+    def test_warning_cleared_exactly_at_skip_offset(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(5)
+        assert proc.last_skip_warning is not None
+
+        for _ in range(5):
+            proc.process_next()
+        assert proc.current_offset == 4
+        assert proc.last_skip_warning is not None
+
+        proc.process_next()
+        assert proc.current_offset == 5
+        assert proc.last_skip_warning is None
+
+    def test_warning_reset_on_new_skip(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(20):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(5)
+        w1 = proc.last_skip_warning
+        assert w1 is not None
+        assert w1.actual_offset == 5
+
+        proc.process_message_at(10)
+        w2 = proc.last_skip_warning
+        assert w2 is not None
+        assert w2.actual_offset == 10
+
+    def test_no_warning_after_process_all(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(7)
+        assert proc.last_skip_warning is not None
+
+        proc.process_all()
+        assert proc.current_offset == 9
+        assert proc.last_skip_warning is None
+
+
+class TestSkippedOffsetsDetail:
+    def test_warning_contains_skipped_offsets_list(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(5)
+        w = proc.last_skip_warning
+        assert w is not None
+        assert w.skipped_offsets == [0, 1, 2, 3, 4]
+        assert w.skipped_count == 5
+
+    def test_warning_skipped_offsets_from_nonzero_start(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_next()
+        proc.process_next()
+        assert proc.current_offset == 1
+
+        proc.process_message_at(6)
+        w = proc.last_skip_warning
+        assert w is not None
+        assert w.skipped_offsets == [2, 3, 4, 5]
+        assert w.skipped_count == 4
+
+    def test_warning_skipped_offsets_single_gap(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_next()
+        assert proc.current_offset == 0
+
+        proc.process_message_at(2)
+        w = proc.last_skip_warning
+        assert w is not None
+        assert w.skipped_offsets == [1]
+        assert w.skipped_count == 1
+
+    def test_warning_no_skipped_offsets_when_no_message_source_gap(self):
+        proc = make_processor(auto_commit_interval=100)
+        proc.publish_message("m0", 0)
+        proc.publish_message("m5", 5)
+
+        r = proc.process_message_at(0)
+        assert r.is_new is True
+        assert proc.last_skip_warning is None
+
+    def test_warning_message_contains_count(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(7)
+        w = proc.last_skip_warning
+        assert w is not None
+        assert "Skipped 7 offset(s)" in str(w)
+        assert "[0, 1, 2, 3, 4, 5, 6]" in str(w)
+
+    def test_warning_default_empty_skipped_offsets(self):
+        w = OffsetSkipWarning(expected_offset=0, actual_offset=3)
+        assert w.skipped_offsets == []
+        assert w.skipped_count == 0
 
 
 class TestUncommittedBatchReplayOverlap:
@@ -361,6 +501,83 @@ class TestOffsetContinuity:
         assert len(dups) == 3
         dup_offsets = [r.message.offset for r in dups]
         assert set(dup_offsets) == {3, 7, 9}
+
+
+class TestMixedBatchCheckpoint:
+    def test_mixed_batch_target_offset_reflects_insertion_order(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(7, handler=lambda m: "ofo-7")
+        proc.process_next(handler=lambda m: f"seq-{m.payload}")
+        proc.process_next(handler=lambda m: f"seq-{m.payload}")
+
+        assert proc.uncommitted_count == 3
+
+        cp = proc.commit_checkpoint()
+        assert cp.committed_offset == 1
+
+        assert proc.dedup_store.contains("m7")
+        assert proc.dedup_store.contains("m0")
+        assert proc.dedup_store.contains("m1")
+
+    def test_mixed_batch_recovery_covers_all_dedup(self):
+        clock = make_clock(start_time=0.0)
+        msg_src = make_message_source(clock=clock)
+        dedup = make_dedup_store(clock=clock)
+        cp_store = make_checkpoint_store(clock=clock)
+        proc = make_processor_with_components(
+            msg_src, dedup, cp_store, auto_commit_interval=100, clock=clock
+        )
+
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(7, handler=lambda m: "ofo-7")
+        for _ in range(3):
+            proc.process_next(handler=lambda m: f"seq-{m.payload}")
+        proc.commit_checkpoint()
+
+        proc.recover_from_checkpoint()
+        assert proc.committed_offset == 2
+
+        results = proc.process_all()
+        for r in results:
+            if r.message.offset == 7:
+                assert r.is_duplicate is True
+
+        unprocessed = [r for r in results if r.is_new and r.message.offset < 7]
+        assert len(unprocessed) > 0
+
+    def test_mixed_batch_dedup_intercepts_on_recovery(self):
+        clock = make_clock(start_time=0.0)
+        msg_src = make_message_source(clock=clock)
+        dedup = make_dedup_store(clock=clock)
+        cp_store = make_checkpoint_store(clock=clock)
+        proc = make_processor_with_components(
+            msg_src, dedup, cp_store, auto_commit_interval=100, clock=clock
+        )
+
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(9, handler=lambda m: "ofo-9")
+        proc.process_next()
+        proc.commit_checkpoint()
+
+        assert proc.committed_offset == 0
+
+        proc.recover_from_checkpoint()
+        results = proc.process_all()
+
+        r9 = [r for r in results if r.message.offset == 9]
+        assert len(r9) == 1
+        assert r9[0].is_duplicate is True
+        assert r9[0].previous_result == "ofo-9"
+
+        new_results = [r for r in results if r.is_new]
+        assert all(r.message.offset < 9 for r in new_results)
 
 
 class TestReplayDedupConsistency:

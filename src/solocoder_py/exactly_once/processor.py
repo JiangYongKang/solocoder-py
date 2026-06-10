@@ -6,7 +6,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .exceptions import (
     AtomicCommitInterruptedError,
-    CheckpointMonotonicityError,
     CheckpointNotFoundError,
     InvalidOffsetError,
     OffsetSkipWarning,
@@ -144,6 +143,8 @@ class ExactlyOnceProcessor:
                 ):
                     self._auto_checkpoint()
 
+                self._maybe_clear_skip_warning()
+
                 return result
             except Exception:
                 while len(self._uncommitted_records) > prev_uncommitted_len:
@@ -190,6 +191,13 @@ class ExactlyOnceProcessor:
             if rec.message_id == message_id:
                 return rec
         return None
+
+    def _maybe_clear_skip_warning(self) -> None:
+        warning = getattr(self, "_last_skip_warning", None)
+        if warning is None:
+            return
+        if self._current_offset >= warning.actual_offset:
+            self._last_skip_warning = None
 
     def _process_single(
         self,
@@ -431,17 +439,16 @@ class ExactlyOnceProcessor:
 
             expected_next = self._current_offset + 1
             if offset != expected_next:
-                warnings_emitted: List[OffsetSkipWarning] = []
-                for skipped in range(expected_next, offset):
-                    if self.message_source.contains_offset(skipped):
-                        w = OffsetSkipWarning(
-                            expected_offset=expected_next,
-                            actual_offset=offset,
-                        )
-                        warnings_emitted.append(w)
-                        break
-                if warnings_emitted:
-                    self._last_skip_warning = warnings_emitted[0]
+                skipped: List[int] = []
+                for skipped_off in range(expected_next, offset):
+                    if self.message_source.contains_offset(skipped_off):
+                        skipped.append(skipped_off)
+                if skipped:
+                    self._last_skip_warning = OffsetSkipWarning(
+                        expected_offset=expected_next,
+                        actual_offset=offset,
+                        skipped_offsets=skipped,
+                    )
 
             result_data: Any = None
             if handler is not None:

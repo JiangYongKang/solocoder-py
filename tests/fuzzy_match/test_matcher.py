@@ -567,3 +567,133 @@ class TestLengthPruningPerformance:
             matcher.match("a" * 100, threshold=3)
         elapsed = time.time() - start
         assert elapsed < 2.0
+
+
+class TestAdaptiveLengthPruning:
+    def test_sparse_length_large_threshold_performance(self):
+        candidates = ["a" * 3, "b" * 10, "c" * 20]
+        matcher = FuzzyMatcher(candidates)
+        start = time.time()
+        for _ in range(10000):
+            results = matcher.match("x" * 10, threshold=100)
+        elapsed = time.time() - start
+        assert elapsed < 2.0
+        assert len(results) == 3
+
+    def test_sparse_length_large_threshold_correctness(self):
+        candidates = ["aa", "bbbb", "cccccccccc"]
+        matcher = FuzzyMatcher(candidates)
+        results = matcher.match("aaa", threshold=100)
+        assert len(results) == 3
+        distances = [r.distance for r in results]
+        assert distances == sorted(distances)
+
+    def test_few_buckets_large_threshold_vs_many_buckets_small_threshold(self):
+        sparse = FuzzyMatcher(["a" * 5, "b" * 50, "c" * 500])
+        dense = FuzzyMatcher(["c" * i for i in range(1, 101)])
+
+        start_sparse = time.time()
+        for _ in range(5000):
+            sparse.match("xxx" * 10, threshold=200)
+        elapsed_sparse = time.time() - start_sparse
+
+        start_dense = time.time()
+        for _ in range(1000):
+            dense.match("c" * 50, threshold=5)
+        elapsed_dense = time.time() - start_dense
+
+        assert elapsed_sparse < 5.0
+        assert elapsed_dense < 5.0
+
+    def test_adaptive_uses_range_iteration_when_range_smaller(self):
+        class TrackingDict(dict):
+            items_call_count = 0
+            get_call_count = 0
+
+            def items(self):
+                TrackingDict.items_call_count += 1
+                return super().items()
+
+            def get(self, key, default=None):
+                TrackingDict.get_call_count += 1
+                return super().get(key, default)
+
+        original_init = FuzzyMatcher.__init__
+
+        def patched_init(self, candidates=None):
+            original_init(self, candidates)
+            tracking = TrackingDict()
+            for k, v in self._length_index.items():
+                tracking[k] = v
+            self._length_index = tracking
+
+        FuzzyMatcher.__init__ = patched_init
+        try:
+            candidates = ["c" * i for i in range(1, 101)]
+            TrackingDict.items_call_count = 0
+            TrackingDict.get_call_count = 0
+            matcher = FuzzyMatcher(candidates)
+            matcher.match("c" * 50, threshold=2)
+            assert TrackingDict.items_call_count == 0
+            assert TrackingDict.get_call_count >= 5
+        finally:
+            FuzzyMatcher.__init__ = original_init
+
+    def test_adaptive_uses_items_iteration_when_buckets_fewer(self):
+        class TrackingDict(dict):
+            items_call_count = 0
+            get_call_count = 0
+
+            def items(self):
+                TrackingDict.items_call_count += 1
+                return super().items()
+
+            def get(self, key, default=None):
+                TrackingDict.get_call_count += 1
+                return super().get(key, default)
+
+        original_init = FuzzyMatcher.__init__
+
+        def patched_init(self, candidates=None):
+            original_init(self, candidates)
+            tracking = TrackingDict()
+            for k, v in self._length_index.items():
+                tracking[k] = v
+            self._length_index = tracking
+
+        FuzzyMatcher.__init__ = patched_init
+        try:
+            TrackingDict.items_call_count = 0
+            TrackingDict.get_call_count = 0
+            matcher = FuzzyMatcher(["a", "bb", "ccc"])
+            matcher.match("a", threshold=100)
+            assert TrackingDict.items_call_count >= 1
+        finally:
+            FuzzyMatcher.__init__ = original_init
+
+    def test_both_strategies_produce_same_results(self):
+        candidates_sparse = ["a" * 1, "b" * 50, "c" * 100, "d" * 500]
+        candidates_dense = ["c" * i for i in range(1, 101)]
+        sparse_matcher = FuzzyMatcher(candidates_sparse)
+        dense_matcher = FuzzyMatcher(candidates_dense)
+
+        for threshold in [1, 10, 50, 200, 1000]:
+            sparse_results = sparse_matcher.match("x" * 10, threshold=threshold)
+            dense_results = dense_matcher.match("c" * 50, threshold=threshold)
+            for r in sparse_results:
+                assert abs(len(r.candidate) - 10) <= threshold
+            for r in dense_results:
+                assert abs(len(r.candidate) - 50) <= threshold
+
+    def test_threshold_zero_single_length(self):
+        matcher = FuzzyMatcher(["aa", "bb", "cc", "a" * 100])
+        results = matcher.match("zz", threshold=1000)
+        assert len(results) == 4
+
+    def test_adaptive_equality_corner_case(self):
+        matcher = FuzzyMatcher(["a" * i for i in range(1, 6)])
+        results1 = matcher.match("aaa", threshold=2)
+        results2 = matcher.match("aaa", threshold=5)
+        assert all(r.distance <= 2 for r in results1)
+        assert len(results1) <= len(results2)
+

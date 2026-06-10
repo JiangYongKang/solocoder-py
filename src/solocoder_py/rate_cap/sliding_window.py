@@ -182,41 +182,78 @@ class SlidingWindowCounter:
                 count = self._count_precise(current_time)
             return count + amount <= self._max_operations
 
-    def _rollback_last(self, amount: int = 1) -> None:
+    def _rollback_last(self, amount: int = 1, tag: Optional[str] = None) -> None:
         if amount <= 0:
             return
         with self._lock:
             if self._granularity > 0:
                 remaining = amount
-                while remaining > 0 and self._bucket_keys:
-                    last_key = self._bucket_keys[-1]
-                    bucket_total = self._bucket_totals.get(last_key, 0)
-                    if bucket_total <= remaining:
-                        remaining -= bucket_total
-                        self._bucket_totals.pop(last_key, None)
-                        self._bucket_by_tag.pop(last_key, None)
-                        self._bucket_keys.pop()
-                    else:
-                        self._bucket_totals[last_key] = bucket_total - remaining
-                        per_tag = self._bucket_by_tag[last_key]
-                        to_remove = remaining
-                        tags_in_order = list(reversed(list(per_tag.keys())))
-                        for t in tags_in_order:
-                            if to_remove <= 0:
-                                break
-                            tag_count = per_tag.get(t, 0)
-                            if tag_count <= to_remove:
-                                to_remove -= tag_count
-                                per_tag.pop(t, None)
-                            else:
-                                per_tag[t] = tag_count - to_remove
-                                to_remove = 0
-                        remaining = 0
+                if tag is not None:
+                    for i in range(len(self._bucket_keys) - 1, -1, -1):
+                        if remaining <= 0:
+                            break
+                        bucket_key = self._bucket_keys[i]
+                        per_tag = self._bucket_by_tag.get(bucket_key)
+                        if per_tag is None:
+                            continue
+                        tag_count = per_tag.get(tag, 0)
+                        if tag_count == 0:
+                            continue
+                        to_remove = min(tag_count, remaining)
+                        per_tag[tag] = tag_count - to_remove
+                        if per_tag[tag] == 0:
+                            per_tag.pop(tag, None)
+                        self._bucket_totals[bucket_key] -= to_remove
+                        remaining -= to_remove
+                        if self._bucket_totals[bucket_key] == 0:
+                            self._bucket_totals.pop(bucket_key, None)
+                            self._bucket_by_tag.pop(bucket_key, None)
+                            del self._bucket_keys[i]
+                else:
+                    while remaining > 0 and self._bucket_keys:
+                        last_key = self._bucket_keys[-1]
+                        bucket_total = self._bucket_totals.get(last_key, 0)
+                        if bucket_total <= remaining:
+                            remaining -= bucket_total
+                            self._bucket_totals.pop(last_key, None)
+                            self._bucket_by_tag.pop(last_key, None)
+                            self._bucket_keys.pop()
+                        else:
+                            self._bucket_totals[last_key] = bucket_total - remaining
+                            per_tag = self._bucket_by_tag[last_key]
+                            to_remove = remaining
+                            tags_in_order = list(reversed(list(per_tag.keys())))
+                            for t in tags_in_order:
+                                if to_remove <= 0:
+                                    break
+                                tag_count = per_tag.get(t, 0)
+                                if tag_count <= to_remove:
+                                    to_remove -= tag_count
+                                    per_tag.pop(t, None)
+                                else:
+                                    per_tag[t] = tag_count - to_remove
+                                    to_remove = 0
+                            remaining = 0
             else:
-                actual = min(amount, len(self._timestamps))
-                for _ in range(actual):
-                    self._timestamps.pop()
-                    self._tags.pop()
+                if tag is not None:
+                    new_ts: Deque[float] = deque()
+                    new_tags: Deque[Optional[str]] = deque()
+                    removed = 0
+                    for i in range(len(self._timestamps) - 1, -1, -1):
+                        ts = self._timestamps[i]
+                        t = self._tags[i]
+                        if removed < amount and t == tag:
+                            removed += 1
+                        else:
+                            new_ts.appendleft(ts)
+                            new_tags.appendleft(t)
+                    self._timestamps = new_ts
+                    self._tags = new_tags
+                else:
+                    actual = min(amount, len(self._timestamps))
+                    for _ in range(actual):
+                        self._timestamps.pop()
+                        self._tags.pop()
 
     def remove_by_tag(
         self,

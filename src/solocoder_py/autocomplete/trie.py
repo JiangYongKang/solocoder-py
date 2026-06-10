@@ -97,7 +97,7 @@ class TrieAutocomplete:
             Candidate(word=word, weight=weight)
             for word, weight in self._word_weights.items()
         ]
-        all_candidates.sort()
+        all_candidates.sort(key=lambda c: (-c.weight, c.word))
         if top_n is not None and top_n > 0:
             return all_candidates[:top_n]
         return all_candidates

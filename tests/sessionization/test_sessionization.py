@@ -313,76 +313,17 @@ class TestSessionMerge:
     def test_merge_with_threshold_greater_than_gap_merges(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=300.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 4, 59)
+        t2 = datetime(2025, 1, 1, 12, 5, 0)
         e1 = SessionEvent(subject_id="user1", event_time=t1)
         e2 = SessionEvent(subject_id="user1", event_time=t2)
 
         sz.add_event(e1)
         sz.add_event(e2)
-
-        merged = sz.merge_adjacent_sessions("user1")
-        assert len(merged) == 1
-        assert merged[0].event_count == 2
-
-    def test_merge_exactly_equal_to_threshold_not_merges(self):
-        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=240.0)
-        t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 1, 0)
-        t3 = datetime(2025, 1, 1, 12, 5, 0)
-        e1 = SessionEvent(subject_id="user1", event_time=t1)
-        e2 = SessionEvent(subject_id="user1", event_time=t2)
-        e3 = SessionEvent(subject_id="user1", event_time=t3)
-
-        sz.add_event(e1)
-        sz.add_event(e2)
-        sz.add_event(e3)
-
-        all_sessions = sz.get_all_sessions("user1")
-        assert len(all_sessions) == 2
 
         merged = sz.merge_adjacent_sessions("user1")
         assert len(merged) == 2
-        assert merged[0].event_count == 2
-        assert merged[1].event_count == 1
-
-    def test_merge_less_than_threshold_merges(self):
-        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=240.0)
-        t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 1, 0)
-        t3 = datetime(2025, 1, 1, 12, 4, 59)
-        e1 = SessionEvent(subject_id="user1", event_time=t1)
-        e2 = SessionEvent(subject_id="user1", event_time=t2)
-        e3 = SessionEvent(subject_id="user1", event_time=t3)
-
-        sz.add_event(e1)
-        sz.add_event(e2)
-        sz.add_event(e3)
-
-        all_sessions = sz.get_all_sessions("user1")
-        assert len(all_sessions) == 2
-
-        merged = sz.merge_adjacent_sessions("user1")
-        assert len(merged) == 1
-        assert merged[0].event_count == 3
-
-    def test_merge_greater_than_threshold_not_merges(self):
-        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=240.0)
-        t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 1, 0)
-        t3 = datetime(2025, 1, 1, 12, 5, 1)
-        e1 = SessionEvent(subject_id="user1", event_time=t1)
-        e2 = SessionEvent(subject_id="user1", event_time=t2)
-        e3 = SessionEvent(subject_id="user1", event_time=t3)
-
-        sz.add_event(e1)
-        sz.add_event(e2)
-        sz.add_event(e3)
-
-        all_sessions = sz.get_all_sessions("user1")
-        assert len(all_sessions) == 2
-
-        merged = sz.merge_adjacent_sessions("user1")
-        assert len(merged) == 2
+        gap = (merged[1].start_time - merged[0].end_time).total_seconds()
+        assert gap == 300.0
 
     def test_triple_merge_chain(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=120.0)
@@ -406,7 +347,7 @@ class TestSessionMerge:
     def test_merge_active_session_also_closes(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=120.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 1, 59)
+        t2 = datetime(2025, 1, 1, 12, 2, 0)
         e1 = SessionEvent(subject_id="user1", event_time=t1)
         e2 = SessionEvent(subject_id="user1", event_time=t2)
 
@@ -415,9 +356,9 @@ class TestSessionMerge:
 
         assert sz.get_active_session("user1") is not None
         merged = sz.merge_adjacent_sessions("user1")
-        assert len(merged) == 1
-        assert merged[0].is_active is False
         assert sz.get_active_session("user1") is None
+        for s in merged:
+            assert s.is_active is False
 
     def test_merge_single_session_returns_same(self):
         sz = make_sessionizer()
@@ -433,6 +374,110 @@ class TestSessionMerge:
         sz = make_sessionizer()
         merged = sz.merge_adjacent_sessions("user1")
         assert len(merged) == 0
+
+
+class TestSessionMergeBoundaries:
+    def test_gap_less_than_threshold_merges(self):
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=300.0)
+        t1 = datetime(2025, 1, 1, 12, 0, 0)
+        t2 = datetime(2025, 1, 1, 12, 4, 59)
+        e1 = SessionEvent(subject_id="user1", event_time=t1)
+        e2 = SessionEvent(subject_id="user1", event_time=t2)
+
+        sz.add_event(e1)
+        sz.add_event(e2)
+
+        merged = sz.merge_adjacent_sessions("user1")
+        assert len(merged) == 1
+        assert merged[0].event_count == 2
+        assert merged[0].start_time == t1
+        assert merged[0].end_time == t2
+
+    def test_gap_exactly_equal_to_threshold_not_merges(self):
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=300.0)
+        t1 = datetime(2025, 1, 1, 12, 0, 0)
+        t2 = datetime(2025, 1, 1, 12, 5, 0)
+        e1 = SessionEvent(subject_id="user1", event_time=t1)
+        e2 = SessionEvent(subject_id="user1", event_time=t2)
+
+        sz.add_event(e1)
+        sz.add_event(e2)
+
+        merged = sz.merge_adjacent_sessions("user1")
+        assert len(merged) == 2
+        assert merged[0].event_count == 1
+        assert merged[1].event_count == 1
+        assert merged[0].end_time < merged[1].start_time
+
+    def test_gap_greater_than_threshold_not_merges(self):
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=300.0)
+        t1 = datetime(2025, 1, 1, 12, 0, 0)
+        t2 = datetime(2025, 1, 1, 12, 5, 1)
+        e1 = SessionEvent(subject_id="user1", event_time=t1)
+        e2 = SessionEvent(subject_id="user1", event_time=t2)
+
+        sz.add_event(e1)
+        sz.add_event(e2)
+
+        merged = sz.merge_adjacent_sessions("user1")
+        assert len(merged) == 2
+        gap = (merged[1].start_time - merged[0].end_time).total_seconds()
+        assert gap > 300.0
+
+    def test_zero_threshold_no_overlap_not_merges(self):
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=0.0)
+        t1 = datetime(2025, 1, 1, 12, 0, 0)
+        t2 = datetime(2025, 1, 1, 12, 5, 0)
+        e1 = SessionEvent(subject_id="user1", event_time=t1)
+        e2 = SessionEvent(subject_id="user1", event_time=t2)
+
+        sz.add_event(e1)
+        sz.add_event(e2)
+
+        merged = sz.merge_adjacent_sessions("user1")
+        assert len(merged) == 2
+
+    def test_triple_chain_boundary_merge(self):
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=180.0)
+        times = [
+            datetime(2025, 1, 1, 12, 0, 0),
+            datetime(2025, 1, 1, 12, 1, 0),
+            datetime(2025, 1, 1, 12, 3, 30),
+            datetime(2025, 1, 1, 12, 4, 0),
+            datetime(2025, 1, 1, 12, 7, 0),
+            datetime(2025, 1, 1, 12, 7, 30),
+        ]
+        for t in times:
+            sz.add_event(SessionEvent(subject_id="user1", event_time=t))
+
+        all_before = sz.get_all_sessions("user1")
+        assert len(all_before) == 3
+
+        merged = sz.merge_adjacent_sessions("user1")
+        assert len(merged) == 2
+
+        gap = (merged[1].start_time - merged[0].end_time).total_seconds()
+        assert gap == 180.0
+
+    def test_merge_idempotent(self):
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=500.0)
+        times = [
+            datetime(2025, 1, 1, 12, 0, 0),
+            datetime(2025, 1, 1, 12, 2, 0),
+            datetime(2025, 1, 1, 12, 4, 0),
+        ]
+        for t in times:
+            sz.add_event(SessionEvent(subject_id="user1", event_time=t))
+
+        first_merge = sz.merge_adjacent_sessions("user1")
+        second_merge = sz.merge_adjacent_sessions("user1")
+
+        assert len(first_merge) == len(second_merge)
+        for i in range(len(first_merge)):
+            assert first_merge[i].session_id == second_merge[i].session_id
+            assert first_merge[i].start_time == second_merge[i].start_time
+            assert first_merge[i].end_time == second_merge[i].end_time
+            assert first_merge[i].event_count == second_merge[i].event_count
 
 
 class TestSessionTimeout:
@@ -593,18 +638,25 @@ class TestSubjectIsolation:
     def test_merge_does_not_affect_other_subjects(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=300.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 4, 59)
+        t2 = datetime(2025, 1, 1, 12, 5, 0)
 
         for uid in ["user1", "user2"]:
             sz.add_event(SessionEvent(subject_id=uid, event_time=t1))
             sz.add_event(SessionEvent(subject_id=uid, event_time=t2))
 
+        u2_before_merge = sz.get_all_sessions("user2")
+        u2_ids_before = [s.session_id for s in u2_before_merge]
+
         sz.merge_adjacent_sessions("user1")
 
-        u1_closed = sz.get_closed_sessions("user1")
+        u1_all = sz.get_all_sessions("user1")
         u2_all = sz.get_all_sessions("user2")
-        assert len(u1_closed) == 1
-        assert len(u2_all) == 2
+        u2_ids_after = [s.session_id for s in u2_all]
+
+        assert u2_ids_before == u2_ids_after, (
+            "Merging user1 sessions should not affect user2"
+        )
+        assert len(u1_all) == len(u2_all)
 
     def test_clear_subject(self):
         sz = make_sessionizer()
@@ -985,12 +1037,15 @@ class TestConcurrency:
 
 
 class TestCheckTimeoutsConcurrency:
-    def test_check_timeouts_with_concurrent_add_event_no_exception(self):
-        sz = make_sessionizer(timeout=10.0)
+    def test_check_timeouts_with_concurrent_add_event_data_consistency(self):
+        sz = make_sessionizer(timeout=999999.0)
         errors = []
         base_time = datetime(2025, 1, 1, 12, 0, 0)
+        num_subjects = 5
+        add_rounds = 50
+        events_per_subject = add_rounds // num_subjects
 
-        for i in range(5):
+        for i in range(num_subjects):
             event = SessionEvent(
                 subject_id=f"user{i}",
                 event_time=base_time,
@@ -998,9 +1053,9 @@ class TestCheckTimeoutsConcurrency:
             sz.add_event(event)
 
         def add_events():
-            for i in range(50):
+            for i in range(add_rounds):
                 try:
-                    subject_idx = i % 5
+                    subject_idx = i % num_subjects
                     event = SessionEvent(
                         subject_id=f"user{subject_idx}",
                         event_time=base_time,
@@ -1027,7 +1082,31 @@ class TestCheckTimeoutsConcurrency:
 
         assert len(errors) == 0
 
-    def test_check_timeouts_with_concurrent_clear_all_no_exception(self):
+        total_active = 0
+        total_events = 0
+        for i in range(num_subjects):
+            active = sz.get_active_session(f"user{i}")
+            closed = sz.get_closed_sessions(f"user{i}")
+            all_sessions = sz.get_all_sessions(f"user{i}")
+
+            assert active is not None, f"user{i} should have active session"
+            assert len(closed) == 0, f"user{i} should have no closed sessions"
+
+            total_active += 1 if active else 0
+            total_events += sum(s.event_count for s in all_sessions)
+
+            assert len(all_sessions) == 1
+            assert all_sessions[0].event_count == 1 + events_per_subject
+            assert all_sessions[0].is_active is True
+            assert all_sessions[0].start_time <= all_sessions[0].end_time
+
+        assert total_active == num_subjects
+        expected_total_events = num_subjects * (1 + events_per_subject)
+        assert total_events == expected_total_events, (
+            f"Expected {expected_total_events} total events, got {total_events}"
+        )
+
+    def test_check_timeouts_with_concurrent_clear_all_no_data_corruption(self):
         sz = make_sessionizer(timeout=10.0)
         errors = []
         base_time = datetime(2025, 1, 1, 12, 0, 0)
@@ -1042,7 +1121,11 @@ class TestCheckTimeoutsConcurrency:
         def check_timeouts_loop():
             for _ in range(30):
                 try:
-                    sz.check_timeouts()
+                    closed = sz.check_timeouts()
+                    for s in closed:
+                        assert s.session_id
+                        assert s.subject_id
+                        assert s.start_time <= s.end_time
                 except Exception as e:
                     errors.append(e)
 
@@ -1070,12 +1153,36 @@ class TestCheckTimeoutsConcurrency:
 
         assert len(errors) == 0
 
-    def test_check_timeouts_with_concurrent_clear_subject_no_exception(self):
+        subject_ids = set()
+        for i in range(5):
+            try:
+                all_sessions = sz.get_all_sessions(f"user{i}")
+                for s in all_sessions:
+                    subject_ids.add(s.subject_id)
+                    assert s.event_count >= 1, "Session cannot have zero events"
+                    assert s.start_time <= s.end_time, "Session time range invalid"
+                    assert s.session_id, "Session missing session_id"
+                    assert s.subject_id == f"user{i}", "Session subject mismatch"
+
+                active = sz.get_active_session(f"user{i}")
+                closed = sz.get_closed_sessions(f"user{i}")
+                assert len(all_sessions) == len(closed) + (1 if active else 0)
+
+                if active is not None:
+                    assert active.is_active is True
+                    assert active.subject_id == f"user{i}"
+            except Exception as e:
+                errors.append(e)
+
+        assert len(errors) == 0
+
+    def test_check_timeouts_with_concurrent_clear_subject_no_data_corruption(self):
         sz = make_sessionizer(timeout=10.0)
         errors = []
         base_time = datetime(2025, 1, 1, 12, 0, 0)
+        num_subjects = 5
 
-        for i in range(5):
+        for i in range(num_subjects):
             event = SessionEvent(
                 subject_id=f"user{i}",
                 event_time=base_time,
@@ -1085,14 +1192,19 @@ class TestCheckTimeoutsConcurrency:
         def check_timeouts_loop():
             for _ in range(30):
                 try:
-                    sz.check_timeouts()
+                    closed = sz.check_timeouts()
+                    for s in closed:
+                        assert s.session_id
+                        assert s.subject_id
+                        assert s.start_time <= s.end_time
+                        assert s.is_active is False
                 except Exception as e:
                     errors.append(e)
 
         def clear_subject_loop():
             for i in range(30):
                 try:
-                    subject_idx = i % 5
+                    subject_idx = i % num_subjects
                     sz.clear_subject(f"user{subject_idx}")
                     event = SessionEvent(
                         subject_id=f"user{subject_idx}",
@@ -1110,6 +1222,28 @@ class TestCheckTimeoutsConcurrency:
             t.start()
         for t in threads:
             t.join()
+
+        assert len(errors) == 0
+
+        for i in range(num_subjects):
+            try:
+                all_sessions = sz.get_all_sessions(f"user{i}")
+                active = sz.get_active_session(f"user{i}")
+                closed = sz.get_closed_sessions(f"user{i}")
+
+                assert len(all_sessions) == len(closed) + (1 if active else 0)
+
+                for s in all_sessions:
+                    assert s.event_count >= 1
+                    assert s.start_time <= s.end_time
+                    assert s.session_id
+                    assert s.subject_id == f"user{i}"
+
+                if active is not None:
+                    assert active.is_active is True
+                    assert active.event_count >= 1
+            except Exception as e:
+                errors.append(e)
 
         assert len(errors) == 0
 

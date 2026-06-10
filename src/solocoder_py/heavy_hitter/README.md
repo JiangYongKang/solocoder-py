@@ -22,9 +22,9 @@ Top-K 重击者检测器的核心类，维护高频项的近似计数。
 | 方法 | 说明 |
 |------|------|
 | `record(item, count=1)` | 记录一个项的出现，可指定出现次数 |
-| `estimate_count(item)` | 返回指定项的近似频次估计（下界），实际频次 >= 返回值 |
-| `lower_bound(item)` | 返回指定项频次的下界估计，同 estimate_count |
-| `upper_bound(item)` | 返回指定项频次的上界估计，返回值 >= 实际频次 |
+| `estimate_count(item)` | 返回指定项频次的下界估计，保证 `实际频次 >= 返回值`。对已跟踪项返回精确累加值 |
+| `lower_bound(item)` | 同 `estimate_count`，返回下界估计 |
+| `upper_bound(item)` | 返回指定项频次的上界估计，基于 Count-Min Sketch，保证 `返回值 >= 实际频次` |
 | `contains(item)` | 判断项是否当前被跟踪（在有限内存中） |
 | `get_top_k(k)` | 返回前 K 个高频项的列表，按计数降序 |
 | `get_all_tracked()` | 返回所有当前被跟踪的项及其计数 |
@@ -93,17 +93,17 @@ Count-Min Sketch 概率数据结构实现，用于提供近似频次的上下界
 
 1. 首先更新 Count-Min Sketch，将项加入全局统计
 2. 如果该项已在有限字典中，直接累加其计数（精确计数，作为可靠下界）
-3. 如果字典未满，将该项加入字典，初始计数为 `max(本次出现次数, CMS 下界估计)`
+3. 如果字典未满，将该项加入字典，初始计数为 `count`（本次出现次数，即确定性下界）
 4. 如果字典已满：
    - 找到字典中计数最低的项（min_item, min_count）
-   - 计算新项的竞争值：`entry_count = max(本次出现次数, CMS 下界估计)`
-   - 如果 `entry_count > min_count`，淘汰 min_item，将新项加入字典
+   - 新项的竞争值为 `count`（本次出现次数）
+   - 如果 `count > min_count`，淘汰 min_item，将新项加入字典
    - 否则，忽略该项（不加入字典，但 Count-Min Sketch 已更新）
 
 **重要特性**：
 - 淘汰后，被淘汰项的精确计数信息丢失，但其信息仍保留在 Count-Min Sketch 中，可通过 `estimate_count` 查询近似下界
-- 新项竞争值与初始化值来源统一：均使用 `max(本次出现次数, CMS 下界估计)`，保证策略一致
-- 只有当新项的下界估计严格大于当前最低频项时才会发生替换，保证高频项不会轻易被淘汰
+- 新项竞争值与初始化值来源统一：均使用 `count`（本次出现次数），避免 CMS 哈希碰撞高估导致误替换
+- 只有当新项的真实出现次数严格大于当前最低频项时才会发生替换，保证高频项不会轻易被淘汰
 - `estimate_count` 对于在字典中的项返回精确累加值（真正的下界），不在字典中返回 CMS 下界估计
 
 ## 近似查询的误差边界
@@ -130,6 +130,22 @@ P(f(x) >= lower_bound(x)) >= delta   # 下界估计的置信度
 - `N` 是数据流的总长度（`total_count`）
 - `epsilon` 是误差因子（默认 0.001）
 - `delta` 是置信度（默认 0.99）
+
+### HeavyHitterDetector 的上下界语义
+
+`HeavyHitterDetector` 结合了精确计数（store）和概率估计（CMS）两种数据来源，
+因此 `lower_bound` / `estimate_count` 与 `upper_bound` 的来源不同：
+
+| 方法 | 数据来源 | 已跟踪项（item in store） | 未跟踪项 | 数学性质 |
+|------|---------|-------------------------|---------|---------|
+| `lower_bound(item)` / `estimate_count(item)` | store 精确值（已跟踪）或 CMS 下界估计（未跟踪） | `_store[item]`（精确累加值，恒为下界） | `_cms.lower_bound(item)` | 保证 `true_count >= 返回值` |
+| `upper_bound(item)` | CMS 上界估计 | `_cms.upper_bound(item)` | `_cms.upper_bound(item)` | 保证 `返回值 >= true_count` |
+
+**设计说明**：
+- 对已跟踪项，`lower_bound` 返回 `_store` 中精确累加的值（恒等于下界，且是更紧的下界），因为项在字典中的每一次出现都被精确记录了
+- 对未跟踪项，`lower_bound` 回退到 CMS 的保守下界 `max(0, estimate - epsilon*N)`
+- `upper_bound` 始终基于 CMS 原始估计（因为 store 中的精确值只是下界，不能作为上界）
+- 因此对于已跟踪项，`lower_bound == estimate_count == _store[item]`，且 `lower_bound <= true_count <= upper_bound`
 
 ### 尺寸计算
 

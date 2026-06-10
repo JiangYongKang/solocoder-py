@@ -99,9 +99,14 @@ class RateCapManager:
         self._subject_counters[key] = counter
         return counter
 
-    def _rollback_global(self, acquired_windows: List[str], amount: int) -> None:
+    def _rollback_global(
+        self,
+        subject_id: str | None,
+        acquired_windows: List[str],
+        amount: int,
+    ) -> None:
         for wname in acquired_windows:
-            self._global_counters[wname]._rollback_last(amount)
+            self._global_counters[wname]._rollback_last(amount, tag=subject_id)
 
     def _rollback_subject(
         self,
@@ -113,7 +118,7 @@ class RateCapManager:
             key = (subject_id, wname)
             counter = self._subject_counters.get(key)
             if counter is not None:
-                counter._rollback_last(amount)
+                counter._rollback_last(amount, tag=subject_id)
 
     def check_operation(
         self, subject_id: str | None, amount: int = 1
@@ -162,14 +167,14 @@ class RateCapManager:
                     self._rollback_subject(
                         subject_id, subject_acquired, amount
                     )
-                self._rollback_global(global_acquired, amount)
+                self._rollback_global(subject_id, global_acquired, amount)
                 raise
             except Exception:
                 if subject_id is not None:
                     self._rollback_subject(
                         subject_id, subject_acquired, amount
                     )
-                self._rollback_global(global_acquired, amount)
+                self._rollback_global(subject_id, global_acquired, amount)
                 raise
 
     def is_allowed(self, subject_id: str | None, amount: int = 1) -> bool:

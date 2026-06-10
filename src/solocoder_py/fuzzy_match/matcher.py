@@ -157,10 +157,19 @@ class FuzzyMatcher:
         min_len = max(0, query_len - threshold)
         max_len = query_len + threshold
 
+        range_size = max_len - min_len + 1
+        bucket_count = len(self._length_index)
+
         result: list[str] = []
-        for length in range(min_len, max_len + 1):
-            bucket = self._length_index.get(length)
-            if bucket is not None:
-                result.extend(bucket)
+
+        if range_size <= bucket_count:
+            for length in range(min_len, max_len + 1):
+                bucket = self._length_index.get(length)
+                if bucket is not None:
+                    result.extend(bucket)
+        else:
+            for length, bucket in self._length_index.items():
+                if min_len <= length <= max_len:
+                    result.extend(bucket)
 
         return result

@@ -530,3 +530,138 @@ class TestSlidingWindowClear:
         counter.clear()
         assert counter.current_count() == 0
 
+
+class TestSlidingWindowRollbackWithTag:
+    def test_granular_same_bucket_rollback_tag_does_not_affect_others(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(5, tag="A")
+        counter.try_acquire(3, tag="B")
+        counter.try_acquire(4, tag="A")
+        assert counter.count_by_tag("A") == 9
+        assert counter.count_by_tag("B") == 3
+        assert counter.current_count() == 12
+        counter._rollback_last(4, tag="A")
+        assert counter.count_by_tag("A") == 5
+        assert counter.count_by_tag("B") == 3
+        assert counter.current_count() == 8
+
+    def test_granular_rollback_tag_partial_in_bucket(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(10, tag="A")
+        counter.try_acquire(5, tag="B")
+        counter._rollback_last(3, tag="A")
+        assert counter.count_by_tag("A") == 7
+        assert counter.count_by_tag("B") == 5
+        assert counter.current_count() == 12
+
+    def test_granular_rollback_tag_across_multiple_buckets(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(2, tag="A")
+        clock.advance(12)
+        counter.try_acquire(3, tag="A")
+        counter.try_acquire(4, tag="B")
+        clock.advance(12)
+        counter.try_acquire(5, tag="A")
+        counter.try_acquire(1, tag="B")
+        assert counter.count_by_tag("A") == 10
+        assert counter.count_by_tag("B") == 5
+        counter._rollback_last(7, tag="A")
+        assert counter.count_by_tag("A") == 3
+        assert counter.count_by_tag("B") == 5
+        assert counter.current_count() == 8
+
+    def test_granular_rollback_tag_entire_bucket_removes_it(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(5, tag="B")
+        clock.advance(12)
+        counter.try_acquire(3, tag="A")
+        counter._rollback_last(3, tag="A")
+        assert counter.count_by_tag("A") == 0
+        assert counter.count_by_tag("B") == 5
+        assert counter.current_count() == 5
+
+    def test_precise_rollback_tag_does_not_affect_others(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        for _ in range(5):
+            counter.try_acquire(tag="A")
+        for _ in range(3):
+            counter.try_acquire(tag="B")
+        for _ in range(4):
+            counter.try_acquire(tag="A")
+        assert counter.count_by_tag("A") == 9
+        assert counter.count_by_tag("B") == 3
+        counter._rollback_last(4, tag="A")
+        assert counter.count_by_tag("A") == 5
+        assert counter.count_by_tag("B") == 3
+        assert counter.current_count() == 8
+
+    def test_precise_rollback_tag_interleaved(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        counter.try_acquire(tag="A")
+        counter.try_acquire(tag="B")
+        counter.try_acquire(tag="A")
+        counter.try_acquire(tag="B")
+        counter.try_acquire(tag="A")
+        counter.try_acquire(tag="B")
+        assert counter.count_by_tag("A") == 3
+        assert counter.count_by_tag("B") == 3
+        counter._rollback_last(2, tag="A")
+        assert counter.count_by_tag("A") == 1
+        assert counter.count_by_tag("B") == 3
+        assert counter.current_count() == 4
+
+    def test_rollback_tag_nonexistent_no_change(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        counter.try_acquire(5, tag="A")
+        counter._rollback_last(10, tag="GHOST")
+        assert counter.current_count() == 5
+        assert counter.count_by_tag("A") == 5
+
+    def test_rollback_without_tag_backward_compatible(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=1,
+            clock=clock,
+        )
+        counter.try_acquire(3)
+        counter.try_acquire(2)
+        assert counter.current_count() == 5
+        counter._rollback_last(4)
+        assert counter.current_count() == 1
+
+

@@ -42,22 +42,22 @@ class AtomicCommitInterruptedError(ExactlyOnceError):
 
 
 class OffsetSkipWarning(ExactlyOnceError):
-    def __init__(self, expected_offset: int, actual_offset: int) -> None:
+    def __init__(
+        self,
+        expected_offset: int,
+        actual_offset: int,
+        skipped_offsets: list[int] | None = None,
+    ) -> None:
         self.expected_offset = expected_offset
         self.actual_offset = actual_offset
+        self.skipped_offsets: list[int] = skipped_offsets if skipped_offsets is not None else []
         super().__init__(
             f"Offset skip detected: expected next offset {expected_offset}, "
             f"but processed offset {actual_offset}. "
-            f"Messages in between are skipped without processing."
+            f"Skipped {len(self.skipped_offsets)} offset(s): "
+            f"{self.skipped_offsets}"
         )
 
-
-class CheckpointMonotonicityError(ExactlyOnceError):
-    def __init__(self, new_offset: int, existing_offset: int) -> None:
-        self.new_offset = new_offset
-        self.existing_offset = existing_offset
-        super().__init__(
-            f"Checkpoint monotonicity violated: attempted to commit "
-            f"offset {new_offset} but latest committed offset is "
-            f"{existing_offset}"
-        )
+    @property
+    def skipped_count(self) -> int:
+        return len(self.skipped_offsets)

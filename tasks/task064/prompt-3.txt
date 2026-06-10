@@ -1,0 +1,9 @@
+新增的测试用例存在验证不足的问题需要改进：
+
+1. test_insert_many_each_has_independent_timestamp 测试没有真正验证 insert_many 每条数据独立获取时间戳这一核心修复。AdvancingMockClock 内部维护了 _call_count 计数器但测试未断言其值，仅断言了 insert_count == 10。如果代码被回退到共享时间戳的旧行为，这个测试仍会通过。需要补充对 AdvancingMockClock._call_count 的断言，或通过窗口衰减查询分位数来验证不同数据确实有独立时间戳。
+
+2. test_insert_each_has_independent_timestamp 测试的设计意图与测试名脱节。该测试在单线程顺序执行的固定时钟场景下验证窗口衰减，即使使用修复前的时间戳获取逻辑也会通过，无法区分修复前后的行为差异。需要将该测试修改为在 insert_many 的 AdvancingMockClock 场景下验证各条数据的实际时间戳差异，使其真正覆盖时间戳获取时机的修复。
+
+3. 更新 README.md 说明时间戳获取时机保证和窗口衰减的计数语义。
+
+4. 重新运行 poetry run pytest tests/quantile/ -v，确保所有测试通过。

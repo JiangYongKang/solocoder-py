@@ -1,0 +1,9 @@
+你的修复中剪枝路径测试覆盖的补充和完善很有价值，但 _prune_by_length 的优化策略存在适用边界问题需要改进：
+
+1. _prune_by_length 方法被改为遍历 `range(min_len, max_len + 1)` 逐长度用 dict.get() 查找，固定遍历 `2 * threshold + 1` 次。当候选集长度种类数很少而阈值很大时（如仅 3 种长度但 threshold=100），新实现做 201 次无意义的 dict.get(None) 调用，而旧实现仅需 3 次迭代。需要在方法内部实现自适应策略：比较 `threshold * 2 + 1` 与 `len(self._length_index)` 的大小，动态选择更优的遍历方式，避免在稀疏长度分布场景下退化。
+
+2. 为该模块补充覆盖稀疏长度分布+大阈值场景的单元测试，验证自适应策略在两种场景下均能达到最优遍历次数。
+
+3. 更新 README.md 说明剪枝策略的自适应选择逻辑。
+
+4. 重新运行 poetry run pytest tests/fuzzy_match/ -v，确保所有测试通过。

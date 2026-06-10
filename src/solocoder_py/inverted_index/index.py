@@ -143,9 +143,9 @@ class InvertedIndex:
     def _tokenize(text: str) -> list[str]:
         return [t.lower() for t in re.findall(r"\w+", text)]
 
-    @staticmethod
-    def _normalize_term(term: str) -> str:
-        tokens = [t.lower() for t in re.findall(r"\w+", term)]
+    @classmethod
+    def _normalize_term(cls, term: str) -> str:
+        tokens = cls._tokenize(term)
         return tokens[0] if tokens else ""
 
     @staticmethod

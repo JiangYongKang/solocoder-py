@@ -336,32 +336,7 @@ class TestInsertManyAtomicity:
 
 
 class TestTimestampPerInsert:
-    def test_insert_each_has_independent_timestamp(self, mock_clock):
-        est = QuantileEstimator(delta=100.0, clock=mock_clock)
-
-        est.insert(10.0)
-        mock_clock.advance(5.0)
-        est.insert(20.0)
-        mock_clock.advance(5.0)
-        est.insert(30.0)
-
-        config = WindowConfig(window_seconds=7.0)
-        est_win = QuantileEstimator(delta=100.0, window_config=config, clock=mock_clock)
-        est_win.insert(10.0)
-        mock_clock.advance(5.0)
-        est_win.insert(20.0)
-        mock_clock.advance(5.0)
-        est_win.insert(30.0)
-
-        p50 = est_win.p50()
-        assert 15 <= p50 <= 35
-
-    def test_insert_many_each_has_independent_timestamp(self, mock_clock):
-        config = WindowConfig(window_seconds=8.0)
-        est = QuantileEstimator(delta=100.0, window_config=config, clock=mock_clock)
-
-        mock_clock.set(100.0)
-
+    def test_insert_each_has_independent_timestamp(self):
         class AdvancingMockClock(MockClock):
             def __init__(self, start, step):
                 super().__init__(start)
@@ -369,17 +344,62 @@ class TestTimestampPerInsert:
                 self._call_count = 0
 
             def now(self):
-                t = super().now() + self._call_count * self._step
+                t = self._current_time + self._call_count * self._step
                 self._call_count += 1
                 return t
 
-        clock = AdvancingMockClock(100.0, 2.0)
-        est2 = QuantileEstimator(delta=100.0, window_config=config, clock=clock)
+        clock = AdvancingMockClock(100.0, 10.0)
+        config = WindowConfig(window_seconds=50.0)
+        est = QuantileEstimator(delta=100.0, window_config=config, clock=clock)
 
-        values = [float(i) for i in range(10)]
-        est2.insert_many(values)
+        for _ in range(20):
+            est.insert(10.0)
 
-        assert est2.insert_count == 10
+        assert clock._call_count == 20
+
+        clock.advance(200.0)
+
+        for _ in range(20):
+            est.insert(100.0)
+
+        assert clock._call_count == 40
+
+        p50 = est.p50(window_seconds=80.0)
+        assert 70 <= p50 <= 110
+
+        p50_recent = est.p50(window_seconds=30.0)
+        assert 80 <= p50_recent <= 110
+
+    def test_insert_many_each_has_independent_timestamp(self):
+        class AdvancingMockClock(MockClock):
+            def __init__(self, start, step):
+                super().__init__(start)
+                self._step = step
+                self._call_count = 0
+
+            def now(self):
+                t = self._current_time + self._call_count * self._step
+                self._call_count += 1
+                return t
+
+        clock = AdvancingMockClock(100.0, 5.0)
+        config = WindowConfig(window_seconds=30.0)
+        est = QuantileEstimator(delta=100.0, window_config=config, clock=clock)
+
+        old_values = [10.0] * 5
+        new_values = [100.0] * 5
+
+        est.insert_many(old_values)
+        clock.advance(50.0)
+        est.insert_many(new_values)
+
+        assert clock._call_count == 10
+
+        p50 = est.p50()
+        assert 60 <= p50 <= 110
+
+        p50_narrow = est.quantile(0.5, window_seconds=20.0)
+        assert 80 <= p50_narrow <= 110
 
     def test_concurrent_inserts_have_timestamps_in_lock(self):
         class TrackingClock(MockClock):

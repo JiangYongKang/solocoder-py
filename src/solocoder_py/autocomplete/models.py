@@ -52,9 +52,21 @@ class TrieNode:
         self.max_candidates: int = 0
 
     def add_candidate(self, word: str, weight: int) -> None:
-        self.candidates = [c for c in self.candidates if c.word != word]
-        self.candidates.append(Candidate(word=word, weight=weight))
-        self.candidates.sort()
+        for i, candidate in enumerate(self.candidates):
+            if candidate.word == word:
+                self.candidates.pop(i)
+                break
+        new_candidate = Candidate(word=word, weight=weight)
+        inserted = False
+        for i, candidate in enumerate(self.candidates):
+            if weight > candidate.weight or (
+                weight == candidate.weight and word < candidate.word
+            ):
+                self.candidates.insert(i, new_candidate)
+                inserted = True
+                break
+        if not inserted:
+            self.candidates.append(new_candidate)
 
     def update_candidate_weight(self, word: str, new_weight: int) -> None:
         self.add_candidate(word, new_weight)

@@ -1,0 +1,15 @@
+你的修复引入了一些遗留问题需要继续处理：
+
+1. exceptions.py 中定义了 CheckpointMonotonicityError 异常类，__init__.py 将其导出，processor.py 也显式导入了该类，但整个代码中从未抛出过该异常。_auto_checkpoint 检测到检查点倒退时只是静默返回 None，replay_range 遇到同样情况时也只写去重记录而不抛异常。README 的异常表描述了该异常的触发场景，但代码实际行为是沉默跳过。需要决定该异常的设计意图：要么在违反单调性时抛出供上层捕获，要么从代码中移除这个未使用的异常类和文档描述，避免死代码。
+
+2. processor.py 的 last_skip_warning 属性存在粘性残留问题：该属性在 process_message_at 检测到偏移跳跃时被赋值，但从未在任何后续操作中被重置。当先调用 process_message_at 产生跳跃告警，再通过 process_next 恢复到正常顺序消费后，读取 last_skip_warning 仍得到已过期的告警，调用方无法判断当前是否仍处于跳跃状态。需要在顺序消费推进到超过上次跳跃偏移之后将告警清除。
+
+3. process_message_at 的偏移跳跃检测逻辑中，OffsetSkipWarning 仅携带 expected_offset 和 actual_offset，缺少实际被跳过偏移的具体列表或数量，告警排查价值有限。应在警告中携带跳过的偏移列表或至少跳过的偏移数量。
+
+4. process_message_at 将去重记录直接追加到 _uncommitted_records，与顺序消费的记录混在同一批次。在自动检查点间隔较小时，_auto_checkpoint 以最后一条记录的偏移作为 target_offset，该值语义不纯粹。需要澄清检查点混合场景下的语义并在 README 中补充说明。
+
+5. 为该模块补充覆盖以下场景的单元测试：last_skip_warning 在跳跃后恢复顺序消费时应被清除、process_message_at 的警告信息应包含完整的跳过偏移列表。
+
+6. 更新 README.md 说明 CheckpointMonotonicityError 的实际触发策略（或移除相关描述），补充 last_skip_warning 的生命周期说明，以及混合批次的检查点语义说明。
+
+7. 重新运行 poetry run pytest tests/exactly_once/ -v，确保所有测试通过。

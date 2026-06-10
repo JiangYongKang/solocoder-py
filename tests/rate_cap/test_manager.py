@@ -529,3 +529,138 @@ class TestManagerSubjectNotFound:
         manager = RateCapManager(config, clock=simple_clock)
         with pytest.raises(SubjectNotFoundError, match="not found"):
             manager.query_usage("ghost-user", strict=True)
+
+
+class TestManagerRollbackTagIsolation:
+    def test_granular_rollback_global_tag_does_not_affect_other(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(
+                    name="1min",
+                    window_seconds=60,
+                    max_operations=1000,
+                    slide_granularity_seconds=10,
+                )
+            ],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"1min": 500}),
+                "B": SubjectQuotas("B", {"1min": 500}),
+                "X": SubjectQuotas("X", {"1min": 5}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=30)
+        manager.check_operation("B", amount=20)
+        assert manager.query_global_usage()["1min"].used == 50
+        with pytest.raises(OperationRejectedError) as excinfo:
+            manager.check_operation("X", amount=10)
+        assert excinfo.value.dimension == "subject"
+        assert manager.query_subject_usage("A")["1min"].used == 30
+        assert manager.query_subject_usage("B")["1min"].used == 20
+        assert manager.query_global_usage()["1min"].used == 50
+
+    def test_precise_rollback_global_tag_does_not_affect_other(self, simple_clock):
+        config = RateCapConfig(
+            windows=[WindowConfig(name="1min", window_seconds=60, max_operations=1000)],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"1min": 500}),
+                "B": SubjectQuotas("B", {"1min": 500}),
+                "X": SubjectQuotas("X", {"1min": 5}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        for _ in range(30):
+            manager.check_operation("A")
+        for _ in range(20):
+            manager.check_operation("B")
+        with pytest.raises(OperationRejectedError) as excinfo:
+            manager.check_operation("X", amount=10)
+        assert excinfo.value.dimension == "subject"
+        assert manager.query_subject_usage("A")["1min"].used == 30
+        assert manager.query_subject_usage("B")["1min"].used == 20
+        assert manager.query_global_usage()["1min"].used == 50
+
+    def test_multi_window_rollback_tag_all_windows(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(
+                    name="1min",
+                    window_seconds=60,
+                    max_operations=1000,
+                    slide_granularity_seconds=1,
+                ),
+                WindowConfig(
+                    name="1hour",
+                    window_seconds=3600,
+                    max_operations=10000,
+                    slide_granularity_seconds=10,
+                ),
+            ],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"1min": 500, "1hour": 5000}),
+                "B": SubjectQuotas("B", {"1min": 500, "1hour": 5000}),
+                "X": SubjectQuotas("X", {"1min": 5, "1hour": 5}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=10)
+        manager.check_operation("B", amount=15)
+        with pytest.raises(OperationRejectedError):
+            manager.check_operation("X", amount=20)
+        assert manager.query_subject_usage("A")["1min"].used == 10
+        assert manager.query_subject_usage("A")["1hour"].used == 10
+        assert manager.query_subject_usage("B")["1min"].used == 15
+        assert manager.query_subject_usage("B")["1hour"].used == 15
+        assert manager.query_global_usage()["1min"].used == 25
+        assert manager.query_global_usage()["1hour"].used == 25
+
+    def test_reset_then_continue_isolated_from_others(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(
+                    name="w",
+                    window_seconds=60,
+                    max_operations=1000,
+                    slide_granularity_seconds=10,
+                )
+            ],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"w": 500}),
+                "B": SubjectQuotas("B", {"w": 500}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=10)
+        manager.check_operation("B", amount=20)
+        manager.reset_subject("A")
+        manager.check_operation("A", amount=15)
+        assert manager.query_subject_usage("A")["w"].used == 15
+        assert manager.query_subject_usage("B")["w"].used == 20
+        assert manager.query_global_usage()["w"].used == 35
+        manager.check_operation("B", amount=10)
+        assert manager.query_subject_usage("A")["w"].used == 15
+        assert manager.query_subject_usage("B")["w"].used == 30
+        assert manager.query_global_usage()["w"].used == 45
+
+    def test_global_rollback_when_global_fails(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(
+                    name="w",
+                    window_seconds=60,
+                    max_operations=30,
+                    slide_granularity_seconds=1,
+                )
+            ],
+            default_subject_quotas={"w": 100},
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=10)
+        manager.check_operation("B", amount=10)
+        with pytest.raises(OperationRejectedError) as excinfo:
+            manager.check_operation("C", amount=15)
+        assert excinfo.value.dimension == "global"
+        assert manager.query_subject_usage("A")["w"].used == 10
+        assert manager.query_subject_usage("B")["w"].used == 10
+        assert manager.query_subject_usage("C")["w"].used == 0
+        assert manager.query_global_usage()["w"].used == 20

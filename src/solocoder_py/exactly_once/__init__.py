@@ -6,7 +6,6 @@ from .exceptions import (
     InvalidOffsetError,
     AtomicCommitInterruptedError,
     OffsetSkipWarning,
-    CheckpointMonotonicityError,
 )
 from .models import (
     Message,
@@ -35,7 +34,6 @@ __all__ = [
     "InvalidOffsetError",
     "AtomicCommitInterruptedError",
     "OffsetSkipWarning",
-    "CheckpointMonotonicityError",
     "Message",
     "DedupRecord",
     "Checkpoint",

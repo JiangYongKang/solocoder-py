@@ -1,0 +1,7 @@
+你的修复中查询词去重、分词管道统一和 IDF 预计算三个缺陷修复方向正确，但新增的辅助方法存在语义不一致需要修正：
+
+1. index.py 的 _normalize_term 方法使用与 _tokenize 相同的正则提取词元，但只取 tokens[0] 作为返回值，而 _tokenize 返回完整列表。README 声称查询词与文档使用"完全一致"的规范化管道，但 _normalize_term 对 "foo-bar" 等多词输入仅返回 "foo" 而丢弃了 "bar"。需要统一 _normalize_term 与 _tokenize 的行为，要么让 _normalize_term 直接复用 _tokenize 并返回 tokens[0] 以减少代码重复，要么在 README 中明确说明 get_postings 仅对单一词元规范化的限制。
+
+2. 更新 README.md，澄清查询词规范化管道的实际行为与文档词规范化的异同。
+
+3. 重新运行 poetry run pytest tests/inverted_index/ -v，确保所有测试通过。

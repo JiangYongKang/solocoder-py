@@ -8,7 +8,7 @@
 2. **原子化提交**：偏移量（Offset）与去重记录在同一原子操作中写入，避免部分写入导致的状态不一致
 3. **崩溃重启恢复**：从最近检查点（Checkpoint）恢复状态，**保留去重记录用于拦截已处理消息**，未处理消息继续正常流转
 4. **手动消息重放**：支持指定偏移范围重放消息，重放期间自动去重（含已提交和未提交记录），不产生重复的去重记录
-5. **顺序消费偏移连续性**：`process_message_at` 随机访问不影响顺序消费偏移，跳跃时产生 `OffsetSkipWarning`
+5. **顺序消费偏移连续性**：`process_message_at` 随机访问不影响顺序消费偏移，跳跃时产生 `OffsetSkipWarning`（含完整跳过偏移列表）
 6. **检查点单调性保证**：`committed_offset` 单调递增，重放产生的低偏移检查点不会覆盖已有的高偏移检查点
 
 ## 核心类职责
@@ -85,7 +85,7 @@ processor.recover_or_start_fresh()
 
 `committed_offset` 严格单调递增，不会出现低偏移检查点覆盖高偏移检查点的情况：
 
-- **自动提交**：`_auto_checkpoint` 在提交前检查 `target_offset > current_committed_offset`，不满足时跳过提交
+- **自动提交**：`_auto_checkpoint` 在提交前检查 `target_offset > current_committed_offset`，不满足时**静默跳过**提交（不抛异常），保留去重记录在 `_uncommitted_records` 中等待后续顺序消费推进后重新提交
 - **重放提交**：`replay_range` 中，若重放产生的 `target_offset <= current_committed_offset`，仅将去重记录写入 `dedup_store`，不创建新检查点
 - **崩溃恢复**：`recover_from_checkpoint` 始终从最新的（最高偏移的）检查点恢复
 
@@ -116,10 +116,65 @@ r = proc.process_message_at(5)
 assert proc.last_skip_warning is not None
 assert proc.last_skip_warning.expected_offset == 0
 assert proc.last_skip_warning.actual_offset == 5
+assert proc.last_skip_warning.skipped_offsets == [0, 1, 2, 3, 4]
+assert proc.last_skip_warning.skipped_count == 5
 
 # 顺序消费不受影响，仍从 offset 0 开始
 r0 = proc.process_next()
 assert r0.message.offset == 0
+```
+
+### last_skip_warning 生命周期
+
+`last_skip_warning` 属性记录最近一次偏移跳跃告警，具有以下生命周期：
+
+1. **产生**：`process_message_at` 检测到跳跃（`offset != expected_next`）时设置
+2. **存活**：在顺序消费（`process_next`）尚未推进到跳跃偏移之前，告警持续存在
+3. **清除**：当 `process_next` 将 `_current_offset` 推进到 `>= warning.actual_offset` 时，告警自动清除
+4. **覆盖**：新的 `process_message_at` 跳跃会覆盖之前的告警
+
+```python
+# 跳跃到 offset 5
+proc.process_message_at(5)
+assert proc.last_skip_warning is not None  # 告警存在
+
+# 顺序消费到 offset 4
+for _ in range(5):
+    proc.process_next()
+assert proc.current_offset == 4
+assert proc.last_skip_warning is not None  # 尚未追上，告警仍在
+
+# 顺序消费到 offset 5（追上跳跃偏移）
+proc.process_next()
+assert proc.current_offset == 5
+assert proc.last_skip_warning is None  # 告警已清除
+```
+
+### 混合批次检查点语义
+
+当 `process_message_at` 和 `process_next` 交叉使用时，两者的去重记录会混合在 `_uncommitted_records` 中。检查点提交时的语义如下：
+
+- **`committed_offset` = `_uncommitted_records` 最后一条记录的偏移**（按插入顺序，非偏移大小排序）
+- 这意味着 `committed_offset` 反映的是**最后插入顺序消费的偏移位置**，而非已处理消息中的最大偏移
+- 混合批次中的所有去重记录（包括随机访问产生的）都会被原子写入 `dedup_store`
+- **崩溃恢复安全保证**：恢复后从 `committed_offset + 1` 继续顺序消费，随机访问处理的高偏移消息的去重记录已落盘，会被正确拦截为 DUPLICATE
+
+```python
+# 混合使用场景
+proc.process_message_at(7, handler=lambda m: "ofo-7")  # 随机访问 offset 7
+proc.process_next()  # 顺序消费 offset 0
+proc.process_next()  # 顺序消费 offset 1
+
+# 提交检查点：committed_offset = 1（最后一条记录的偏移）
+cp = proc.commit_checkpoint()
+assert cp.committed_offset == 1
+
+# 但 dedup_store 中已有 m0、m1、m7 三条去重记录
+assert proc.dedup_store.contains("m7")
+
+# 恢复后：从 offset 2 继续消费
+proc.recover_from_checkpoint()
+# offset 7 的消息通过去重拦截，不会被重复处理
 ```
 
 ## 消息重放机制
@@ -275,10 +330,11 @@ r = proc.process_message_at(5, handler=lambda m: f"out-of-order-{m.payload}")
 assert r.is_new is True
 assert proc.current_offset == -1  # 顺序偏移不变
 
-# 检查跳跃告警
+# 检查跳跃告警（含完整跳过偏移列表）
 if proc.last_skip_warning:
-    print(f"警告: 从 offset {proc.last_skip_warning.expected_offset} "
-          f"跳到了 {proc.last_skip_warning.actual_offset}")
+    w = proc.last_skip_warning
+    print(f"警告: 从 offset {w.expected_offset} 跳到了 {w.actual_offset}")
+    print(f"跳过的偏移: {w.skipped_offsets} (共 {w.skipped_count} 个)")
 
 # 顺序消费不受影响
 r0 = proc.process_next()
@@ -310,8 +366,7 @@ except DedupStoreOverflowError:
 | `AtomicCommitInterruptedError` | 原子提交中途模拟崩溃 | 调用 `recover_or_start_fresh()` 恢复 |
 | `MessageNotFoundError` | 查询不存在的消息偏移 | 检查偏移范围 |
 | `CheckpointNotFoundError` | 无可用检查点时尝试恢复 | 使用 `recover_or_start_fresh()` 从 0 开始 |
-| `OffsetSkipWarning` | `process_message_at` 跳过中间未处理消息 | 检查 `last_skip_warning` 属性确认跳跃范围 |
-| `CheckpointMonotonicityError` | 尝试写入低于当前 committed_offset 的检查点 | 检查是否有重放或并发写入导致偏移回退 |
+| `OffsetSkipWarning` | `process_message_at` 跳过中间未处理消息 | 检查 `last_skip_warning.skipped_offsets` 确认具体跳过的偏移；顺序消费追上后告警自动清除 |
 
 ## 线程安全
 
