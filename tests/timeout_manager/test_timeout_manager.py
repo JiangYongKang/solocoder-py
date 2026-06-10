@@ -3,9 +3,8 @@ from __future__ import annotations
 import pytest
 
 from solocoder_py.timeout_manager import (
-    ContextAlreadyCancelledError,
-    ContextCancelledError,
     ContextNotFoundError,
+    ContextTerminalStateError,
     InvalidCallbackError,
     InvalidDeadlineError,
     ManualClock,
@@ -100,7 +99,7 @@ class TestChildContextCreation:
     def test_create_child_on_cancelled_parent_raises(self, manager: TimeoutManager):
         parent = manager.create_root_context(100.0)
         manager.cancel_context(parent.context_id, "test cancel")
-        with pytest.raises(ContextAlreadyCancelledError):
+        with pytest.raises(ContextTerminalStateError):
             manager.create_child_context(parent.context_id, deadline=80.0)
 
     def test_create_child_on_nonexistent_parent_raises(self, manager: TimeoutManager):
@@ -444,7 +443,18 @@ class TestCallbacks:
         def cb(ctx: TimeoutContext) -> None:
             pass
 
-        with pytest.raises(ContextAlreadyCancelledError):
+        with pytest.raises(ContextTerminalStateError):
+            manager.add_callback(ctx.context_id, cb)
+
+    def test_add_callback_to_expired_context_raises(self, manager: TimeoutManager, clock: ManualClock):
+        ctx = manager.create_root_context(100.0)
+        clock.set(100.0)
+        manager.check_expired()
+
+        def cb(ctx: TimeoutContext) -> None:
+            pass
+
+        with pytest.raises(ContextTerminalStateError):
             manager.add_callback(ctx.context_id, cb)
 
     def test_add_none_callback_raises(self, manager: TimeoutManager):
@@ -693,7 +703,7 @@ class TestEdgeCases:
         ctx = manager.create_root_context(100.0)
         clock.set(100.0)
         manager.check_expired()
-        with pytest.raises(ContextAlreadyCancelledError):
+        with pytest.raises(ContextTerminalStateError):
             manager.create_child_context(ctx.context_id, deadline=50.0)
 
     def test_cancel_already_expired_context(self, manager: TimeoutManager, clock: ManualClock):
@@ -757,8 +767,8 @@ class TestExceptionMessages:
         manager.cancel_context(ctx.context_id, "test")
         try:
             manager.create_child_context(ctx.context_id, deadline=50.0)
-            assert False, "Expected ContextAlreadyCancelledError"
-        except ContextAlreadyCancelledError as e:
+            assert False, "Expected ContextTerminalStateError"
+        except ContextTerminalStateError as e:
             assert ctx.context_id in str(e)
             assert "terminal state" in str(e).lower()
 
@@ -768,8 +778,8 @@ class TestExceptionMessages:
         manager.check_expired()
         try:
             manager.create_child_context(ctx.context_id, deadline=50.0)
-            assert False, "Expected ContextAlreadyCancelledError"
-        except ContextAlreadyCancelledError as e:
+            assert False, "Expected ContextTerminalStateError"
+        except ContextTerminalStateError as e:
             assert ctx.context_id in str(e)
             assert "terminal state" in str(e).lower()
 

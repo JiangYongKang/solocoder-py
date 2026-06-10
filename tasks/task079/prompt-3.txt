@@ -1,0 +1,5 @@
+你实现的 SLA 截止时间模块在第2轮修复后引入了一些新问题，需要修复：
+1. README.md 中 PauseRecord 类的属性列表遗漏了 is_active 和 pause_duration_seconds 两个计算属性，但它们在测试代码中被广泛验证且是公开 API 的组成部分。需要补全文档中的属性说明，使其与 models.py 中的实际定义一致。
+2. _calculate_actual_deadline 方法中存在一处可达性存疑的代码分支。在状态机和 `_calculate_elapsed_work_hours` 在当前所有状态下的返回值约束下，该分支在当前实现中无法被任何合法调用路径触发，且没有对应的测试覆盖。需要分析该分支的实际可达性，要么验证其在特定场景下的必要性并补充测试覆盖，要么将其移除或改为防御性断言。
+3. `_get_accumulated_hours_before` 方法与 `_calculate_actual_deadline` 方法包含了高度重复的时间线构建与遍历逻辑。如果未来 `PauseRecord` 的数据结构发生变化，两处需要同步修改，遗漏任何一处都会导致累计时长与截止时间计算结果不一致。需要抽取公共的时间线遍历逻辑，消除重复代码。
+4. 修复上述问题后运行 poetry run pytest tests/sla_deadline/ -v，确保所有测试通过。

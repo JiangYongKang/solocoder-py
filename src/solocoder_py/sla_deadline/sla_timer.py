@@ -143,20 +143,24 @@ class SlaTimer:
             current_time=now,
         )
 
-    def _calculate_actual_deadline(self) -> datetime:
+    def _build_timeline(self) -> list[tuple[datetime, str]]:
         if self._start_time is None:
             raise SlaTimerNotStartedError("SLA timer has not been started")
 
-        timeline = [(self._start_time, 'start')]
+        timeline: list[tuple[datetime, str]] = [(self._start_time, 'start')]
         for record in self._pause_records:
             timeline.append((record.pause_time, 'pause'))
             if record.resume_time is not None:
                 timeline.append((record.resume_time, 'resume'))
 
         timeline.sort(key=lambda x: x[0])
+        return timeline
+
+    def _calculate_actual_deadline(self) -> datetime:
+        timeline = self._build_timeline()
 
         remaining_hours = self.total_work_hours
-        current_time = self._start_time
+        current_time = timeline[0][0]
         is_running = True
 
         for event_time, event_type in timeline[1:]:
@@ -187,7 +191,12 @@ class SlaTimer:
         if remaining_hours > 0 and is_running:
             return self.work_calendar.add_work_hours(current_time, remaining_hours)
 
-        return current_time
+        assert False, (
+            "Deadline calculation reached end of timeline without locating the expiration "
+            "point for an SLA marked EXPIRED. This indicates a state inconsistency: "
+            "the elapsed duration should have reached total_work_hours but the "
+            "reconstructed timeline does not account for sufficient work hours."
+        )
 
     def _get_last_resume_time(self) -> Optional[datetime]:
         last_resume_time = None
@@ -207,19 +216,10 @@ class SlaTimer:
         return self._start_time
 
     def _get_accumulated_hours_before(self, target_time: datetime) -> float:
-        if self._start_time is None:
-            raise SlaTimerNotStartedError("SLA timer has not been started")
-
-        timeline = [(self._start_time, 'start')]
-        for record in self._pause_records:
-            timeline.append((record.pause_time, 'pause'))
-            if record.resume_time is not None:
-                timeline.append((record.resume_time, 'resume'))
-
-        timeline.sort(key=lambda x: x[0])
+        timeline = self._build_timeline()
 
         total_hours = 0.0
-        current_time = self._start_time
+        current_time = timeline[0][0]
         is_running = True
 
         for event_time, event_type in timeline[1:]:

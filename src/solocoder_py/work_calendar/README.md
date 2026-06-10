@@ -172,16 +172,21 @@ print(natural_days)  # 约14个自然日
 from datetime import time
 from solocoder_py.work_calendar import WorkCalendar, WorkDaySchedule, WorkTimeRange
 
-# 自定义工作时段（朝九晚六，无午休）
+# 自定义工作时段（朝九晚六，含午休）
 custom_schedule = WorkDaySchedule(
-    morning=WorkTimeRange(time(9, 0), time(18, 0)),
-    afternoon=WorkTimeRange(time(18, 0), time(18, 1)),  # 仅作为占位，实际不使用
+    morning=WorkTimeRange(time(9, 0), time(12, 0)),
+    afternoon=WorkTimeRange(time(13, 0), time(18, 0)),
 )
 
-# 或者更简单的方式 - 使用单段工作制
+# 单段工作制（朝九晚六，无午休）
+# 注意：WorkDaySchedule 始终包含 morning 和 afternoon 两个时段。
+# 如仅需单段工作时间，可将 afternoon 设置为一个极短且不与主要工作时段重叠的合法时段。
+# 以下示例中 afternoon 段为 18:00-18:01（仅1分钟），其 duration_hours 为 1/60 ≈ 0.0167 小时，
+# is_work_time 会将该1分钟判定为工作时间，add_work_hours 也会处理此时段。
+# 如需完全排除此时段的影响，建议将其设为一个不会被业务场景触达的时间段。
 single_schedule = WorkDaySchedule(
     morning=WorkTimeRange(time(9, 0), time(18, 0)),
-    afternoon=WorkTimeRange(time(23, 59), time(23, 59, 59)),  # 最小合法占位
+    afternoon=WorkTimeRange(time(18, 0), time(18, 1)),
 )
 
 cal = WorkCalendar()

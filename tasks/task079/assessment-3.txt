@@ -1,0 +1,6 @@
+产物不满意：
+1. sla_timer.py 的重构中新增了 `_build_timeline` 方法来统一时间线的构建逻辑，`_calculate_actual_deadline` 和 `_get_accumulated_hours_before` 两个方法现在都通过调用 `_build_timeline` 获取时间线。但两个方法在遍历时间线时各自保留了独立的遍历循环，且遍历逻辑中仍存在部分重复：两个循环都从 `timeline[0][0]` 初始化 `current_time`，都使用相同的 event 切换模式（start→pause→resume），都调用了 `self.work_calendar.add_work_hours` 来累加工作时长。`_build_timeline` 只解决了"时间线构建"层面的重复，但"运行时段的识别与累加"这一层重复仍然存在，两处的 `is_running` 状态切换和 `add_work_hours` 调用模式完全一致。提示词要求的是"抽取公共的时间线遍历逻辑"，当前重构只完成了一半。应该进一步抽取一个共同的运行时段迭代器或累加器，将遍历逻辑也统一，使两处真正共享核心计算。
+2. `_calculate_actual_deadline` 方法末尾的不可达分支从 `return current_time` 改为了 `assert False`，附带详细的诊断信息。这个修改符合提示词中"改为防御性断言"的选项，assert 消息中说明了该分支在当前状态机约束下的不可达性，一旦因代码演进导致状态不一致能立即暴露。但 assert 在生产代码中可能因 Python 的 `-O` 优化选项被跳过，如果未来该模块被部署到生产环境，优化模式下此处不再是防御性断言而是静默到达函数末尾返回 None，导致截止时间计算返回异常值而不报错。更稳妥的做法是始终抛出 `RuntimeError` 或自定义 `SlaStateInconsistencyError`，确保在任何运行模式下都能触发明确的异常。
+
+过程不满意：
+1. 模型第一次重构时创建了 `_iter_running_segments` 生成器，试图用一个生成器统一两处的遍历逻辑。运行测试后出现大量失败，根因是生成器在无 end_time 时不处理时间线结束后仍在运行中的剩余时段。模型在测试失败后正确分析了失败原因并重新设计了方案，但第一次重构的失败本可以在编码阶段通过更仔细的边界分析来避免。在编写生成器之前应先梳理两种遍历的终止条件差异：`_calculate_actual_deadline` 按剩余工作时长终止，`_get_accumulated_hours_before` 按目标时间点终止，两者终止条件本质不同，强行用一个生成器统一必然需要在生成器内部处理两种不同的终止逻辑，增加复杂度。这个分析如果能在编码前完成，可以避免一轮失败后再重新设计的试错过程。

@@ -1,0 +1,4 @@
+你实现的超时管理器模块在第2轮修复后还存在一些遗留问题：
+1. create_child_context 方法将已过期父上下文和已取消父上下文统一为抛出 ContextAlreadyCancelledError，但该异常类型的名称语义仅指向"已取消"一种终态。当父上下文因超时过期而非取消到达终态时，异常名会向调用方传递错误的语义信息。异常类型的命名需要与它所涵盖的所有终态场景保持一致，不能只反映其中一种。
+2. 修复完成后 ContextCancelledError 在 exceptions.py 中仍有定义、在 __init__.py 中仍有导出、在 timeout_manager.py 中有导入但没有任何地方实际抛出。模块公开 API 中悬挂了一个永不触发的异常类型，如果调用方按导出列表去使用它，永远捕获不到该异常。需要清理无用的异常类型及其残留引用。
+3. 修复上述问题后运行 poetry run pytest tests/timeout_manager/ -v，确保所有测试通过。

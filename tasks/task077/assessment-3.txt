@@ -1,0 +1,6 @@
+产物不满意：
+1. expander.py 的修改使用了 Write 工具对整个文件进行了全量重写，而非对特定方法做定向编辑。虽然文件仅 65 行且重写后 61 个测试全部通过，但全量重写的方式丢失了 Git 历史的变更粒度，标注人员无法从 diff 中精确判断哪些行是刻意修改、哪些行是纯格式保留。正确做法是使用 edit_file_search_replace 针对 `_add_days`、`_add_months`、`_add_years` 三个方法逐一添加 `@staticmethod` 装饰器并替换 `self._days_in_month` 为 `calendar.monthrange`，再单独删除 `_days_in_month` 和 `_is_leap_year` 方法，保持变更的可审计性。
+2. `_advance`、`_add_days`、`_add_months`、`_add_years` 四个方法改为 `@staticmethod` 后，方法内部的调用从 `self._add_days(...)` 改为了 `RRuleExpander._add_days(...)`，即硬编码了类名。如果未来该类被继承，子类无法通过方法重写来定制日期推进行为，因为静态方法调用被绑定在了基类上。虽然当前场景下无继承需求，但这种写法降低了代码的扩展性。更合适的做法是使用 `@classmethod` 或将调用改为不带类前缀的内部函数。
+
+过程不满意：
+1. 模型在阅读 expander.py 后直接用 Write 工具全量重写了整个文件，中间没有使用 Grep 或分段阅读来确认每个需要修改的方法的具体位置和依赖关系。在文件较小（65 行）的情况下全量重写风险可控，但这种习惯如果带到大型文件中会造成不可预期的副作用。正确的做法是坚持使用定向编辑工具，即使文件很小也应保持精确的修改定位能力。

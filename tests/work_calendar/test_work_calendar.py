@@ -86,13 +86,12 @@ class TestCalendarConfig:
         assert len(config.holidays) == 0
         assert len(config.workdays) == 0
 
-    def test_conflicting_dates_workday_priority(self):
-        config = CalendarConfig(
-            holidays=frozenset([date(2024, 1, 1)]),
-            workdays=frozenset([date(2024, 1, 1)]),
-        )
-        cal = WorkCalendar(config=config)
-        assert cal.is_workday(date(2024, 1, 1))
+    def test_conflicting_dates_raise_error(self):
+        with pytest.raises(ValueError, match="Dates cannot be both holiday and workday"):
+            CalendarConfig(
+                holidays=frozenset([date(2024, 1, 1)]),
+                workdays=frozenset([date(2024, 1, 1)]),
+            )
 
 
 class TestWorkdayCheck:
@@ -121,23 +120,21 @@ class TestWorkdayCheck:
         )
         assert cal.is_workday(date(2024, 1, 13))
 
-    def test_workday_priority_over_holiday(self):
+    def test_workday_priority_over_weekend(self):
+        weekend_day = date(2024, 1, 13)
         cal = WorkCalendar(
-            config=CalendarConfig(
-                holidays=frozenset([date(2024, 1, 15)]),
-                workdays=frozenset([date(2024, 1, 15)]),
-            )
+            config=CalendarConfig(workdays=frozenset([weekend_day]))
         )
-        assert cal.is_workday(date(2024, 1, 15))
+        assert cal.is_extra_workday(weekend_day)
+        assert cal.is_workday(weekend_day)
 
-    def test_workday_priority_over_holiday_on_weekend(self):
+    def test_holiday_priority_over_weekday(self):
+        weekday = date(2024, 1, 15)
         cal = WorkCalendar(
-            config=CalendarConfig(
-                holidays=frozenset([date(2024, 1, 13)]),
-                workdays=frozenset([date(2024, 1, 13)]),
-            )
+            config=CalendarConfig(holidays=frozenset([weekday]))
         )
-        assert cal.is_workday(date(2024, 1, 13))
+        assert cal.is_holiday(weekday)
+        assert not cal.is_workday(weekday)
 
     def test_holiday_priority_over_weekend_default(self):
         cal = WorkCalendar(
@@ -436,11 +433,17 @@ class TestEmptyHolidayConfig:
         cal.set_workdays([date(2024, 1, 13)])
         assert cal.is_workday(date(2024, 1, 13))
 
-    def test_set_conflicting_dates_workday_priority(self):
+    def test_set_workdays_conflicting_with_existing_holidays_raises_error(self):
         cal = WorkCalendar()
         cal.set_holidays([date(2024, 1, 15)])
-        cal.set_workdays([date(2024, 1, 15)])
-        assert cal.is_workday(date(2024, 1, 15))
+        with pytest.raises(ValueError, match="Dates cannot be both holiday and workday"):
+            cal.set_workdays([date(2024, 1, 15)])
+
+    def test_set_holidays_conflicting_with_existing_workdays_raises_error(self):
+        cal = WorkCalendar()
+        cal.set_workdays([date(2024, 1, 13)])
+        with pytest.raises(ValueError, match="Dates cannot be both holiday and workday"):
+            cal.set_holidays([date(2024, 1, 13)])
 
     def test_set_work_schedule(self):
         cal = WorkCalendar()

@@ -751,6 +751,20 @@ class TestConfigTypeConflictErrors:
         with pytest.raises(ConfigTypeConflictError):
             manager.merge()
 
+    def test_three_layer_dict_vs_list_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"a": {"b": {"inner": 1}}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"a": {"b": {"inner": 2}}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.OVERRIDE, {"a": {"b": [1, 2]}}
+        )
+        with pytest.raises(ConfigTypeConflictError):
+            manager.merge()
+
     def test_int_vs_list_conflict(self):
         manager = make_manager()
         manager.set_layer_data(
@@ -805,6 +819,160 @@ class TestConfigTypeConflictErrors:
         )
         with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
             manager.merge()
+
+    def test_float_vs_list_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": 3.14}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": [1, 2, 3]}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_list_vs_float_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": [1, 2, 3]}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": 3.14}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_float_vs_dict_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": 3.14}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": {"key": "dict"}}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_dict_vs_float_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": {"key": "dict"}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": 3.14}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_bool_vs_list_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": True}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": [1, 2]}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_list_vs_bool_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": [1, 2, 3]}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": False}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_bool_vs_dict_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": False}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": {"key": "dict"}}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_dict_vs_bool_conflict(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": {"key": "dict"}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": True}
+        )
+        with pytest.raises(ConfigTypeConflictError, match="Type conflict"):
+            manager.merge()
+
+    def test_none_overrides_dict_is_valid(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": {"key": "dict"}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": None}
+        )
+        merged = manager.merge()
+        assert merged["value"] is None
+
+    def test_none_overrides_list_is_valid(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": [1, 2, 3]}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": None}
+        )
+        merged = manager.merge()
+        assert merged["value"] is None
+
+    def test_dict_overrides_none_is_valid(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": None}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": {"key": "dict"}}
+        )
+        merged = manager.merge()
+        assert merged["value"] == {"key": "dict"}
+
+    def test_list_overrides_none_is_valid(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": None}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": [1, 2, 3]}
+        )
+        merged = manager.merge()
+        assert merged["value"] == [1, 2, 3]
+
+    def test_none_overrides_none_is_valid(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"value": None}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"value": None}
+        )
+        merged = manager.merge()
+        assert merged["value"] is None
+
+    def test_nested_none_overrides_nested_dict_is_valid(self):
+        manager = make_manager()
+        manager.set_layer_data(
+            ConfigLayerType.DEFAULT, {"a": {"b": {"inner": 1}}}
+        )
+        manager.set_layer_data(
+            ConfigLayerType.ENVIRONMENT, {"a": {"b": None}}
+        )
+        merged = manager.merge()
+        assert merged["a"]["b"] is None
 
     def test_nested_primitive_vs_container_conflict(self):
         manager = make_manager()

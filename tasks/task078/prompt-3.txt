@@ -1,0 +1,5 @@
+你实现的工作日历模块在第2轮修复后引入了一些新问题，需要修复：
+1. 第2轮修复中为了构造调休日与节假日冲突的测试，删除了 CalendarConfig 中以及 set_holidays、set_workdays 中的冲突日期校验逻辑，将 API 行为从"拒绝同一日期既为节假日又为调休日的非法配置"改为"静默接受"。提示词原本只要求补充冲突场景的测试，不需要修改业务约束。需要恢复这些冲突校验逻辑，同时重新设计测试使其在不修改业务约束的前提下验证调休日优先。
+2. conftest.py 中 make_calendar_with_holidays、make_calendar_with_workdays、make_calendar_with_custom_schedule 三个 fixture 在测试文件中完全未被引用，统一工厂函数的工作只完成了一半。需要彻底完成统一：要么删除这三个无人使用的 fixture，要么将测试文件中内联构造的等价逻辑迁移到 conftest.py 中统一使用。
+3. README.md 中"自定义工作时段"的两个占位时段（afternoon=WorkTimeRange(time(18,0), time(18,1)) 和 afternoon=WorkTimeRange(time(23,59), time(23,59,59))）标注为"实际不使用"或"最小合法占位"，但这些时段实际上是合法的工作时段，is_work_time 和 add_work_hours 在边界条件下都会实际处理它们。文档声称的行为与实际行为矛盾。需要修正文档使其准确描述占位时段在运行时的真实行为。
+4. 修复上述问题后运行 poetry run pytest tests/work_calendar/ -v，确保所有测试通过。

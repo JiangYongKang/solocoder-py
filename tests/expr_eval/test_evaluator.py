@@ -246,7 +246,7 @@ class TestMismatchedParentheses:
             evaluator.evaluate("((2 + 3)")
 
     def test_empty_parentheses(self, evaluator):
-        with pytest.raises(ParseError):
+        with pytest.raises(ParseError, match="Empty parentheses"):
             evaluator.evaluate("()")
 
 

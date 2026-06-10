@@ -47,11 +47,16 @@ SLA 计时器主类，提供所有 SLA 计时相关功能。
 
 暂停记录数据类，记录每次暂停和恢复的时间点。
 
-**属性：**
+**数据属性：**
 
 - `pause_time: datetime`：暂停时间点
 - `resume_time: Optional[datetime]`：恢复时间点（None 表示仍在暂停中）
 - `work_hours_before_pause: float`：暂停前已累计的工作时长
+
+**计算属性（只读）：**
+
+- `is_active: bool`：暂停是否仍处于活跃状态（即尚未恢复，`resume_time` 为 None 时返回 True）
+- `pause_duration_seconds: float`：暂停持续时间（秒），若暂停仍活跃则返回 0.0
 
 ### SlaTimerResult
 

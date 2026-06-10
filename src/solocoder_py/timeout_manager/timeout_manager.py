@@ -6,9 +6,8 @@ from typing import Callable, Dict, List, Optional
 
 from .clock import Clock, SystemClock
 from .exceptions import (
-    ContextAlreadyCancelledError,
-    ContextCancelledError,
     ContextNotFoundError,
+    ContextTerminalStateError,
     InvalidCallbackError,
     InvalidDeadlineError,
 )
@@ -78,9 +77,9 @@ class TimeoutContext:
         return not self._is_cancelled and not self._is_expired
 
     def add_callback(self, callback: Callable[["TimeoutContext"], None]) -> None:
-        if self._is_cancelled:
-            raise ContextAlreadyCancelledError(
-                f"Cannot add callback to cancelled context '{self._context_id}'"
+        if self._is_cancelled or self._is_expired:
+            raise ContextTerminalStateError(
+                f"Cannot add callback to context '{self._context_id}' in terminal state"
             )
         if callback is None:
             raise InvalidCallbackError("Callback cannot be None")
@@ -165,7 +164,7 @@ class TimeoutManager:
                     f"Parent context '{parent_id}' not found"
                 )
             if parent.is_cancelled or parent.is_expired:
-                raise ContextAlreadyCancelledError(
+                raise ContextTerminalStateError(
                     f"Cannot create child context: parent context '{parent_id}' has already reached terminal state (cancelled or expired)"
                 )
 
@@ -234,9 +233,9 @@ class TimeoutManager:
                 raise ContextNotFoundError(
                     f"Context '{context_id}' not found"
                 )
-            if context.is_cancelled:
-                raise ContextAlreadyCancelledError(
-                    f"Cannot add callback to cancelled context '{context_id}'"
+            if context.is_cancelled or context.is_expired:
+                raise ContextTerminalStateError(
+                    f"Cannot add callback to context '{context_id}' in terminal state"
                 )
             context.add_callback(callback)
 

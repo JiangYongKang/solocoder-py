@@ -107,12 +107,14 @@
 1. **手动取消**：通过 `cancel_context()` 主动取消指定上下文
 2. **到期取消**：当 `check_expired()` 检测到上下文到期时，将其标记为已过期并级联标记所有子孙
 
-### 取消后的行为
+### 终态行为
 
-- 已取消的上下文不再处于活跃状态
-- 已取消的上下文的到期回调永远不会被触发（即使后续到达截止时间）
-- 无法在已取消的上下文上创建子上下文，会抛出 `ContextAlreadyCancelledError`
-- 无法向已取消的上下文添加回调，会抛出 `ContextAlreadyCancelledError`
+上下文一旦到达终态（无论是被取消还是已过期）：
+
+- 不再处于活跃状态
+- 到期回调永远不会被触发
+- 无法在其上创建子上下文，会抛出 `ContextTerminalStateError`
+- 无法向其添加回调，会抛出 `ContextTerminalStateError`
 
 ### 取消原因
 
@@ -382,13 +384,13 @@ manager.check_expired()
 print(f"Good callback triggered: {ctx.context_id in triggered}")  # True
 ```
 
-### 在已取消的上下文上创建子上下文（异常处理）
+### 在终态上下文上创建子上下文（异常处理）
 
 ```python
 from solocoder_py.timeout_manager import (
     TimeoutManager,
     ManualClock,
-    ContextAlreadyCancelledError,
+    ContextTerminalStateError,
 )
 
 clock = ManualClock()
@@ -399,9 +401,9 @@ manager.cancel_context(parent.context_id)
 
 try:
     child = manager.create_child_context(parent.context_id, deadline=50.0)
-except ContextAlreadyCancelledError as e:
+except ContextTerminalStateError as e:
     print(f"Error: {e}")
-    # "Cannot create child context: parent context '...' is already cancelled"
+    # "Cannot create child context: parent context '...' has already reached terminal state (cancelled or expired)"
 ```
 
 ### 毫秒级精度

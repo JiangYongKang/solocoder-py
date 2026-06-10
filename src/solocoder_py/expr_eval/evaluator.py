@@ -77,6 +77,10 @@ class Parser:
             return float(token.value)
         if token.type == TokenType.LPAREN:
             self._advance()
+            if self._current().type == TokenType.RPAREN:
+                raise ParseError(
+                    f"Empty parentheses at position {token.position}"
+                )
             result = self._expression()
             if self._current().type != TokenType.RPAREN:
                 raise MismatchedParenthesisError(

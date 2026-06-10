@@ -1,0 +1,4 @@
+你实现的重复规则展开模块在第2轮修复后还存在一些遗留问题：
+1. _add_days 方法替换为 timedelta 后不再使用 self 参数，方法体仅一行且不依赖任何实例状态，但方法签名仍然是普通实例方法。这种不依赖实例状态却以实例方法存在的形式会造成代码可读性问题，需要调整方法声明使其准确反映对实例的依赖关系。
+2. expander.py 中 _add_months、_add_years、_days_in_month、_is_leap_year 四个方法仍然全部基于手工日期运算——_days_in_month 手动判断每月天数并调用 _is_leap_year 检查闰年，_is_leap_year 手动实现闰年算法。提示词要求使用标准库替代手工日期运算，在 _add_days 修复后这个原则应延伸到同文件中其他类似的手工日期逻辑。
+3. 修复上述问题后运行 poetry run pytest tests/rrule/ -v，确保所有测试通过。

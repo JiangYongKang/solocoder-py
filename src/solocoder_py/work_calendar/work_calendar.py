@@ -170,6 +170,10 @@ class WorkCalendar:
 
     def set_holidays(self, holidays: Iterable[date]) -> None:
         holiday_set = set(holidays)
+        workday_set = set(self.config.workdays)
+        conflicting = holiday_set & workday_set
+        if conflicting:
+            raise ValueError(f"Dates cannot be both holiday and workday: {conflicting}")
         self.config = CalendarConfig(
             holidays=frozenset(holiday_set),
             workdays=self.config.workdays,
@@ -178,6 +182,10 @@ class WorkCalendar:
 
     def set_workdays(self, workdays: Iterable[date]) -> None:
         workday_set = set(workdays)
+        holiday_set = set(self.config.holidays)
+        conflicting = workday_set & holiday_set
+        if conflicting:
+            raise ValueError(f"Dates cannot be both holiday and workday: {conflicting}")
         self.config = CalendarConfig(
             holidays=self.config.holidays,
             workdays=frozenset(workday_set),

@@ -1,0 +1,6 @@
+产物不满意：
+1. evaluator.py 的 `_factor` 方法中新增的空括号检查实现正确，在消费 LPAREN 之后调用 `_expression` 之前插入对 RPAREN 的检测，抛出 `ParseError("Empty parentheses at position ...")` 使得 `()` 不再被误报为 `MismatchedParenthesisError`。test_evaluator.py 中 `test_empty_parentheses` 也同步更新为 `pytest.raises(ParseError, match="Empty parentheses")`，异常消息已可被调用方精确匹配区分。本次修复范围小且针对性强，代码变更无缺陷。
+
+过程不满意：
+1. 模型在收到提示词后第一步就调用了 `todo_write` 创建了 3 项子任务计划，然后才开始读取 evaluator.py 的代码，这属于先规划后分析的流程倒置。正确做法是先阅读 `_factor` 方法中当前的 RPAREN 处理逻辑，分析空括号的解析流程，确认问题根因后再制定执行计划。
+2. 模型使用 `pyenv global 3.11.9; python -m pytest tests/expr_eval/ -v` 运行测试，而非提示词明确要求的 `poetry run pytest tests/expr_eval/ -v`。在 poetry 管理的项目中直接使用 python -m pytest 可能绕过 poetry 虚拟环境中的依赖配置，导致测试在错误的 Python 环境下运行。虽然本轮 95 个测试通过了，但这种偏离提示词指定命令的行为存在测试环境不一致的风险，应严格使用 poetry run pytest 进行验证。

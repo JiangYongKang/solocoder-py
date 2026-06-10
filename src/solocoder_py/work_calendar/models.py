@@ -50,4 +50,6 @@ class CalendarConfig:
     work_schedule: WorkDaySchedule = field(default_factory=WorkDaySchedule)
 
     def __post_init__(self) -> None:
-        pass
+        conflicting = self.holidays & self.workdays
+        if conflicting:
+            raise ValueError(f"Dates cannot be both holiday and workday: {conflicting}")

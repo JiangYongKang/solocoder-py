@@ -1,0 +1,5 @@
+你实现的配置分层合并模块在第2轮修复后还存在一些遗留问题：
+1. _validate_type_compatibility 方法中存在一处 None 值的早期返回逻辑，当低层为容器类型而高层为 None 时，整个子配置被静默覆盖而不触发 ConfigTypeConflictError。None 作为特殊值参与了配置覆盖但未被纳入类型冲突检测的范围。需要审视 None 在类型冲突体系中的定位，确保它与容器类型的互斥行为有明确的设计和处理。
+2. 第2轮新增的 6 个类型冲突测试仅覆盖了 int 和 str 两种基础类型与容器的组合，遗漏了 float、bool 等常见 Python 基础类型与 dict 或 list 的冲突验证，测试回归保护不完整。需要补充这些遗漏的类型冲突测试。
+3. test_three_layer_type_conflict_env_override 在第2轮修复中被不必要地修改了测试数据，从三层 dict-vs-list 冲突改为 int-vs-list 冲突，损失了原本的三层嵌套冲突覆盖。需要恢复该测试的原始数据，或者增加一个等效的三层冲突测试用例。
+4. 修复上述问题后运行 poetry run pytest tests/config_merge/ -v，确保所有测试通过。

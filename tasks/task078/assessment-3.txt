@@ -1,0 +1,7 @@
+产物不满意：
+1. models.py 中 `CalendarConfig.__post_init__` 恢复了冲突日期校验（检查 `self.holidays & self.workdays`），work_calendar.py 中 `set_holidays` 和 `set_workdays` 也恢复了冲突检测，这在代码层面正确还原了业务约束。但测试文件的重新设计中，`test_workday_priority_over_holiday` 被重命名为 `test_workday_priority_over_weekend` 并将测试场景从"同一日期既是节假日又是调休日时调休日优先"改为了"将周末设为调休日后 is_workday 返回 True"。这两个测试验证的是不同层面的行为，原测试验证的是冲突场景下的优先级裁决逻辑，新测试验证的是调休日配置的基础功能。提示词要求"重新设计测试使其在不修改业务约束的前提下验证调休日优先"，但修改后的测试并未验证 `is_workday` 方法内部对调休日的优先判断逻辑（即先查 workdays 再查 holidays 的检查顺序），而是退化为验证调休日的基本功能。应该补充一个独立测试来验证：当同日期的日期先被设为节假日（该日期不是调休日），单独调用 is_workday 返回 False；而当同一日期被设为调休日（不是节假日），is_workday 返回 True。这两个独立测试共同证明调休日和节假日各自的语义均正确实现，优先级由 API 的设计（不能同时设置）来保证。
+2. conftest.py 中删除了三个未使用的 fixture（`make_calendar_with_holidays`、`make_calendar_with_workdays`、`make_calendar_with_custom_schedule`），同时保留了 `make_default_calendar` 和 `make_spring_festival_calendar`。这完成了提示词要求的"彻底完成统一"，但删除操作改变了测试基础设施，如果未来有新的测试文件需要使用这些已删除的 fixture，将被迫重新编写等价逻辑。正确做法是确认整个 tests/work_calendar/ 目录下确实无任何引用后再删除。
+
+过程不满意：
+1. 模型第一次调用 `todo_write` 时返回了失败状态（0 items updated），未检查失败原因就立即再次调用并成功创建了 6 项任务。这表明模型在工具调用异常时未进行原因分析，只是盲目重试。正确做法是在 todo_write 失败后读取返回的错误信息，确认是参数格式问题还是其他原因，再针对性修复后重试。
+2. 模型在整个过程中多次交替读取同一文件的不同部分和编辑不同位置，例如 test_work_calendar.py 被反复查看和编辑了至少 4 轮。这种零散的操作模式表明缺乏整体规划，应该先完整阅读所有三个需要修改的测试方法，设计好每个方法的新测试数据和断言逻辑，再一次性完成所有修改，而不是改一点读一点反复调整。

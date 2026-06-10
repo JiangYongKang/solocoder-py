@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, time
 
 import pytest
 
@@ -14,39 +14,6 @@ from solocoder_py.work_calendar import (
 def make_default_calendar():
     def _make() -> WorkCalendar:
         return WorkCalendar()
-    return _make
-
-
-@pytest.fixture
-def make_calendar_with_holidays():
-    def _make(holidays: list[date]) -> WorkCalendar:
-        config = CalendarConfig(holidays=frozenset(holidays))
-        return WorkCalendar(config=config)
-    return _make
-
-
-@pytest.fixture
-def make_calendar_with_workdays():
-    def _make(workdays: list[date]) -> WorkCalendar:
-        config = CalendarConfig(workdays=frozenset(workdays))
-        return WorkCalendar(config=config)
-    return _make
-
-
-@pytest.fixture
-def make_calendar_with_custom_schedule():
-    def _make(
-        morning_start: int = 9,
-        morning_end: int = 12,
-        afternoon_start: int = 13,
-        afternoon_end: int = 18,
-    ) -> WorkCalendar:
-        schedule = WorkDaySchedule(
-            morning=WorkTimeRange(time(morning_start, 0), time(morning_end, 0)),
-            afternoon=WorkTimeRange(time(afternoon_start, 0), time(afternoon_end, 0)),
-        )
-        config = CalendarConfig(work_schedule=schedule)
-        return WorkCalendar(config=config)
     return _make
 
 

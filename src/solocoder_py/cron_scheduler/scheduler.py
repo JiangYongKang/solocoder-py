@@ -202,9 +202,30 @@ class CronScheduler:
                 return dt.replace(day=new_day, hour=min_hour, minute=min_minute)
             return self._advance_month(dt)
 
-        if dt.day >= days_in_month:
+        next_dom = dom_field.next_value(dt.day + 1)
+        dom_day = next_dom if (next_dom is not None and next_dom <= days_in_month) else None
+
+        cron_dow = self._python_weekday_to_cron_dow(dt.weekday())
+        next_dow_val = dow_field.next_value(cron_dow + 1)
+        if next_dow_val is None:
+            next_dow_val = dow_field.sorted_values()[0]
+        days_ahead = (next_dow_val - cron_dow) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        dow_day = dt.day + days_ahead
+        if dow_day > days_in_month:
+            dow_day = None
+
+        if dom_day is not None and dow_day is not None:
+            best_day = min(dom_day, dow_day)
+        elif dom_day is not None:
+            best_day = dom_day
+        elif dow_day is not None:
+            best_day = dow_day
+        else:
             return self._advance_month(dt)
-        return dt.replace(day=dt.day + 1, hour=min_hour, minute=min_minute)
+
+        return dt.replace(day=best_day, hour=min_hour, minute=min_minute)
 
     def _advance_hour(self, dt: datetime) -> datetime:
         next_h = self._expression.hour.next_value(dt.hour + 1)

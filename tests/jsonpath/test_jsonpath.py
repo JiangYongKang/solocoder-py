@@ -164,25 +164,26 @@ class TestWildcardSelection:
     def test_wildcard_on_object(self):
         data = {"a": 1, "b": 2, "c": 3}
         result = jsonpath(data, "$.*")
-        assert result == [1, 2, 3]
+        expected = list(data.values())
+        assert result == expected
 
     def test_wildcard_on_array(self):
         data = {"items": [10, 20, 30]}
         result = jsonpath(data, "$.items[*]")
-        assert result == [10, 20, 30]
+        expected = list(data["items"])
+        assert result == expected
 
     def test_wildcard_on_nested_object(self):
+        bicycle = _SAMPLE_DATA["store"]["bicycle"]
         result = jsonpath(_SAMPLE_DATA, "$.store.bicycle.*")
-        assert result == ["red", 19.95]
+        expected = list(bicycle.values())
+        assert result == expected
 
     def test_wildcard_on_books_array(self):
+        books = _SAMPLE_DATA["store"]["book"]
         result = jsonpath(_SAMPLE_DATA, "$.store.book[*].author")
-        assert result == [
-            "Nigel Rees",
-            "Evelyn Waugh",
-            "Herman Melville",
-            "J.R.R. Tolkien",
-        ]
+        expected = [book["author"] for book in books]
+        assert result == expected
 
     def test_wildcard_on_empty_object(self):
         result = jsonpath({}, "$.*")
@@ -195,28 +196,36 @@ class TestWildcardSelection:
     def test_wildcard_preserves_document_order(self):
         data = {"x": 1, "a": 2, "m": 3}
         result = jsonpath(data, "$.*")
-        assert result == [1, 2, 3]
+        expected = list(data.values())
+        assert result == expected
 
     def test_double_wildcard(self):
         data = {"store": {"a": 1, "b": 2}}
         result = jsonpath(data, "$.store.*")
-        assert result == [1, 2]
+        expected = list(data["store"].values())
+        assert result == expected
 
     def test_wildcard_on_array_of_objects(self):
         data = {"items": [{"id": 1}, {"id": 2}, {"id": 3}]}
         result = jsonpath(data, "$.items[*].id")
-        assert result == [1, 2, 3]
+        expected = [item["id"] for item in data["items"]]
+        assert result == expected
 
 
 class TestRecursiveDescent:
     def test_recursive_search_simple(self):
         data = {"a": {"b": {"c": "found"}}, "c": "top"}
         result = jsonpath(data, "$..c")
-        assert result == ["top", "found"]
+        expected = ["top", "found"]
+        assert result == expected
 
     def test_recursive_search_all_prices(self):
+        store = _SAMPLE_DATA["store"]
+        book_prices = [book["price"] for book in store["book"]]
+        bicycle_price = store["bicycle"]["price"]
         result = jsonpath(_SAMPLE_DATA, "$..price")
-        assert result == [8.95, 12.99, 8.99, 22.99, 19.95]
+        expected = book_prices + [bicycle_price]
+        assert result == expected
 
     def test_recursive_search_no_match(self):
         result = jsonpath({"a": 1, "b": 2}, "$..nonexistent")
@@ -225,17 +234,20 @@ class TestRecursiveDescent:
     def test_recursive_search_in_flat_object(self):
         data = {"x": 1, "y": 2}
         result = jsonpath(data, "$..x")
-        assert result == [1]
+        expected = [data["x"]]
+        assert result == expected
 
     def test_recursive_search_array_values(self):
         data = {"items": [{"name": "a"}, {"name": "b"}]}
         result = jsonpath(data, "$..name")
-        assert result == ["a", "b"]
+        expected = [item["name"] for item in data["items"]]
+        assert result == expected
 
     def test_recursive_search_deeply_nested(self):
         data = {"a": {"b": {"c": {"d": {"target": "deep"}}}}}
         result = jsonpath(data, "$..target")
-        assert result == ["deep"]
+        expected = ["deep"]
+        assert result == expected
 
     def test_recursive_search_multiple_occurrences(self):
         data = {
@@ -248,7 +260,8 @@ class TestRecursiveDescent:
             },
         }
         result = jsonpath(data, "$..x")
-        assert result == ["level1", "level2", "level3"]
+        expected = ["level1", "level2", "level3"]
+        assert result == expected
 
     def test_recursive_search_across_arrays_and_objects(self):
         data = {
@@ -259,7 +272,8 @@ class TestRecursiveDescent:
             "label": "root",
         }
         result = jsonpath(data, "$..label")
-        assert result == ["root", "a", "b"]
+        expected = ["root", "a", "b"]
+        assert result == expected
 
     def test_recursive_search_on_empty_data(self):
         result = jsonpath({}, "$..anything")
@@ -274,7 +288,7 @@ class TestMultiResultReturn:
     def test_wildcard_returns_multiple(self):
         data = {"a": 1, "b": 2, "c": 3}
         result = jsonpath(data, "$.*")
-        assert len(result) == 3
+        assert len(result) == len(data)
 
     def test_recursive_returns_multiple(self):
         data = {"x": 1, "child": {"x": 2}}
@@ -289,12 +303,14 @@ class TestMultiResultReturn:
     def test_order_preserved_for_array_wildcard(self):
         data = {"items": [3, 1, 4, 1, 5]}
         result = jsonpath(data, "$.items[*]")
-        assert result == [3, 1, 4, 1, 5]
+        expected = list(data["items"])
+        assert result == expected
 
     def test_order_preserved_for_recursive(self):
         data = {"val": "first", "nested": {"val": "second", "deep": {"val": "third"}}}
         result = jsonpath(data, "$..val")
-        assert result == ["first", "second", "third"]
+        expected = ["first", "second", "third"]
+        assert result == expected
 
 
 class TestEdgeCases:
@@ -376,6 +392,18 @@ class TestInvalidPathSyntax:
         with pytest.raises(InvalidPathError, match="Unexpected character"):
             jsonpath({"name": "Alice"}, "$name")
 
+    def test_bare_field_name_after_index_raises(self):
+        with pytest.raises(InvalidPathError, match="Unexpected character"):
+            jsonpath({"items": [{"name": "a"}]}, "$.items[0]name")
+
+    def test_bare_field_name_after_bracket_field_raises(self):
+        with pytest.raises(InvalidPathError, match="Unexpected character"):
+            jsonpath({"a": {"b": 1}}, "$['a']['b']extra")
+
+    def test_quote_without_bracket_raises(self):
+        with pytest.raises(InvalidPathError, match="Unexpected character"):
+            jsonpath({"a": 1}, "$.a'field'")
+
 
 class TestJSONPathQueryClass:
     def test_query_reuse(self):
@@ -394,11 +422,14 @@ class TestComplexPaths:
     def test_bracket_field_then_index(self):
         data = {"items": {"nested": [10, 20]}}
         result = jsonpath(data, "$['items']['nested'][0]")
-        assert result == [10]
+        expected = [data["items"]["nested"][0]]
+        assert result == expected
 
     def test_recursive_then_index(self):
+        books = _SAMPLE_DATA["store"]["book"]
         result = jsonpath(_SAMPLE_DATA, "$..book[2].title")
-        assert result == ["Moby Dick"]
+        expected = [books[2]["title"]]
+        assert result == expected
 
     def test_wildcard_then_recursive(self):
         data = {
@@ -406,29 +437,35 @@ class TestComplexPaths:
             "group2": {"tag": "g2"},
         }
         result = jsonpath(data, "$.*..tag")
-        assert result == ["g1", "g2"]
+        expected = [data["group1"]["tag"], data["group2"]["tag"]]
+        assert result == expected
 
     def test_index_then_wildcard(self):
         data = {"matrix": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}
         result = jsonpath(data, "$.matrix[0].*")
-        assert result == [1, 2]
+        expected = list(data["matrix"][0].values())
+        assert result == expected
 
     def test_recursive_on_top_level_field(self):
         data = {"name": "root", "child": {"name": "inner"}}
         result = jsonpath(data, "$..name")
-        assert result == ["root", "inner"]
+        expected = [data["name"], data["child"]["name"]]
+        assert result == expected
 
     def test_field_with_numeric_string_value(self):
         data = {"version": "1.0"}
         result = jsonpath(data, "$.version")
-        assert result == ["1.0"]
+        expected = [data["version"]]
+        assert result == expected
 
     def test_bracket_field_with_special_chars(self):
         data = {"key with spaces": 42}
         result = jsonpath(data, "$['key with spaces']")
-        assert result == [42]
+        expected = [data["key with spaces"]]
+        assert result == expected
 
     def test_bracket_field_with_dot(self):
         data = {"a.b": "dotted"}
         result = jsonpath(data, "$['a.b']")
-        assert result == ["dotted"]
+        expected = [data["a.b"]]
+        assert result == expected

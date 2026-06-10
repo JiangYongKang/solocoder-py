@@ -5,11 +5,7 @@ class TimeoutManagerError(Exception):
     pass
 
 
-class ContextCancelledError(TimeoutManagerError):
-    pass
-
-
-class ContextAlreadyCancelledError(TimeoutManagerError):
+class ContextTerminalStateError(TimeoutManagerError):
     pass
 
 

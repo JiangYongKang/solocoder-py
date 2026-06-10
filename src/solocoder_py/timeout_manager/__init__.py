@@ -1,8 +1,7 @@
 from .clock import Clock, ManualClock, SystemClock
 from .exceptions import (
-    ContextAlreadyCancelledError,
-    ContextCancelledError,
     ContextNotFoundError,
+    ContextTerminalStateError,
     InvalidCallbackError,
     InvalidDeadlineError,
     TimeoutManagerError,
@@ -12,9 +11,8 @@ from .timeout_manager import TimeoutContext, TimeoutManager
 
 __all__ = [
     "Clock",
-    "ContextAlreadyCancelledError",
-    "ContextCancelledError",
     "ContextNotFoundError",
+    "ContextTerminalStateError",
     "InvalidCallbackError",
     "InvalidDeadlineError",
     "ManualClock",

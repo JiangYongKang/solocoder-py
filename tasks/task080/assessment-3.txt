@@ -1,0 +1,5 @@
+产物不满意：
+1. test_timeout_manager.py 中的测试方法 test_context_already_cancelled_error_message 在异常类型已从 ContextAlreadyCancelledError 重命名为 ContextTerminalStateError 后，方法名仍保留 already_cancelled 这一旧异常名的痕迹，与当前模块的实际异常命名不一致。虽然不影响测试执行结果，但会给后续维护者造成混淆，使人误以为该测试仍在验证一个名为 ContextAlreadyCancelledError 的异常。应在重命名异常类型时同步更新关联测试的方法名，使其与新的语义保持一致。
+
+过程不满意：
+1. 模型在收到提示词后第一件事就是通过 todo_write 创建了 5 项子任务计划，此时尚未阅读 exceptions.py、timeout_manager.py 或测试文件中的任何代码。正确做法是先阅读所有受影响的文件，理解当前异常定义、抛出位置和引用关系，确认修改范围后再制定执行计划。不过模型后续的执行步骤较为合理：先用 search_by_regex 定位所有 ContextAlreadyCancelledError 和 ContextCancelledError 的引用点，然后逐文件替换，并在修改 add_callback 时主动发现了该方法只检查 is_cancelled 而未检查 is_expired 的缺陷，顺手补齐了终态检查的覆盖范围，这个主动补全行为是加分项。

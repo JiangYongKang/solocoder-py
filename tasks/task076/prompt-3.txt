@@ -1,0 +1,3 @@
+你实现的 Cron 表达式调度模块在第2轮修复后还存在一处遗留问题：
+1. scheduler 的 _advance_day 方法中，当 minute 字段的 DOM 和 DOW 均非通配符时（即 OR 组合场景），目前仍采用逐天递增的线性扫描方式，未利用 next_value 替代。提示词明确要求在推进方法中利用 next_value 替代逐值扫描，该分支目前仍保留原有实现。需要对该分支也进行优化，利用已有的 next_value 方法实现跳转式推进。
+2. 修复上述问题后运行 poetry run pytest tests/cron_scheduler/ -v，确保所有测试通过。
