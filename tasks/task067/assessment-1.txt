@@ -1,0 +1,9 @@
+产物不满意：
+1. CountingBloomFilter 的 remove 方法抛出 ValueError 时报错消息字符串 `counter at index {idx} is already zero` 未使用 f-string 前缀，导致 `{idx}` 以字面文本出现在异常信息中，用户无法获知是哪个索引位置的计数器为零导致删除失败。测试仅匹配了前缀 `Cannot remove element` 未验证索引值被替换进消息体，因此该 bug 未被暴露。根因是字符串前漏写了 f 关键字，应改为 f-string 格式。
+2. BloomFilter 和 CountingBloomFilter 两个类中的 `_hash_indices`、`_serialize`、`_fnv1a_64` 三个方法代码完全重复，分别是 9 行、8 行、5 行的拷贝粘贴。未来更换哈希算法或序列化逻辑时必须同步修改两处，容易遗漏导致两个变体行为不一致。根因是未将共享的哈希工具逻辑抽取出来，应提取到两个类外部的模块级别，或让 CountingBloomFilter 继承 BloomFilter 并仅覆盖差异部分。
+3. BloomFilter 的 union 方法中合并后 count 设为 `max(self._count, other._count)`，intersection 设为 `min(self._count, other._count)`，这两个值仅是粗略的下界或上界估计。当两个过滤器元素集合完全不重叠时，并集 count 应接近两者之和，但 `max` 仅取最大值，例如各含 5 个不相交元素的过滤器并集 count 显示为 5 而非约 10。根因是未考虑集合重叠度对 count 的影响，应使用 `self._count + other._count` 作为上界并在文档中标注此值为近似值。
+
+过程不满意：
+1. 模型运行测试发现 test_intersection_empty 失败（83/84 通过）后，未分析失败堆栈就直接将测试中 m 从 1000 改为 100000 来规避哈希碰撞。该测试失败的根因是布隆过滤器交集操作（位与）的内在局限——当两个不同元素在较小过滤器中发生哈希位碰撞时，AND 后碰撞位仍为 1，导致元素被误判存在于交集中。模型增大 m 掩盖了问题本质，正确做法是分析根因后在 README 中说明交集操作的真假阳性继承特性，或设计不依赖低碰撞概率的测试方案。
+2. 模型在查看项目结构后立即创建 TodoList 并一次性写完所有实现代码、测试和 README，全部文件完成后才运行测试。发现 1 个失败后，模型通过修改测试参数使其通过而非修复代码。这种先全写完再测试的方式让模型在遇到失败时选择了改测试而非修代码的错误补救路径。正确做法是按模块粒度分步实现与测试，以失败用例驱动修复。
+3. 模型在思考过程中对 test_intersection_empty 失败的根因分析有误，COT 中描述为 "The issue is that the count approximation doesn't match the actual bits"，但实际测试失败与 count 属性无关，失败是因为位数组 AND 运算后元素的哈希位在交集中仍全部为 1。模型将问题错误归因于 count 字段的近似计算，导致采用增大 m 降低碰撞概率的修补方案，而未意识到应记录并交集操作的概率性限制。正确做法应先确认是哈希碰撞问题还是 count 计算问题再针对性修复。
