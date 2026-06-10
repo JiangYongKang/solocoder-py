@@ -6,8 +6,9 @@
 
 1. **配置版本化发布**：每次发布生成唯一版本号并保存完整配置快照，支持查询当前生效版本与历史版本列表。
 2. **配置热更新生效**：新版本发布后无需重启服务即可生效，读取配置时始终返回当前已生效版本的数据。
-3. **变更监听通知**：允许订阅配置变更事件，发布成功后向监听器推送版本号、变更键和值等信息。
-4. **支持回滚到历史版本**：可按指定版本执行回滚，回滚后该历史版本重新成为当前生效版本，并触发一次变更通知。
+3. **变更监听通知**：允许订阅配置变更事件，每次发布或回滚后都会向监听器推送事件（即使配置内容无键级差异），事件包含版本号、变更键和值等信息。
+4. **支持回滚到历史版本**：可按指定版本执行回滚，回滚后被指定的历史版本**直接重新成为当前生效版本**（不创建新版本），并触发一次变更通知。
+5. **配置快照隔离**：所有读取接口（`get`、`get_all`、`get_current_version`、`get_version`、`get_history`）均返回深拷贝，调用方无法通过修改返回值污染内部快照。
 
 ## 核心类职责
 
@@ -27,7 +28,7 @@
 |------|------|
 | `ChangeType` | 变更类型枚举：`ADDED`（新增）、`MODIFIED`（修改）、`REMOVED`（删除） |
 | `ConfigChange` | 单条配置变更记录：记录 key、变更类型、旧值、新值 |
-| `ChangeEvent` | 变更事件：记录版本号、时间戳、变更列表、是否为回滚操作 |
+| `ChangeEvent` | 变更事件：记录版本号、时间戳、变更列表（可能为空元组）、是否为回滚操作 |
 | `ConfigVersion` | 配置版本快照：记录版本号、发布时间、完整配置数据、是否为回滚版本；提供 `get()`、`has_key()`、`keys()` 等便捷方法 |
 | `ConfigListener` | 监听器回调类型别名：`Callable[[ChangeEvent], None]` |
 
@@ -41,7 +42,9 @@
 
 ### 版本号生成
 
-版本号采用简单的递增格式 `v1, v2, v3, ...`，每次调用 `publish()` 或 `rollback()` 都会生成新的版本号。版本号计数器在 `clear()` 后重置为 1。
+版本号采用简单的递增格式 `v1, v2, v3, ...`，**仅在每次调用 `publish()` 时生成**。版本号计数器在 `clear()` 后重置为 1。
+
+> **注意**：`rollback()` 不会生成新的版本号，而是直接切换到已存在的历史版本。
 
 ### 发布流程
 
@@ -63,7 +66,8 @@
   设置为当前生效版本
         │
         ▼
-  如有变更，通知所有监听器
+  通知所有监听器（无论是否有差异）
+  事件中 changes 为空元组表示无键级变化
   ┌───────────────────────┐
   │ 监听器异常会汇总抛出    │
   │ ListenerError          │
@@ -83,9 +87,22 @@
 
 变更列表按 key 字典序排序。
 
+### 监听事件语义
+
+**每次 `publish()` 或 `rollback()` 成功执行后，都会触发一次监听器通知**，无论配置内容是否发生键级变化。这样调用方可以可靠地感知所有发布和回滚动作：
+
+- `event.version`：本次发布的新版本号，或回滚目标的版本号
+- `event.is_rollback`：`True` 表示事件由回滚触发，`False` 表示由发布触发
+- `event.changes`：键级差异列表（元组），**无差异时为空元组 `()`**，长度 ≥ 1 时按 key 字典序排序
+
+典型场景：
+- 发布空配置：`changes = ()`
+- 发布与当前完全相同的配置：`changes = ()`
+- 回滚到当前版本：`changes = ()`，`is_rollback = True`
+
 ### 回滚机制
 
-回滚不是简单地切换"当前版本指针"，而是**创建一个全新的版本**：
+回滚**直接切换"当前版本指针"**，不创建新版本：
 
 ```
 调用 rollback(target_version)
@@ -93,38 +110,53 @@
         ▼
   检查 target_version 是否存在
         │
-        ├── 不存在 → 抛出 VersionNotFoundError
-        │
-        └── 存在且 == 当前版本 → 直接返回当前版本（NOOP）
+        └── 不存在 → 抛出 VersionNotFoundError
         │
         ▼
-  以 target_version.data 为基础
   计算与当前生效版本的差异
+  （用于通知监听器）
         │
         ▼
-  生成新版本号（如 v4）
-  is_rollback = True
+  将 _current_version 设置为 target_version
         │
         ▼
-  保存新版本、设置为当前生效
-        │
-        ▼
-  如有变更，通知监听器（事件 is_rollback=True）
+  通知所有监听器（无论是否有差异）
+  事件 is_rollback = True
+  event.version = target_version
 ```
 
-**设计理由**：回滚本身也是一次有意义的"发布"，应该在历史记录中留下痕迹。这样可以审计"谁在什么时候回滚到了哪个版本"，并且回滚操作本身也支持被再次回滚。
+**设计理由**：回滚的本质是"让某个历史版本重新生效"，版本号应该保持为该历史版本的原始标识，便于追溯。`version_count()` 和 `get_history()` 仅记录通过 `publish()` 创建的版本。
 
-## 热更新与线程安全
+## 热更新与快照隔离
 
 ### 热更新生效
 
 配置读取始终通过 `_current_version` 指针查找当前生效版本：
 
-- `get(key, default)`：读取单个配置项
-- `get_all()`：读取完整配置字典（深拷贝，防止外部修改内部状态）
+- `get(key, default)`：读取单个配置项（深拷贝）
+- `get_all()`：读取完整配置字典（深拷贝）
 - `get_current_version()`：获取当前生效的 `ConfigVersion` 对象（深拷贝）
+- `get_version(version)`：获取指定历史版本（深拷贝）
+- `get_history()`：获取完整版本历史（每个均为深拷贝）
 
-每次发布或回滚成功后，`_current_version` 被原子地更新为新版本号，后续读取立即返回新数据。
+每次发布或回滚成功后，`_current_version` 被原子地更新，后续读取立即返回生效版本的数据。
+
+### 快照隔离（深拷贝）
+
+为防止调用方绕过发布流程直接修改内部配置，所有对外返回可变对象的接口均执行 `copy.deepcopy()`：
+
+```python
+manager.publish({"nested": {"inner": [1, 2, 3]}})
+
+val = manager.get("nested")
+val["inner"].append(999)  # 修改返回值
+val["new"] = "injected"
+
+# 内部快照不受影响
+manager.get("nested")  # {"inner": [1, 2, 3]}
+```
+
+同样的保护也适用于 `get_all()`、`get_current_version()`、`get_version()` 和 `get_history()` 的返回值。
 
 ### 线程安全
 
@@ -207,7 +239,10 @@ manager = ConfigHotReloadManager()
 
 # 定义监听器
 def on_config_change(event: ChangeEvent):
-    print(f"Version {event.version} released (rollback={event.is_rollback})")
+    action = "rollback" if event.is_rollback else "publish"
+    print(f"[{action}] Version {event.version}")
+    if len(event.changes) == 0:
+        print("  (no key-level changes)")
     for change in event.changes:
         if change.change_type == ChangeType.ADDED:
             print(f"  + {change.key} = {change.new_value}")
@@ -220,12 +255,16 @@ def on_config_change(event: ChangeEvent):
 listener_id = manager.subscribe(on_config_change)
 
 manager.publish({"a": 1, "b": 2})
-# Version v1 released (rollback=False)
+# [publish] Version v1
 #   + a = 1
 #   + b = 2
 
+manager.publish({"a": 1, "b": 2})  # 内容相同，仍触发事件
+# [publish] Version v2
+#   (no key-level changes)
+
 manager.publish({"a": 10, "c": 3})
-# Version v2 released (rollback=False)
+# [publish] Version v3
 #   ~ a: 1 -> 10
 #   - b (was 2)
 #   + c = 3
@@ -241,23 +280,54 @@ from solocoder_py.config_hot_reload import ConfigHotReloadManager
 
 manager = ConfigHotReloadManager()
 
-manager.publish({"mode": "dev", "debug": True})   # v1
+manager.publish({"mode": "dev", "debug": True})     # v1
 manager.publish({"mode": "staging", "debug": True})  # v2
 manager.publish({"mode": "prod", "debug": False})    # v3
 
 print(manager.get("mode"))  # prod
+print(manager.version_count())  # 3
 
-# 回滚到 v1
+# 回滚到 v1（不创建新版本）
 rolled = manager.rollback("v1")
-print(rolled.version)       # v4（新的版本号）
-print(rolled.is_rollback)   # True
+print(rolled.version)       # v1（原始版本号）
 print(rolled.data)          # {"mode": "dev", "debug": True}
 
 print(manager.get("mode"))  # dev
+print(manager.version_count())  # 3（历史版本数不变）
 
-# 回滚到当前版本是 NOOP
-current = manager.rollback("v4")
-print(current.version)  # v4（没有新版本）
+# 再次回滚到 v2
+manager.rollback("v2")
+print(manager.get("mode"))  # staging
+print(manager.get_current_version().version)  # v2
+
+# 回滚到当前版本：不改变状态，但仍触发通知事件
+current = manager.rollback("v2")
+print(current.version)  # v2
+```
+
+### 配置快照隔离
+
+```python
+from solocoder_py.config_hot_reload import ConfigHotReloadManager
+
+manager = ConfigHotReloadManager()
+manager.publish({
+    "db": {"host": "localhost", "creds": {"user": "admin"}},
+    "features": ["auth"],
+})
+
+# get 返回深拷贝
+db_cfg = manager.get("db")
+db_cfg["host"] = "evil.com"
+db_cfg["creds"]["user"] = "hacker"
+
+print(manager.get("db"))
+# {"host": "localhost", "creds": {"user": "admin"}}
+
+# get_all 返回深拷贝
+all_cfg = manager.get_all()
+all_cfg["features"].append("billing")
+print(manager.get("features"))  # ["auth"]
 ```
 
 ### 异常处理
@@ -305,5 +375,5 @@ except ListenerError as e:
 ## 运行测试
 
 ```bash
-pytest tests/config_hot_reload/ -v
+poetry run pytest tests/config_hot_reload/ -v
 ```

@@ -30,9 +30,11 @@
 ### ChannelConfig
 渠道投递配置数据类，构造时自动校验参数合法性。
 
+> **重要约束**：`ChannelConfig.channel_name` 必须与该配置所注册到的渠道名称完全一致。在调用 `register_channel()` 或 `set_channel_config()` 时，引擎会校验二者是否匹配，不匹配将抛出 `InvalidChannelConfigError`，避免策略归属混乱。
+
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `channel_name` | `str` | - | 渠道名称 |
+| `channel_name` | `str` | - | 渠道名称（必须与注册名一致） |
 | `timeout` | `float` | `5.0` | 单次投递超时时间（秒），必须为正 |
 | `max_attempts` | `int` | `3` | 最大尝试次数，必须 ≥ 1 |
 | `backoff_type` | `BackoffType` | `EXPONENTIAL` | 退避类型 |
@@ -106,8 +108,8 @@
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `channels` | `dict[str, NotificationChannel] \| None` | `None` | 初始渠道映射 |
-| `channel_configs` | `dict[str, ChannelConfig] \| None` | `None` | 初始配置映射 |
-| `max_workers` | `int` | `10` | 线程池最大线程数 |
+| `channel_configs` | `dict[str, ChannelConfig] \| None` | `None` | 初始配置映射（配置名必须与渠道名一致） |
+| `max_workers` | `int` | `10` | 保留字段（不再限制实际并发度，见下方并行投递说明） |
 | `time_provider` | `Callable[[], float] \| None` | `time.monotonic` | 时间来源，可注入以方便测试 |
 | `sleeper` | `Callable[[float], None] \| None` | `time.sleep` | 等待函数，可注入以方便测试 |
 
@@ -123,17 +125,18 @@
 ### 并行投递
 调用 `fanout()` 时，引擎会：
 1. 校验目标渠道均已注册，否则抛出 `UnknownChannelError`
-2. 创建 `ThreadPoolExecutor`，线程数 = `min(渠道数, max_workers)`
-3. 对每个目标渠道提交独立任务 `_deliver_with_retries()`
-4. 等待所有任务完成（各渠道间互不阻塞）
+2. 为**每个目标渠道**分配独立的后台线程（daemon 线程），各渠道同时启动投递流程
+3. **不依赖线程池队列**：无论 `max_workers` 配置多少，所有渠道均并行启动，不会因 worker 数不足而排队，确保各渠道独立执行、互不阻塞
+4. 等待所有渠道线程完成（通过 `threading.Thread.join()`），收集各渠道结果
 
-### 单渠道投递与重试
-每个渠道在线程内独立执行循环：
+### 单渠道投递、超时与重试
+每个渠道在自己的线程内独立执行投递循环：
 1. 按配置计算本次尝试前的退避延迟（首次为 0），通过 `sleeper` 等待
-2. 在独立子线程中调用 `channel.deliver()`，使用 `Future.result(timeout=...)` 实现超时控制
-3. 成功则立即结束，状态为 `SUCCESS`
-4. 失败时记录异常，若仍有剩余尝试次数则继续下一轮
-5. 超过最大次数后根据最后一次异常类型标记 `FAILED` 或 `TIMEOUT`
+2. 为单次投递再启动一个独立子线程执行 `channel.deliver()`，使用 `threading.Thread.join(timeout=timeout)` 实现超时控制
+   - **超时语义**：若投递在 `timeout` 秒内未返回，立即判定为超时（`ChannelTimeoutError`），不再等待底层投递线程结束；底层线程会作为 daemon 线程在后台继续运行直至自然结束，不会阻塞结果返回
+3. 投递成功则立即结束，状态为 `SUCCESS`
+4. 失败（含超时）时记录异常，若仍有剩余尝试次数则按退避策略继续下一轮
+5. 超过最大次数后，根据最后一次异常类型标记 `FAILED`（普通异常）或 `TIMEOUT`（超时异常）
 
 ### 结果聚合
 所有渠道任务完成后：

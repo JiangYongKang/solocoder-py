@@ -29,9 +29,18 @@ class TrafficStats:
     total_requests: int = 0
     baseline_requests: int = 0
     candidate_requests: int = 0
+    baseline_errors: int = 0
     candidate_errors: int = 0
+    baseline_total_latency_ms: float = 0.0
     candidate_total_latency_ms: float = 0.0
+    baseline_latency_samples: list[float] = field(default_factory=list)
     candidate_latency_samples: list[float] = field(default_factory=list)
+
+    @property
+    def baseline_error_rate(self) -> float:
+        if self.baseline_requests == 0:
+            return 0.0
+        return self.baseline_errors / self.baseline_requests
 
     @property
     def candidate_error_rate(self) -> float:
@@ -40,20 +49,34 @@ class TrafficStats:
         return self.candidate_errors / self.candidate_requests
 
     @property
+    def baseline_avg_latency_ms(self) -> float:
+        if self.baseline_requests == 0:
+            return 0.0
+        return self.baseline_total_latency_ms / self.baseline_requests
+
+    @property
     def candidate_avg_latency_ms(self) -> float:
         if self.candidate_requests == 0:
             return 0.0
         return self.candidate_total_latency_ms / self.candidate_requests
 
-    @property
-    def candidate_p99_latency_ms(self) -> float:
-        if not self.candidate_latency_samples:
+    @staticmethod
+    def _p99(samples: list[float]) -> float:
+        if not samples:
             return 0.0
-        sorted_samples = sorted(self.candidate_latency_samples)
+        sorted_samples = sorted(samples)
         p99_index = int(len(sorted_samples) * 0.99)
         if p99_index >= len(sorted_samples):
             p99_index = len(sorted_samples) - 1
         return sorted_samples[p99_index]
+
+    @property
+    def baseline_p99_latency_ms(self) -> float:
+        return self._p99(self.baseline_latency_samples)
+
+    @property
+    def candidate_p99_latency_ms(self) -> float:
+        return self._p99(self.candidate_latency_samples)
 
 
 @dataclass

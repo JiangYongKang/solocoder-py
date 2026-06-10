@@ -5,6 +5,7 @@ import json
 import pytest
 
 from solocoder_py.webhook_delivery import (
+    DeliveryNotReadyError,
     DeliveryStatus,
     InMemoryTransport,
     ManualClock,
@@ -250,7 +251,7 @@ class TestFailedDeliveryAndRetry:
 
 class TestDeadLetterQueue:
     def test_exceeds_max_retries_moves_to_dlq(self, setup):
-        _, transport, _, engine, target = setup
+        clock, transport, _, engine, target = setup
         transport.set_should_fail(True, 500, "Server Error")
 
         msg = engine.enqueue(target.id, "evt", {"data": 1})
@@ -258,6 +259,9 @@ class TestDeadLetterQueue:
         with pytest.raises(MaxRetriesExceededError) as exc_info:
             for _ in range(10):
                 engine.deliver(msg.id)
+                m = engine.get_message(msg.id)
+                if m is not None and m.next_delivery_at is not None:
+                    clock.set(m.next_delivery_at)
 
         assert exc_info.value.message_id == msg.id
         assert exc_info.value.retries == 4
@@ -459,3 +463,217 @@ class TestInMemoryTransport:
         transport.post("url2", {}, b"b")
         assert len(deliveries) == 1
         assert transport.delivery_count == 2
+
+
+class TestDeliveryTimeGating:
+    def test_pending_message_can_be_delivered_immediately(self, setup):
+        _, _, _, engine, target = setup
+        msg = engine.enqueue(target.id, "evt", {})
+        result = engine.deliver(msg.id)
+        assert result.status == DeliveryStatus.SUCCESS
+
+    def test_deliver_before_retry_window_raises_not_ready(self, setup):
+        clock, transport, _, engine, target = setup
+        transport.set_should_fail(True, 500, "Fail")
+
+        msg = engine.enqueue(target.id, "evt", {})
+        engine.deliver(msg.id)
+
+        with pytest.raises(DeliveryNotReadyError) as exc_info:
+            engine.deliver(msg.id)
+
+        assert exc_info.value.message_id == msg.id
+        assert exc_info.value.next_delivery_at > exc_info.value.current_time
+
+    def test_deliver_exactly_at_retry_window_succeeds(self, setup):
+        clock, transport, _, engine, target = setup
+        transport.set_should_fail(True, 500, "Fail")
+
+        msg = engine.enqueue(target.id, "evt", {})
+        engine.deliver(msg.id)
+
+        m = engine.get_message(msg.id)
+        retry_at = m.next_delivery_at
+
+        clock.set(retry_at)
+
+        m2 = engine.deliver(msg.id)
+        assert m2.status == DeliveryStatus.FAILED
+        assert m2.delivery_attempts == 2
+
+    def test_deliver_after_retry_window_succeeds(self, setup):
+        clock, transport, _, engine, target = setup
+        transport.set_should_fail(True, 500, "Fail")
+
+        msg = engine.enqueue(target.id, "evt", {})
+        engine.deliver(msg.id)
+
+        m = engine.get_message(msg.id)
+        clock.advance(m.next_delivery_at - clock.now() + 100.0)
+
+        m2 = engine.deliver(msg.id)
+        assert m2.status == DeliveryStatus.FAILED
+        assert m2.delivery_attempts == 2
+
+    def test_not_ready_error_contains_wait_time(self, setup):
+        clock, transport, _, engine, target = setup
+        transport.set_should_fail(True, 500, "Fail")
+
+        msg = engine.enqueue(target.id, "evt", {})
+        engine.deliver(msg.id)
+
+        with pytest.raises(DeliveryNotReadyError) as exc_info:
+            engine.deliver(msg.id)
+
+        assert "not ready" in str(exc_info.value).lower()
+        assert "next delivery available" in str(exc_info.value).lower()
+
+    def test_multiple_failures_enforce_each_retry_window(self, setup):
+        clock, transport, _, engine, target = setup
+        transport.set_should_fail(True, 500, "Fail")
+
+        msg = engine.enqueue(target.id, "evt", {})
+
+        for i in range(3):
+            engine.deliver(msg.id)
+            with pytest.raises(DeliveryNotReadyError):
+                engine.deliver(msg.id)
+            m = engine.get_message(msg.id)
+            clock.set(m.next_delivery_at)
+
+        with pytest.raises(MaxRetriesExceededError):
+            engine.deliver(msg.id)
+
+        assert engine.dead_letter_count == 1
+
+
+class TestMaxRetriesBoundary:
+    def test_max_retries_zero_single_attempt_then_dlq(self, setup):
+        _, transport, repository, engine = setup[:4]
+        target = repository.register(
+            url="https://zero.com",
+            signing_secret="s",
+            retry_strategy=RetryStrategy(max_retries=0),
+        )
+        transport.set_should_fail(True, 500, "Fail")
+
+        msg = engine.enqueue(target.id, "evt", {})
+        with pytest.raises(MaxRetriesExceededError) as exc_info:
+            engine.deliver(msg.id)
+
+        assert exc_info.value.retries == 1
+        assert engine.dead_letter_count == 1
+        dlq = engine.get_dead_letter_messages()[0]
+        assert dlq.failure_count == 1
+        assert len(dlq.delivery_history) == 1
+
+    def test_max_retries_one_two_attempts_then_dlq(self, setup):
+        clock, transport, repository, engine = setup[:4]
+        target = repository.register(
+            url="https://one.com",
+            signing_secret="s",
+            retry_strategy=RetryStrategy(
+                initial_delay=1.0,
+                backoff_multiplier=2.0,
+                max_delay=10.0,
+                max_retries=1,
+            ),
+        )
+        transport.set_should_fail(True, 500, "Fail")
+
+        msg = engine.enqueue(target.id, "evt", {})
+
+        engine.deliver(msg.id)
+        m = engine.get_message(msg.id)
+        assert m.delivery_attempts == 1
+        assert m.status == DeliveryStatus.FAILED
+
+        clock.advance(1.0)
+        with pytest.raises(MaxRetriesExceededError) as exc_info:
+            engine.deliver(msg.id)
+
+        assert exc_info.value.retries == 2
+        assert engine.dead_letter_count == 1
+        dlq = engine.get_dead_letter_messages()[0]
+        assert dlq.failure_count == 2
+        assert len(dlq.delivery_history) == 2
+
+    def test_max_retries_three_four_attempts_then_dlq(self, setup):
+        clock, transport, _, engine, target = setup
+        transport.set_should_fail(True, 500, "Fail")
+
+        msg = engine.enqueue(target.id, "evt", {})
+
+        engine.deliver(msg.id)
+        assert engine.get_message(msg.id).delivery_attempts == 1
+        clock.advance(1.0)
+
+        engine.deliver(msg.id)
+        assert engine.get_message(msg.id).delivery_attempts == 2
+        clock.advance(2.0)
+
+        engine.deliver(msg.id)
+        assert engine.get_message(msg.id).delivery_attempts == 3
+        clock.advance(4.0)
+
+        with pytest.raises(MaxRetriesExceededError) as exc_info:
+            engine.deliver(msg.id)
+
+        assert exc_info.value.retries == 4
+        assert engine.dead_letter_count == 1
+        dlq = engine.get_dead_letter_messages()[0]
+        assert dlq.failure_count == 4
+        assert len(dlq.delivery_history) == 4
+
+    def test_max_retries_boundary_final_attempt_succeeds_no_dlq(self, setup):
+        clock, transport, repository, engine = setup[:4]
+        target = repository.register(
+            url="https://boundary.com",
+            signing_secret="s",
+            retry_strategy=RetryStrategy(
+                initial_delay=1.0,
+                backoff_multiplier=2.0,
+                max_delay=10.0,
+                max_retries=2,
+            ),
+        )
+
+        call_count = [0]
+
+        def handler(url, headers, body):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                return 500, "Fail"
+            return 200, "OK"
+
+        transport.set_custom_handler(handler)
+
+        msg = engine.enqueue(target.id, "evt", {})
+
+        engine.deliver(msg.id)
+        clock.advance(1.0)
+
+        engine.deliver(msg.id)
+        clock.advance(2.0)
+
+        result = engine.deliver(msg.id)
+
+        assert result.status == DeliveryStatus.SUCCESS
+        assert result.delivery_attempts == 3
+        assert engine.dead_letter_count == 0
+        assert engine.pending_count == 0
+
+    def test_max_retries_zero_succeeds_on_first_attempt(self, setup):
+        _, transport, repository, engine = setup[:4]
+        target = repository.register(
+            url="https://zero-ok.com",
+            signing_secret="s",
+            retry_strategy=RetryStrategy(max_retries=0),
+        )
+
+        msg = engine.enqueue(target.id, "evt", {})
+        result = engine.deliver(msg.id)
+
+        assert result.status == DeliveryStatus.SUCCESS
+        assert result.delivery_attempts == 1
+        assert engine.dead_letter_count == 0

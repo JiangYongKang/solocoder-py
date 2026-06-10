@@ -37,16 +37,19 @@ class WeightedRandomStrategy(SelectionStrategy):
     def select(self, instances: List[Instance]) -> Optional[Instance]:
         if not instances:
             return None
-        weights = [inst.weight for inst in instances]
+        candidates = [inst for inst in instances if inst.weight > 0]
+        if not candidates:
+            return None
+        weights = [inst.weight for inst in candidates]
         total_weight = sum(weights)
         if total_weight <= 0:
             return None
         prefix = list(accumulate(weights))
         pick = self._rng.uniform(0, total_weight)
         idx = bisect_left(prefix, pick)
-        if idx >= len(instances):
-            idx = len(instances) - 1
-        return instances[idx]
+        if idx >= len(candidates):
+            idx = len(candidates) - 1
+        return candidates[idx]
 
 
 class LeastConnectionsStrategy(SelectionStrategy):

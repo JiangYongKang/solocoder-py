@@ -7,6 +7,7 @@ from .exceptions import (
     NotAssignedPartitionError,
     OffsetOutOfRangeError,
     OutOfOrderCommitError,
+    PartitionAlreadyAssignedError,
     PartitionNotFoundError,
     UnknownPartitionError,
 )
@@ -36,14 +37,25 @@ class OrderedPartitionConsumer:
         with self._lock:
             return set(self._state.assigned_partitions)
 
-    def assign_partition(self, partition_id: int) -> None:
+    def assign_partition(self, partition_id: int, initial_committed_offset: Optional[int] = None) -> None:
         if partition_id < 0 or partition_id >= self._topic.num_partitions:
             raise PartitionNotFoundError(
                 f"partition {partition_id} not found, valid range: [0, {self._topic.num_partitions})"
             )
         with self._lock:
+            if partition_id in self._state.assigned_partitions:
+                raise PartitionAlreadyAssignedError(
+                    f"partition {partition_id} is already assigned to consumer '{self._consumer_id}'"
+                )
             self._state.assigned_partitions.add(partition_id)
-            self._state.get_offset(partition_id)
+            offset = self._state.get_offset(partition_id)
+            if initial_committed_offset is not None:
+                if initial_committed_offset < -1:
+                    raise OffsetOutOfRangeError(
+                        f"initial_committed_offset must be >= -1, got {initial_committed_offset}"
+                    )
+                offset.committed_offset = initial_committed_offset
+                offset.last_pulled_offset = initial_committed_offset
             if partition_id not in self._state.in_flight_messages:
                 self._state.in_flight_messages[partition_id] = []
 
@@ -130,6 +142,12 @@ class OrderedPartitionConsumer:
                     f"partition {partition_id} is not assigned to consumer '{self._consumer_id}'"
                 )
             return self._state.get_offset(partition_id).committed_offset
+
+    def get_stored_committed_offset(self, partition_id: int) -> int:
+        with self._lock:
+            if partition_id in self._state.partition_offsets:
+                return self._state.partition_offsets[partition_id].committed_offset
+            return -1
 
     def get_in_flight_count(self, partition_id: int) -> int:
         with self._lock:

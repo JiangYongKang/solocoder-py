@@ -350,7 +350,7 @@ class TestChangeListener:
         assert change_types["b"] == ChangeType.REMOVED
         assert change_types["c"] == ChangeType.ADDED
 
-    def test_no_event_when_no_changes(self):
+    def test_event_fired_even_when_no_changes(self):
         manager = make_manager()
         events: List[ChangeEvent] = []
         manager.subscribe(lambda e: events.append(e))
@@ -358,7 +358,10 @@ class TestChangeListener:
         manager.publish({"a": 1})
         manager.publish({"a": 1})
 
-        assert len(events) == 1
+        assert len(events) == 2
+        assert events[0].version == "v1"
+        assert events[1].version == "v2"
+        assert len(events[1].changes) == 0
 
     def test_multiple_listeners(self):
         manager = make_manager()
@@ -411,24 +414,31 @@ class TestRollback:
         manager.publish({"a": 2})
 
         rolled = manager.rollback("v1")
-        assert rolled.is_rollback is True
-        assert rolled.version == "v3"
+        assert rolled.version == "v1"
         assert rolled.data == {"a": 1}
 
         current = manager.get_current_version()
         assert current is not None
+        assert current.version == "v1"
         assert current.data == {"a": 1}
-        assert manager.version_count() == 3
+        assert manager.version_count() == 2
 
-    def test_rollback_creates_new_version(self):
+    def test_rollback_switches_current_version_not_creates_new(self):
         manager = make_manager()
         manager.publish({"a": 1})
         manager.publish({"a": 2})
         manager.publish({"a": 3})
 
+        assert manager.version_count() == 3
+        assert manager.get_current_version() is not None
+        assert manager.get_current_version().version == "v3"
+
         rolled = manager.rollback("v1")
-        assert rolled.version == "v4"
+        assert rolled.version == "v1"
         assert rolled.data == {"a": 1}
+        assert manager.version_count() == 3
+        assert manager.get_current_version() is not None
+        assert manager.get_current_version().version == "v1"
 
     def test_rollback_triggers_change_event(self):
         manager = make_manager()
@@ -443,25 +453,46 @@ class TestRollback:
 
         assert len(events) == 1
         event = events[0]
+        assert event.version == "v1"
         assert event.is_rollback is True
         change_types = {c.key: c.change_type for c in event.changes}
         assert change_types["a"] == ChangeType.MODIFIED
         assert change_types["b"] == ChangeType.ADDED
 
-    def test_rollback_to_current_version_is_noop(self):
+    def test_rollback_to_current_version_fires_event(self):
         manager = make_manager()
         events: List[ChangeEvent] = []
         manager.subscribe(lambda e: events.append(e))
 
         manager.publish({"a": 1})
-        event_count_before = len(events)
-        version_count_before = manager.version_count()
+        assert len(events) == 1
 
-        result = manager.rollback("v1")
-        assert result.version == "v1"
-        assert result.is_rollback is False
-        assert manager.version_count() == version_count_before
-        assert len(events) == event_count_before
+        manager.rollback("v1")
+        assert len(events) == 2
+        event = events[1]
+        assert event.version == "v1"
+        assert event.is_rollback is True
+        assert len(event.changes) == 0
+
+        current = manager.get_current_version()
+        assert current is not None
+        assert current.version == "v1"
+
+    def test_rollback_duplicate_content_fires_event(self):
+        manager = make_manager()
+        events: List[ChangeEvent] = []
+        manager.subscribe(lambda e: events.append(e))
+
+        manager.publish({"a": 1})
+        manager.publish({"a": 1})
+        assert len(events) == 2
+
+        manager.rollback("v1")
+        assert len(events) == 3
+        event = events[2]
+        assert event.version == "v1"
+        assert event.is_rollback is True
+        assert len(event.changes) == 0
 
     def test_rollback_nonexistent_version_raises(self):
         manager = make_manager()
@@ -477,13 +508,18 @@ class TestRollback:
 
         manager.rollback("v1")
         assert manager.get("a") == 1
+        assert manager.get_current_version() is not None
+        assert manager.get_current_version().version == "v1"
 
         manager.rollback("v2")
         assert manager.get("a") == 2
+        assert manager.get_current_version() is not None
+        assert manager.get_current_version().version == "v2"
 
+        assert manager.version_count() == 3
         history = manager.get_history()
         versions = [v.version for v in history]
-        assert versions == ["v1", "v2", "v3", "v4", "v5"]
+        assert versions == ["v1", "v2", "v3"]
 
 
 class TestBoundaryConditions:
@@ -493,13 +529,44 @@ class TestBoundaryConditions:
         assert cv.version == "v1"
         assert cv.data == {}
 
-    def test_publish_empty_config_no_event(self):
+    def test_publish_empty_config_fires_event(self):
         manager = make_manager()
         events: List[ChangeEvent] = []
         manager.subscribe(lambda e: events.append(e))
 
         manager.publish({})
-        assert len(events) == 0
+        assert len(events) == 1
+        assert events[0].version == "v1"
+        assert events[0].is_rollback is False
+        assert len(events[0].changes) == 0
+
+    def test_publish_duplicate_config_fires_event(self):
+        manager = make_manager()
+        events: List[ChangeEvent] = []
+        manager.subscribe(lambda e: events.append(e))
+
+        manager.publish({"a": 1, "b": 2})
+        manager.publish({"a": 1, "b": 2})
+
+        assert len(events) == 2
+        assert events[0].version == "v1"
+        assert events[1].version == "v2"
+        assert len(events[0].changes) == 2
+        assert len(events[1].changes) == 0
+
+    def test_get_returns_deep_copy_isolates_nested_config(self):
+        manager = make_manager()
+        manager.publish({"nested": {"inner": [1, 2, 3]}})
+
+        value = manager.get("nested")
+        assert value == {"inner": [1, 2, 3]}
+
+        value["inner"].append(999)
+        value["new_key"] = "injected"
+
+        stored = manager.get("nested")
+        assert stored == {"inner": [1, 2, 3]}
+        assert "new_key" not in stored
 
     def test_config_with_nested_structures(self):
         manager = make_manager()
@@ -649,6 +716,7 @@ class TestComputeChanges:
         manager.subscribe(lambda e: events.append(e))
 
         manager.publish({})
+        events.clear()
         manager.publish({"a": 1, "b": 2})
 
         event = events[0]
@@ -690,6 +758,7 @@ class TestComputeChanges:
         manager.subscribe(lambda e: events.append(e))
 
         manager.publish({})
+        events.clear()
         manager.publish({"c": 3, "a": 1, "b": 2})
 
         event = events[0]

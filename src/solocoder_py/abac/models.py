@@ -105,7 +105,7 @@ class Policy:
     condition: Optional[Union[AttributeCondition, ConditionExpression]] = None
     priority: int = 0
     description: Optional[str] = None
-    is_explicit_deny: Optional[bool] = None
+    is_explicit_deny: bool = False
 
     def __post_init__(self) -> None:
         if not self.policy_id:
@@ -117,8 +117,9 @@ class Policy:
         if not isinstance(self.effect, PolicyEffect):
             from .exceptions import InvalidPolicyError
             raise InvalidPolicyError(f"Invalid effect: {self.effect}")
-        if self.is_explicit_deny is None:
-            self.is_explicit_deny = self.effect == PolicyEffect.DENY
+        if not isinstance(self.is_explicit_deny, bool):
+            from .exceptions import InvalidPolicyError
+            raise InvalidPolicyError("is_explicit_deny must be a boolean")
 
 
 @dataclass
@@ -153,6 +154,7 @@ class PolicyHit:
     priority: int
     is_explicit_deny: bool
     matched_at: float
+    order: int
 
 
 @dataclass

@@ -24,7 +24,7 @@ Configuration for the exponential backoff retry behavior.
 - `initial_delay`: Delay before the first retry (in seconds, default: 1.0)
 - `backoff_multiplier`: Multiplier for each subsequent delay (default: 2.0)
 - `max_delay`: Maximum delay between retries (default: 60.0)
-- `max_retries`: Maximum number of retries before moving to DLQ (default: 3)
+- `max_retries`: **Maximum number of retries allowed *after* the initial attempt (default: 3). A value of 0 means no retries — only the initial attempt is made. The total number of delivery attempts will be `max_retries + 1` before moving to the dead letter queue.
 
 ### WebhookTargetRepository
 In-memory storage and management of `WebhookTarget` instances.
@@ -64,7 +64,7 @@ A record of a single delivery attempt.
 ### WebhookDeliveryEngine
 The main orchestrator that ties everything together.
 - `enqueue(target_id, event_type, payload)`: Create and queue a new message
-- `deliver(message_id)`: Attempt immediate delivery of a specific message
+- `deliver(message_id)`: Attempt delivery of a specific message. Raises `DeliveryNotReadyError` if the message's exponential backoff window has not elapsed yet (i.e. `now < next_delivery_at`).
 - `deliver_all_ready()`: Deliver all messages whose retry window has elapsed
 - `build_signed_request(message, target)`: Build a signed request for a message
 - `get_pending_messages()` / `get_dead_letter_messages()`: Inspect queue state
@@ -114,17 +114,19 @@ This raises `SignatureVerificationError` if the signature is invalid, the versio
 
 ## Retry and Dead Letter Mechanism
 
-1. When a delivery fails (non-2xx status code or transport error), the engine records the failure.
-2. If `failure_count < max_retries`, the message is scheduled for a retry with an exponentially increasing delay:
-   - Attempt 2: `initial_delay`
-   - Attempt 3: `initial_delay * backoff_multiplier`
-   - Attempt N: `initial_delay * (backoff_multiplier ^ (N-2))`
-   - Capped at `max_delay`
-3. If `failure_count >= max_retries`, the message is moved to the **dead letter queue** with:
+1. When a delivery fails (non-2xx status code or transport error), the engine records the failure and increments `delivery_attempts` (counting the initial attempt and all retries).
+2. If `delivery_attempts <= max_retries`, the message is scheduled for a retry with an **exponentially increasing delay**:
+   - Retry 1 (2nd attempt overall): delay = `initial_delay`
+   - Retry 2 (3rd attempt overall): delay = `initial_delay * backoff_multiplier`
+   - Retry N (N+1-th attempt overall): delay = `initial_delay * (backoff_multiplier ^ (N-1))`
+   - All delays are capped at `max_delay`
+3. The message's `next_delivery_at` is set to `now + delay`. Calling `deliver()` before this time elapses raises `DeliveryNotReadyError`.
+4. If `delivery_attempts > max_retries` (i.e. all retries have been exhausted), the message is moved to the **dead letter queue** with:
    - A complete history of all delivery attempts
    - The last error message
    - The original payload and metadata
-4. Messages in the DLQ can be inspected via `get_dead_letter_messages()` for manual reprocessing or debugging.
+5. Example: with `max_retries=3`, the engine makes **4 total delivery attempts** (1 initial + 3 retries). After the 4th failure, the message is moved to the DLQ.
+6. Messages in the DLQ can be inspected via `get_dead_letter_messages()` for manual reprocessing or debugging.
 
 ## Usage Examples
 

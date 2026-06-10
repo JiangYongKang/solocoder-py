@@ -13,6 +13,7 @@ from solocoder_py.notification_fanout import (
     FanoutEngine,
     FanoutExecutionError,
     InMemoryChannel,
+    InvalidChannelConfigError,
     Notification,
     UnknownChannelError,
 )
@@ -246,11 +247,12 @@ class TestFanoutFailureScenarios:
         ch1.set_fail_next_n(100)
         ch2.set_fail_next_n(100)
         ch3.set_fail_next_n(100)
-        cfg = ChannelConfig(channel_name="x", max_attempts=2)
         engine = FanoutEngine(
             channels={"email": ch1, "sms": ch2, "in_app": ch3},
             channel_configs={
-                "email": cfg, "sms": cfg, "in_app": cfg,
+                "email": ChannelConfig(channel_name="email", max_attempts=2),
+                "sms": ChannelConfig(channel_name="sms", max_attempts=2),
+                "in_app": ChannelConfig(channel_name="in_app", max_attempts=2),
             },
             time_provider=clock.now,
             sleeper=clock.sleep,
@@ -269,10 +271,12 @@ class TestFanoutFailureScenarios:
         good = InMemoryChannel("email")
         bad = InMemoryChannel("sms")
         bad.set_fail_next_n(100)
-        cfg = ChannelConfig(channel_name="x", max_attempts=2)
         engine = FanoutEngine(
             channels={"email": good, "sms": bad},
-            channel_configs={"email": cfg, "sms": cfg},
+            channel_configs={
+                "email": ChannelConfig(channel_name="email", max_attempts=2),
+                "sms": ChannelConfig(channel_name="sms", max_attempts=2),
+            },
             time_provider=clock.now,
             sleeper=clock.sleep,
         )
@@ -392,3 +396,143 @@ class TestResultAggregation:
             assert a.error is not None
             assert a.duration >= 0.0
             assert a.attempt_number >= 1
+
+
+class TestChannelConfigNameValidation:
+    def test_register_channel_with_mismatched_config_name_rejected(self):
+        engine = FanoutEngine()
+        ch = InMemoryChannel("email")
+        bad_cfg = ChannelConfig(channel_name="sms", timeout=5.0)
+        with pytest.raises(InvalidChannelConfigError) as exc:
+            engine.register_channel("email", ch, bad_cfg)
+        assert "sms" in str(exc.value)
+        assert "email" in str(exc.value)
+        assert "email" not in engine.registered_channels
+
+    def test_set_channel_config_with_mismatched_name_rejected(self):
+        engine = FanoutEngine()
+        engine.register_channel("email", InMemoryChannel("email"))
+        bad_cfg = ChannelConfig(channel_name="sms", timeout=5.0)
+        with pytest.raises(InvalidChannelConfigError) as exc:
+            engine.set_channel_config("email", bad_cfg)
+        assert "sms" in str(exc.value)
+        assert "email" in str(exc.value)
+
+    def test_register_channel_with_matching_config_name_accepted(self):
+        engine = FanoutEngine()
+        ch = InMemoryChannel("email")
+        good_cfg = ChannelConfig(channel_name="email", timeout=7.0, max_attempts=5)
+        engine.register_channel("email", ch, good_cfg)
+        assert "email" in engine.registered_channels
+        assert engine.get_channel_config("email").timeout == 7.0
+
+    def test_constructor_rejects_mismatched_config_names(self):
+        ch = InMemoryChannel("email")
+        bad_cfg = ChannelConfig(channel_name="sms")
+        with pytest.raises(InvalidChannelConfigError):
+            FanoutEngine(channels={"email": ch}, channel_configs={"email": bad_cfg})
+
+
+class TestTimeoutDoesNotBlock:
+    def test_permanently_blocking_channel_returns_on_timeout(self):
+        ch = InMemoryChannel("stuck")
+        ch.set_delay(300)
+        cfg = ChannelConfig(channel_name="stuck", timeout=0.05, max_attempts=1)
+        engine = FanoutEngine(
+            channels={"stuck": ch},
+            channel_configs={"stuck": cfg},
+        )
+
+        start = time.monotonic()
+        result = engine.fanout(_notice())
+        elapsed = time.monotonic() - start
+
+        r = result.channel_results["stuck"]
+        assert r.status == ChannelDeliveryStatus.TIMEOUT
+        assert isinstance(r.final_error, ChannelTimeoutError)
+        assert elapsed < 1.0, (
+            f"超时后应立即返回，不应等待底层线程，实际耗时 {elapsed:.2f}s"
+        )
+
+    def test_long_running_channel_mixed_with_fast_channel_parallel(self):
+        slow = InMemoryChannel("slow")
+        slow.set_delay(300)
+        fast = InMemoryChannel("fast")
+
+        engine = FanoutEngine(
+            channels={"slow": slow, "fast": fast},
+            channel_configs={
+                "slow": ChannelConfig(channel_name="slow", timeout=0.05, max_attempts=1),
+                "fast": ChannelConfig(channel_name="fast", max_attempts=1),
+            },
+        )
+
+        start = time.monotonic()
+        result = engine.fanout(_notice())
+        elapsed = time.monotonic() - start
+
+        assert result.channel_results["slow"].status == ChannelDeliveryStatus.TIMEOUT
+        assert result.channel_results["fast"].status == ChannelDeliveryStatus.SUCCESS
+        assert fast.delivered_count == 1
+        assert elapsed < 1.0, (
+            f"慢渠道超时不应阻塞整体结果，实际耗时 {elapsed:.2f}s"
+        )
+
+
+class TestParallelismIndependentOfWorkerLimit:
+    def test_many_channels_not_blocked_by_max_workers(self):
+        channels = {}
+        configs = {}
+        for i in range(10):
+            name = f"ch-{i}"
+            ch = InMemoryChannel(name)
+            ch.set_delay(0.05)
+            channels[name] = ch
+            configs[name] = ChannelConfig(channel_name=name, max_attempts=1)
+
+        engine = FanoutEngine(
+            channels=channels,
+            channel_configs=configs,
+            max_workers=2,
+        )
+
+        start = time.monotonic()
+        result = engine.fanout(_notice())
+        elapsed = time.monotonic() - start
+
+        assert result.channel_count == 10
+        assert result.all_succeeded is True
+        for i in range(10):
+            assert channels[f"ch-{i}"].delivered_count == 1
+
+        assert elapsed < 0.5, (
+            f"各渠道应独立并行，不受 max_workers 限制，实际耗时 {elapsed:.2f}s"
+        )
+
+    def test_slow_does_not_block_others_despite_small_max_workers(self):
+        slow = InMemoryChannel("slow")
+        slow.set_delay(0.2)
+        fast1 = InMemoryChannel("fast1")
+        fast2 = InMemoryChannel("fast2")
+
+        engine = FanoutEngine(
+            channels={"slow": slow, "fast1": fast1, "fast2": fast2},
+            channel_configs={
+                "slow": ChannelConfig(channel_name="slow", max_attempts=1),
+                "fast1": ChannelConfig(channel_name="fast1", max_attempts=1),
+                "fast2": ChannelConfig(channel_name="fast2", max_attempts=1),
+            },
+            max_workers=1,
+        )
+
+        start = time.monotonic()
+        result = engine.fanout(_notice())
+        elapsed = time.monotonic() - start
+
+        assert result.all_succeeded is True
+        assert slow.delivered_count == 1
+        assert fast1.delivered_count == 1
+        assert fast2.delivered_count == 1
+        assert elapsed < 0.4, (
+            f"各渠道应并行执行，慢渠道不应阻塞快渠道，实际耗时 {elapsed:.2f}s"
+        )

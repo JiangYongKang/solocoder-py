@@ -25,6 +25,7 @@ class ConsumerGroupCoordinator:
         self._topic = topic
         self._consumers: dict[str, OrderedPartitionConsumer] = {}
         self._partition_owner: dict[int, str] = {}
+        self._group_committed_offsets: dict[int, int] = {}
         self._generation_id: int = 0
         self._rebalancing: bool = False
         self._rebalance_listeners: dict[str, RebalanceListener] = {}
@@ -80,6 +81,9 @@ class ConsumerGroupCoordinator:
             self._rebalance_listeners.pop(consumer_id, None)
 
             for pid in list(consumer.assigned_partitions):
+                stored = consumer.get_stored_committed_offset(pid)
+                if stored > self._group_committed_offsets.get(pid, -1):
+                    self._group_committed_offsets[pid] = stored
                 consumer.revoke_partition(pid)
                 self._partition_owner.pop(pid, None)
 
@@ -99,6 +103,19 @@ class ConsumerGroupCoordinator:
             )
         with self._lock:
             return self._partition_owner.get(partition_id)
+
+    def get_group_committed_offset(self, partition_id: int) -> int:
+        if partition_id < 0 or partition_id >= self._topic.num_partitions:
+            raise PartitionNotFoundError(
+                f"partition {partition_id} not found, valid range: [0, {self._topic.num_partitions})"
+            )
+        with self._lock:
+            owner = self._partition_owner.get(partition_id)
+            if owner and owner in self._consumers:
+                consumer = self._consumers[owner]
+                if partition_id in consumer.assigned_partitions:
+                    return consumer.get_committed_offset(partition_id)
+            return self._group_committed_offsets.get(partition_id, -1)
 
     def get_all_assignments(self) -> list[ConsumerAssignment]:
         with self._lock:
@@ -120,12 +137,22 @@ class ConsumerGroupCoordinator:
         finally:
             self._rebalancing = False
 
+    def _snapshot_offsets(self) -> None:
+        for pid, owner_id in self._partition_owner.items():
+            if owner_id in self._consumers:
+                consumer = self._consumers[owner_id]
+                stored = consumer.get_stored_committed_offset(pid)
+                if stored > self._group_committed_offsets.get(pid, -1):
+                    self._group_committed_offsets[pid] = stored
+
     def _do_rebalance(self) -> None:
         consumer_ids = sorted(self._consumers.keys())
         num_consumers = len(consumer_ids)
         if num_consumers == 0:
             self._partition_owner.clear()
             return
+
+        self._snapshot_offsets()
 
         num_partitions = self._topic.num_partitions
         new_owner_map: dict[int, str] = {}
@@ -152,19 +179,35 @@ class ConsumerGroupCoordinator:
             consumer = self._consumers[cid]
             revoked = sorted(revoked_map.get(cid, []))
             for pid in revoked:
+                stored = consumer.get_stored_committed_offset(pid)
+                if stored > self._group_committed_offsets.get(pid, -1):
+                    self._group_committed_offsets[pid] = stored
                 consumer.revoke_partition(pid)
 
+        for cid in consumer_ids:
+            consumer = self._consumers[cid]
             assigned = sorted(assigned_map.get(cid, []))
             for pid in assigned:
-                if pid in self._partition_owner and self._partition_owner[pid] != cid:
-                    old_owner_id = self._partition_owner[pid]
-                    if old_owner_id in self._consumers:
-                        old_consumer = self._consumers[old_owner_id]
-                        old_consumer.revoke_partition(pid)
-                try:
-                    consumer.assign_partition(pid)
-                except PartitionAlreadyAssignedError:
-                    pass
+                current_owner = self._partition_owner.get(pid)
+                if current_owner and current_owner != cid:
+                    if current_owner in self._consumers:
+                        old_consumer = self._consumers[current_owner]
+                        if pid in old_consumer.assigned_partitions:
+                            stored = old_consumer.get_stored_committed_offset(pid)
+                            if stored > self._group_committed_offsets.get(pid, -1):
+                                self._group_committed_offsets[pid] = stored
+                            old_consumer.revoke_partition(pid)
+                    if self._partition_owner.get(pid) == current_owner:
+                        del self._partition_owner[pid]
+
+                if pid in consumer.assigned_partitions:
+                    raise PartitionAlreadyAssignedError(
+                        f"partition {pid} is already assigned to consumer '{cid}' "
+                        f"during rebalance, possible ownership conflict"
+                    )
+
+                initial_offset = self._group_committed_offsets.get(pid, -1)
+                consumer.assign_partition(pid, initial_committed_offset=initial_offset)
 
         self._partition_owner = new_owner_map
 

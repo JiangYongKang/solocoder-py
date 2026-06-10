@@ -6,6 +6,7 @@ from .engine import (
 )
 from .exceptions import (
     DeliveryFailedError,
+    DeliveryNotReadyError,
     InvalidRetryStrategyError,
     InvalidSigningSecretError,
     InvalidUrlError,
@@ -42,6 +43,7 @@ __all__ = [
     "DeliveryAttempt",
     "DeliveryStatus",
     "DeliveryFailedError",
+    "DeliveryNotReadyError",
     "HttpTransport",
     "InMemoryTransport",
     "InvalidRetryStrategyError",

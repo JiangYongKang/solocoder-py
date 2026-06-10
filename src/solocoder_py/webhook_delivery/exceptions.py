@@ -42,3 +42,20 @@ class MaxRetriesExceededError(WebhookDeliveryError):
         super().__init__(
             f"Message {message_id} exceeded maximum retries ({retries})"
         )
+
+
+class DeliveryNotReadyError(WebhookDeliveryError):
+    def __init__(
+        self,
+        message_id: str,
+        next_delivery_at: float,
+        current_time: float,
+    ) -> None:
+        self.message_id = message_id
+        self.next_delivery_at = next_delivery_at
+        self.current_time = current_time
+        wait_seconds = next_delivery_at - current_time
+        super().__init__(
+            f"Message {message_id} is not ready for delivery yet. "
+            f"Next delivery available in {wait_seconds:.2f}s."
+        )

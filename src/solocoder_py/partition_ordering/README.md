@@ -46,39 +46,43 @@
 维护分区内严格保序语义的消费者，确保同一分区内消息按 offset 递增顺序处理。
 
 **核心方法**：
-- `assign_partition(partition_id)`：分配分区给当前消费者。
-- `revoke_partition(partition_id) -> list[Message]`：撤销分区，返回未提交的 in-flight 消息。
-- `poll(partition_id, max_messages=1) -> list[Message]`：从分区拉取消息；若存在未提交的 in-flight 消息则返回空列表。
+- `assign_partition(partition_id, initial_committed_offset=None)`：分配分区给当前消费者；若分区已分配则抛出 `PartitionAlreadyAssignedError`；可通过 `initial_committed_offset` 继承历史提交位点。
+- `revoke_partition(partition_id) -> list[Message]`：撤销分区，返回未提交的 in-flight 消息，同时保留已提交位点供后续迁移使用。
+- `poll(partition_id, max_messages=1) -> list[Message]`：从分区拉取消息；若存在未提交的 in-flight 消息则返回空列表，防止乱序。
 - `poll_all(max_messages_per_partition=1) -> dict[int, list[Message]]`：从所有已分配分区拉取消息。
-- `commit(partition_id, offset)`：提交位点；必须按 offset 递增顺序提交，否则抛出 `OutOfOrderCommitError`。
+- `commit(partition_id, offset)`：提交位点；必须严格按 offset 递增顺序提交，否则抛出 `OutOfOrderCommitError`。
 - `seek(partition_id, offset)`：重置消费位点，同时清空 in-flight 消息。
-- `get_committed_offset(partition_id) -> int`：获取已提交位点。
+- `get_committed_offset(partition_id) -> int`：获取分区当前已提交位点（要求分区已分配）。
+- `get_stored_committed_offset(partition_id) -> int`：获取分区历史存储的已提交位点（不要求分区当前已分配，用于重平衡位点迁移）。
 - `get_in_flight_count(partition_id) -> int`：获取 in-flight 消息数量。
 
 ### `ConsumerGroupCoordinator`（消费者组协调器）
 
-管理消费者组成员、分区分配与重平衡的协调服务。
+管理消费者组成员、分区分配、组级共享位点存储与重平衡的协调服务。
 
 **核心方法**：
-- `join_group(consumer_id, listener=None) -> OrderedPartitionConsumer`：消费者加入组，触发重平衡，返回消费者实例。
-- `leave_group(consumer_id)`：消费者离开组，触发重平衡。
+- `join_group(consumer_id, listener=None) -> OrderedPartitionConsumer`：消费者加入组，触发重平衡，返回消费者实例；重平衡中调用抛出 `RebalanceInProgressError`。
+- `leave_group(consumer_id)`：消费者离开组，先将其所有分区位点写入组级存储，再触发重平衡；重平衡中调用抛出 `RebalanceInProgressError`。
 - `get_consumer(consumer_id) -> OrderedPartitionConsumer`：获取组内消费者实例。
 - `get_partition_owner(partition_id) -> Optional[str]`：查询分区当前所属消费者。
+- `get_group_committed_offset(partition_id) -> int`：查询组级共享存储中该分区的已提交位点（优先读取当前所有者的实时位点）。
 - `get_all_assignments() -> list[ConsumerAssignment]`：获取所有消费者的分区分配情况。
-- `force_rebalance() -> int`：手动触发重平衡，返回新一代 ID。
+- `force_rebalance() -> int`：手动触发重平衡，返回新一代 ID；重平衡中调用抛出 `RebalanceInProgressError`。
 - `is_rebalancing -> bool`：当前是否处于重平衡中。
 
 ### 异常类
 
-- `PartitionOrderingError`：模块异常基类
-- `PartitionNotFoundError`：分区不存在
-- `UnknownPartitionError`：未知分区
-- `OutOfOrderCommitError`：乱序提交（违反严格保序）
-- `OffsetOutOfRangeError`：位点超出有效范围
-- `ConsumerNotFoundError`：消费者不在组内
-- `PartitionAlreadyAssignedError`：分区已被分配
-- `RebalanceInProgressError`：重平衡进行中
-- `NotAssignedPartitionError`：操作未分配的分区
+| 异常 | 触发场景 |
+|------|----------|
+| `PartitionOrderingError` | 模块异常基类 |
+| `PartitionNotFoundError` | 访问不存在的分区 ID |
+| `UnknownPartitionError` | 未知分区操作 |
+| `OutOfOrderCommitError` | 提交位点违反严格递增顺序（跳序或未按顺序提交） |
+| `OffsetOutOfRangeError` | 位点超出有效范围 |
+| `ConsumerNotFoundError` | 操作不在组内的消费者 |
+| `PartitionAlreadyAssignedError` | 重复分配同一分区给同一消费者（可检测所有权冲突） |
+| `RebalanceInProgressError` | 重平衡进行中调用 `join_group` / `leave_group` / `force_rebalance` |
+| `NotAssignedPartitionError` | 对未分配给当前消费者的分区执行 poll/commit/seek 等操作 |
 
 ## 分区保序策略
 
@@ -115,14 +119,21 @@
 
 ## 重平衡策略
 
+### 组级共享位点存储
+
+消费者组协调器维护 `_group_committed_offsets: dict[int, int]` 作为组级共享的位点存储，用于在消费者成员变更时持久化分区的已提交位点。位点更新时机：
+- 重平衡开始前：从各分区当前所有者快照已提交位点
+- 消费者撤销分区前：捕获该消费者的已提交位点
+- 消费者离开组时：保存其所有分区的已提交位点
+
 ### 分配算法
 
-使用 **Round-Robin 轮询分配**：将分区 ID 按 `partition_id % num_consumers` 均匀分配给各消费者。
+使用 **Round-Robin 轮询分配**：将分区 ID 按 `partition_id % num_consumers` 均匀分配给排序后的消费者列表。
 
 ### 重平衡触发时机
 
-1. 新消费者加入组
-2. 现有消费者离开组
+1. 新消费者加入组（`join_group`）
+2. 现有消费者离开组（`leave_group`）
 3. 手动调用 `force_rebalance()`
 
 ### 重平衡流程
@@ -130,21 +141,31 @@
 ```
 1. 标记 rebalancing = True
 2. generation_id += 1
-3. 计算新的分区-消费者映射（Round-Robin）
-4. 对比新旧映射，确定各消费者的 revoked / assigned 分区
-5. 对被撤销的分区：
+3. _snapshot_offsets(): 从各分区当前所有者快照已提交位点到组级存储
+4. 计算新的分区-消费者映射（Round-Robin）
+5. 对比新旧映射，确定各消费者的 revoked / assigned 分区
+6. 先处理 revoked 分区（对所有消费者）：
+   - 调用 consumer.get_stored_committed_offset() 保存位点
    - 调用 consumer.revoke_partition()，返回未提交的 in-flight 消息
-   - 重置该分区的 last_pulled_offset = committed_offset
-6. 对新分配的分区：
-   - 调用 consumer.assign_partition()
-   - 从 committed_offset + 1 位点继续消费
-7. 通知所有注册的 RebalanceListener
-8. 标记 rebalancing = False
+7. 再处理 assigned 分区（对所有消费者）：
+   - 若分区仍被旧消费者持有，先从旧消费者撤销并保存位点
+   - 检测分区是否已被意外分配，若是则抛出 PartitionAlreadyAssignedError
+   - 从组级共享存储读取继承位点
+   - 调用 consumer.assign_partition(pid, initial_committed_offset=继承位点)
+8. 更新 partition_owner 映射
+9. 通知所有注册的 RebalanceListener（携带 assigned/revoked 增量）
+10. 标记 rebalancing = False
 ```
+
+### 重平衡期间异常处理
+
+- **`RebalanceInProgressError`**：重平衡期间禁止调用 `join_group`、`leave_group`、`force_rebalance`，防止重平衡嵌套。
+- **`PartitionAlreadyAssignedError`**：分配前显式检测分区是否已被目标消费者持有，若发现所有权冲突立即抛出，不静默吞掉。
+- **位点连续性保证**：所有分区在迁移前都会先将已提交位点写入组级共享存储，新所有者通过 `initial_committed_offset` 参数自动继承，无需手动 `seek()`。
 
 ### 重平衡后顺序保证
 
-- 分区迁移后，新消费者从该分区的 `committed_offset + 1` 位点继续消费。
+- 分区迁移后，新消费者从该分区的 `committed_offset + 1` 位点继续消费（位点通过组级存储自动继承）。
 - 旧消费者未提交的 in-flight 消息会随 `revoke_partition()` 返回，不影响位点连续性。
 - 同一分区内消息的 offset 永不改变，重平衡仅改变所有权，不改变消息顺序。
 
@@ -205,7 +226,7 @@ for t in threads:
     t.join()
 ```
 
-### 消费者组 + 重平衡
+### 消费者组 + 重平衡 + 位点自动继承
 
 ```python
 from solocoder_py.partition_ordering import (
@@ -215,26 +236,33 @@ from solocoder_py.partition_ordering import (
 )
 
 topic = PartitionedTopic(name="metrics", num_partitions=4)
-for i in range(20):
-    topic.produce(key=f"metric-{i}", value=i)
+for i in range(50):
+    topic.produce_to_partition(i % 4, f"metric-{i}", i)
 
 coord = ConsumerGroupCoordinator(group_id="metrics-group", topic=topic)
 
 def on_rebalance(event: RebalanceEvent):
-    print(f"[Rebalance gen={event.generation_id}] "
-          f"consumer={event.consumer_id} "
-          f"assigned={event.assigned_partitions} "
-          f"revoked={event.revoked_partitions}")
+    print(f"[gen={event.generation_id}] {event.consumer_id}: "
+          f"assigned={event.assigned_partitions} revoked={event.revoked_partitions}")
 
 c1 = coord.join_group("consumer-1", listener=on_rebalance)
-print(f"c1 owns: {sorted(c1.assigned_partitions)}")
+
+pid = 1
+for _ in range(3):
+    batch = c1.poll(pid, max_messages=5)
+    for m in batch:
+        c1.commit(pid, m.offset)
+
+print(f"c1 committed offset on P{pid}: {c1.get_committed_offset(pid)}")
 
 c2 = coord.join_group("consumer-2", listener=on_rebalance)
-print(f"c1 owns: {sorted(c1.assigned_partitions)}")
-print(f"c2 owns: {sorted(c2.assigned_partitions)}")
 
-coord.leave_group("consumer-2")
-print(f"After c2 left, c1 owns: {sorted(c1.assigned_partitions)}")
+if pid in c2.assigned_partitions:
+    inherited = c2.get_committed_offset(pid)
+    print(f"c2 inherited committed offset on P{pid}: {inherited} (no manual seek needed)")
+    next_batch = c2.poll(pid, max_messages=1)
+    if next_batch:
+        print(f"c2 next message offset: {next_batch[0].offset}")
 ```
 
 ### 乱序提交保护

@@ -292,6 +292,43 @@ class TestWeightedRandomStrategy:
         strategy = WeightedRandomStrategy()
         assert strategy.select([]) is None
 
+    def test_weighted_random_strategy_filters_zero_weight_directly(self):
+        from solocoder_py.load_balancer.models import Instance
+        rng = random.Random(12345)
+        strategy = WeightedRandomStrategy(rng=rng)
+        instances = [
+            Instance(instance_id="zero1", weight=0),
+            Instance(instance_id="only", weight=1),
+            Instance(instance_id="zero2", weight=0),
+        ]
+        for _ in range(100):
+            selected = strategy.select(instances)
+            assert selected is not None
+            assert selected.instance_id == "only"
+
+    def test_weighted_random_strategy_zero_at_prefix_boundary(self):
+        from solocoder_py.load_balancer.models import Instance
+        for seed in range(50):
+            rng = random.Random(seed)
+            strategy = WeightedRandomStrategy(rng=rng)
+            instances = [
+                Instance(instance_id="zero", weight=0),
+                Instance(instance_id="positive", weight=1),
+            ]
+            for _ in range(20):
+                selected = strategy.select(instances)
+                assert selected is not None
+                assert selected.instance_id == "positive"
+
+    def test_weighted_random_strategy_all_zero_returns_none(self):
+        from solocoder_py.load_balancer.models import Instance
+        strategy = WeightedRandomStrategy()
+        instances = [
+            Instance(instance_id="a", weight=0),
+            Instance(instance_id="b", weight=0),
+        ]
+        assert strategy.select(instances) is None
+
 
 class TestLeastConnectionsStrategy:
     def test_least_connections_picks_min(self, lb: LoadBalancer):
@@ -469,6 +506,62 @@ class TestCircuitBreaker:
         assert probe1.instance_id == "probe-target"
         assert probe2.instance_id == "probe-target"
         assert lb.get_instance("probe-target").half_open_probe_count == 2
+
+    def test_half_open_probes_exhausted_no_more_traffic(self, clock: ManualClock):
+        config = make_config(
+            failure_threshold=1,
+            recovery_timeout_seconds=5.0,
+            half_open_max_probes=1,
+        )
+        lb = make_lb(config=config, clock=clock)
+        lb.register_instance("only-instance")
+
+        lease = lb.acquire()
+        lease.release(success=False)
+        assert lb.get_instance("only-instance").circuit_state == CircuitState.OPEN
+
+        clock.advance(5.0)
+        probe = lb.acquire()
+        assert probe.instance_id == "only-instance"
+        assert lb.get_instance("only-instance").circuit_state == CircuitState.HALF_OPEN
+        assert lb.get_instance("only-instance").half_open_probe_count == 1
+
+        with pytest.raises(NoAvailableInstanceError):
+            lb.acquire()
+
+        probe.release(success=True)
+        assert lb.get_instance("only-instance").circuit_state == CircuitState.CLOSED
+        with lb.acquire() as l:
+            assert l.instance_id == "only-instance"
+
+    def test_half_open_probes_exhausted_falls_back_to_healthy(self, clock: ManualClock):
+        config = make_config(
+            failure_threshold=1,
+            recovery_timeout_seconds=5.0,
+            half_open_max_probes=1,
+        )
+        lb = make_lb(config=config, clock=clock)
+        lb.register_instance("recovering")
+        lb.register_instance("healthy")
+
+        lease = lb.acquire()
+        while lease.instance_id != "recovering":
+            lease.release(success=True)
+            lease = lb.acquire()
+        lease.release(success=False)
+        assert lb.get_instance("recovering").circuit_state == CircuitState.OPEN
+
+        clock.advance(5.0)
+        probe = lb.acquire()
+        assert probe.instance_id == "recovering"
+        assert lb.get_instance("recovering").half_open_probe_count == 1
+
+        for _ in range(5):
+            with lb.acquire() as l:
+                assert l.instance_id == "healthy"
+
+        probe.release(success=True)
+        assert lb.get_instance("recovering").circuit_state == CircuitState.CLOSED
 
     def test_success_resets_consecutive_failures(self, lb: LoadBalancer):
         lb.register_instance("s1")

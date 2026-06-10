@@ -303,16 +303,23 @@ class TestBackpressureIsolation:
             subscriber_id="fast",
         )
 
+        published = []
         for i in range(20):
-            broker_with_topic.publish("test-topic", i)
+            msg = broker_with_topic.publish("test-topic", i)
+            published.append(msg)
 
-        time.sleep(0.2)
+        time.sleep(1.5)
 
         assert len(fast_received) == 20
         fast_payloads = [m.payload for m in fast_received]
         assert fast_payloads == list(range(20))
 
-    def test_drop_oldest_strategy(self, broker_with_topic: PubSubBroker):
+        fast_records = broker_with_topic.get_delivery_records(subscriber_id="fast")
+        assert len(fast_records) == 20
+        for r in fast_records:
+            assert r.status == DeliveryStatus.SUCCESS
+
+    def test_drop_oldest_drops_correct_message_ids(self, broker_with_topic: PubSubBroker):
         received: List[Message] = []
         event = threading.Event()
 
@@ -324,23 +331,43 @@ class TestBackpressureIsolation:
             "test-topic",
             handler,
             subscriber_id="sub-1",
-            buffer_size=5,
+            buffer_size=3,
             backpressure_strategy=BackpressureStrategy.DROP_OLDEST,
         )
 
-        for i in range(10):
-            broker_with_topic.publish("test-topic", i)
-
-        time.sleep(0.1)
-        buffer_size = broker_with_topic.get_subscriber_buffer_size("test-topic", "sub-1")
-        assert buffer_size <= 5
+        published = []
+        for i in range(8):
+            msg = broker_with_topic.publish("test-topic", i, message_id=f"msg-{i}")
+            published.append(msg)
 
         event.set()
-        time.sleep(0.2)
+        time.sleep(0.3)
 
-        assert len(received) <= 5
+        records = broker_with_topic.get_delivery_records(subscriber_id="sub-1")
 
-    def test_drop_newest_strategy(self, broker_with_topic: PubSubBroker):
+        dropped_records = [r for r in records if r.status == DeliveryStatus.DROPPED]
+        success_records = [r for r in records if r.status == DeliveryStatus.SUCCESS]
+
+        assert len(dropped_records) + len(success_records) == 8
+
+        dropped_ids = {r.message_id for r in dropped_records}
+        success_ids = {r.message_id for r in success_records}
+
+        assert dropped_ids.isdisjoint(success_ids)
+        assert dropped_ids | success_ids == {f"msg-{i}" for i in range(8)}
+
+        expected_dropped_payloads = {i for i in range(5)}
+        actual_dropped_payloads = set()
+        for r in dropped_records:
+            for p in published:
+                if p.id == r.message_id:
+                    actual_dropped_payloads.add(p.payload)
+                    break
+        assert actual_dropped_payloads <= expected_dropped_payloads
+        for r in dropped_records:
+            assert "dropped oldest" in (r.error_message or "").lower()
+
+    def test_drop_newest_drops_correct_message_ids(self, broker_with_topic: PubSubBroker):
         received: List[Message] = []
         event = threading.Event()
 
@@ -352,24 +379,144 @@ class TestBackpressureIsolation:
             "test-topic",
             handler,
             subscriber_id="sub-1",
-            buffer_size=5,
+            buffer_size=3,
             backpressure_strategy=BackpressureStrategy.DROP_NEWEST,
         )
 
-        for i in range(10):
-            broker_with_topic.publish("test-topic", i)
-
-        time.sleep(0.1)
-        buffer_size = broker_with_topic.get_subscriber_buffer_size("test-topic", "sub-1")
-        assert buffer_size <= 5
+        published = []
+        for i in range(8):
+            msg = broker_with_topic.publish("test-topic", i, message_id=f"msg-{i}")
+            published.append(msg)
 
         event.set()
+        time.sleep(0.3)
+
+        records = broker_with_topic.get_delivery_records(subscriber_id="sub-1")
+
+        dropped_records = [r for r in records if r.status == DeliveryStatus.DROPPED]
+        success_records = [r for r in records if r.status == DeliveryStatus.SUCCESS]
+
+        assert len(dropped_records) + len(success_records) == 8
+
+        dropped_ids = {r.message_id for r in dropped_records}
+        success_ids = {r.message_id for r in success_records}
+
+        assert dropped_ids.isdisjoint(success_ids)
+        assert dropped_ids | success_ids == {f"msg-{i}" for i in range(8)}
+
+        expected_success_payloads = {0, 1, 2}
+        actual_success_payloads = set()
+        for r in success_records:
+            for p in published:
+                if p.id == r.message_id:
+                    actual_success_payloads.add(p.payload)
+                    break
+        assert expected_success_payloads <= actual_success_payloads
+        for r in dropped_records:
+            assert "dropped newest" in (r.error_message or "").lower()
+
+    def test_single_message_cannot_be_both_success_and_dropped(self, broker_with_topic: PubSubBroker):
+        broker_with_topic.subscribe(
+            "test-topic",
+            lambda m: None,
+            subscriber_id="sub-1",
+        )
+
+        msg = broker_with_topic.publish("test-topic", "data", message_id="only-msg")
+        time.sleep(0.1)
+
+        records = broker_with_topic.get_delivery_records(
+            message_id="only-msg", subscriber_id="sub-1"
+        )
+        assert len(records) >= 1
+        statuses = {r.status for r in records}
+        assert not (DeliveryStatus.SUCCESS in statuses and DeliveryStatus.DROPPED in statuses)
+        assert len(statuses) == 1
+        assert DeliveryStatus.SUCCESS in statuses
+
+    def test_each_message_has_exactly_one_final_status_per_subscriber(self, broker_with_topic: PubSubBroker):
+        broker_with_topic.subscribe(
+            "test-topic", lambda m: None, subscriber_id="s1"
+        )
+        broker_with_topic.subscribe(
+            "test-topic", lambda m: None, subscriber_id="s2"
+        )
+
+        for i in range(5):
+            broker_with_topic.publish("test-topic", i, message_id=f"m{i}")
         time.sleep(0.2)
 
-        assert len(received) <= 5
-        if received:
-            payloads = sorted([m.payload for m in received])
-            assert payloads[0] == 0
+        for subscriber_id in ["s1", "s2"]:
+            for i in range(5):
+                records = broker_with_topic.get_delivery_records(
+                    message_id=f"m{i}", subscriber_id=subscriber_id
+                )
+                assert len(records) == 1
+                assert records[0].status in (
+                    DeliveryStatus.SUCCESS,
+                    DeliveryStatus.FAILED,
+                    DeliveryStatus.DROPPED,
+                )
+
+    def test_block_strategy_bounds_buffer(self, broker_with_topic: PubSubBroker):
+        received: List[Message] = []
+        can_proceed = threading.Event()
+        handler_started = threading.Event()
+        BUFFER_SIZE = 2
+
+        def handler(msg: Message) -> None:
+            handler_started.set()
+            can_proceed.wait(timeout=5.0)
+            received.append(msg)
+
+        broker_with_topic.subscribe(
+            "test-topic",
+            handler,
+            subscriber_id="block-sub",
+            buffer_size=BUFFER_SIZE,
+            backpressure_strategy=BackpressureStrategy.BLOCK,
+        )
+
+        broker_with_topic.publish("test-topic", 0, message_id="blk-0")
+        handler_started.wait(timeout=2.0)
+        assert handler_started.is_set()
+
+        for i in range(1, BUFFER_SIZE + 1):
+            broker_with_topic.publish("test-topic", i, message_id=f"blk-{i}")
+
+        time.sleep(0.05)
+        buf_size = broker_with_topic.get_subscriber_buffer_size("test-topic", "block-sub")
+        assert buf_size == BUFFER_SIZE
+
+        publish_done = threading.Event()
+        publish_result = {"elapsed": 0.0}
+
+        def late_publisher() -> None:
+            start = time.monotonic()
+            broker_with_topic.publish("test-topic", "late", message_id="blk-late")
+            publish_result["elapsed"] = time.monotonic() - start
+            publish_done.set()
+
+        publisher_thread = threading.Thread(target=late_publisher, daemon=True)
+        publisher_thread.start()
+
+        time.sleep(0.3)
+        assert not publish_done.is_set()
+
+        can_proceed.set()
+        publish_done.wait(timeout=5.0)
+        assert publish_done.is_set()
+        assert publish_result["elapsed"] >= 0.1
+
+        publisher_thread.join(timeout=2.0)
+
+        time.sleep(0.5)
+        records = broker_with_topic.get_delivery_records(subscriber_id="block-sub")
+        assert len(records) == BUFFER_SIZE + 2
+        statuses = {r.message_id: r.status for r in records}
+        for i in range(BUFFER_SIZE + 1):
+            assert statuses[f"blk-{i}"] == DeliveryStatus.SUCCESS
+        assert statuses["blk-late"] == DeliveryStatus.SUCCESS
 
     def test_inactive_subscriber_does_not_receive(self, broker_with_topic: PubSubBroker):
         received: List[Message] = []

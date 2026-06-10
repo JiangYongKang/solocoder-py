@@ -26,17 +26,18 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
-@dataclass
 class _SubscriberRuntime:
-    subscriber: Subscriber
-    buffer: Deque[Message] = field(default_factory=deque)
-    buffer_lock: threading.Lock = field(default_factory=threading.Lock)
-    dispatch_thread: Optional[threading.Thread] = None
-    dispatch_event: threading.Event = field(default_factory=threading.Event)
-    stopped: bool = False
-    dropped_count: int = 0
-    success_count: int = 0
-    failed_count: int = 0
+    def __init__(self, subscriber: Subscriber) -> None:
+        self.subscriber = subscriber
+        self.buffer: Deque[Message] = deque()
+        self.buffer_lock: threading.RLock = threading.RLock()
+        self.not_full: threading.Condition = threading.Condition(self.buffer_lock)
+        self.dispatch_thread: Optional[threading.Thread] = None
+        self.dispatch_event: threading.Event = threading.Event()
+        self.stopped: bool = False
+        self.dropped_count: int = 0
+        self.success_count: int = 0
+        self.failed_count: int = 0
 
 
 @dataclass
@@ -294,6 +295,8 @@ class PubSubBroker:
     def _stop_subscriber_dispatch(self, sub_rt: _SubscriberRuntime) -> None:
         sub_rt.stopped = True
         sub_rt.dispatch_event.set()
+        with sub_rt.not_full:
+            sub_rt.not_full.notify_all()
         if sub_rt.dispatch_thread is not None:
             sub_rt.dispatch_thread.join(timeout=1.0)
             sub_rt.dispatch_thread = None
@@ -301,9 +304,13 @@ class PubSubBroker:
     def _dispatch_loop(self, sub_rt: _SubscriberRuntime) -> None:
         while not sub_rt.stopped:
             message: Optional[Message] = None
-            with sub_rt.buffer_lock:
+            was_full = False
+            with sub_rt.not_full:
                 if sub_rt.buffer:
+                    was_full = len(sub_rt.buffer) >= sub_rt.subscriber.buffer_size
                     message = sub_rt.buffer.popleft()
+                    if was_full:
+                        sub_rt.not_full.notify_all()
 
             if message is None:
                 sub_rt.dispatch_event.wait(timeout=0.01)
@@ -345,41 +352,64 @@ class PubSubBroker:
         topic_name: str,
     ) -> None:
         subscriber = sub_rt.subscriber
-        with sub_rt.buffer_lock:
-            if len(sub_rt.buffer) >= subscriber.buffer_size:
-                strategy = subscriber.backpressure_strategy
-                if strategy == BackpressureStrategy.DROP_OLDEST:
-                    sub_rt.buffer.popleft()
+        strategy = subscriber.backpressure_strategy
+
+        with sub_rt.not_full:
+            if strategy == BackpressureStrategy.BLOCK:
+                while len(sub_rt.buffer) >= subscriber.buffer_size and not sub_rt.stopped:
+                    if not sub_rt.not_full.wait(timeout=1.0):
+                        if len(sub_rt.buffer) >= subscriber.buffer_size and not sub_rt.stopped:
+                            sub_rt.dropped_count += 1
+                            self._record_delivery(
+                                message_id=message.id,
+                                subscriber_id=subscriber.id,
+                                topic=topic_name,
+                                status=DeliveryStatus.DROPPED,
+                                error_message="Buffer full: BLOCK strategy timed out, dropped newest message",
+                            )
+                            return
+                if sub_rt.stopped:
                     sub_rt.dropped_count += 1
                     self._record_delivery(
                         message_id=message.id,
                         subscriber_id=subscriber.id,
                         topic=topic_name,
                         status=DeliveryStatus.DROPPED,
-                        error_message="Buffer full: dropped oldest message",
-                    )
-                elif strategy == BackpressureStrategy.DROP_NEWEST:
-                    sub_rt.dropped_count += 1
-                    self._record_delivery(
-                        message_id=message.id,
-                        subscriber_id=subscriber.id,
-                        topic=topic_name,
-                        status=DeliveryStatus.DROPPED,
-                        error_message="Buffer full: dropped newest message",
-                    )
-                    return
-                elif strategy == BackpressureStrategy.BLOCK:
-                    pass
-                else:
-                    sub_rt.dropped_count += 1
-                    self._record_delivery(
-                        message_id=message.id,
-                        subscriber_id=subscriber.id,
-                        topic=topic_name,
-                        status=DeliveryStatus.DROPPED,
-                        error_message=f"Unknown strategy: {strategy}",
+                        error_message="Subscriber stopped during BLOCK wait",
                     )
                     return
+            else:
+                if len(sub_rt.buffer) >= subscriber.buffer_size:
+                    if strategy == BackpressureStrategy.DROP_OLDEST:
+                        dropped_msg = sub_rt.buffer.popleft()
+                        sub_rt.dropped_count += 1
+                        self._record_delivery(
+                            message_id=dropped_msg.id,
+                            subscriber_id=subscriber.id,
+                            topic=topic_name,
+                            status=DeliveryStatus.DROPPED,
+                            error_message="Buffer full: dropped oldest message",
+                        )
+                    elif strategy == BackpressureStrategy.DROP_NEWEST:
+                        sub_rt.dropped_count += 1
+                        self._record_delivery(
+                            message_id=message.id,
+                            subscriber_id=subscriber.id,
+                            topic=topic_name,
+                            status=DeliveryStatus.DROPPED,
+                            error_message="Buffer full: dropped newest message",
+                        )
+                        return
+                    else:
+                        sub_rt.dropped_count += 1
+                        self._record_delivery(
+                            message_id=message.id,
+                            subscriber_id=subscriber.id,
+                            topic=topic_name,
+                            status=DeliveryStatus.DROPPED,
+                            error_message=f"Unknown strategy: {strategy}",
+                        )
+                        return
 
             sub_rt.buffer.append(message)
             sub_rt.dispatch_event.set()

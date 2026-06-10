@@ -57,6 +57,7 @@ class ABACEngine:
     def evaluate(self, context: RequestContext) -> EvaluationResult:
         matched_policies: list[PolicyHit] = []
         now = time.monotonic()
+        order_counter = 0
 
         for policy in self._policies.values():
             if self._policy_matches(policy, context):
@@ -67,8 +68,10 @@ class ABACEngine:
                     priority=policy.priority,
                     is_explicit_deny=policy.is_explicit_deny,
                     matched_at=now,
+                    order=order_counter,
                 )
                 matched_policies.append(hit)
+                order_counter += 1
 
         if not matched_policies:
             return EvaluationResult(
@@ -215,8 +218,7 @@ class ABACEngine:
     def _resolve_first_applicable(
         self, matched: list[PolicyHit]
     ) -> EvaluationResult:
-        ordered = sorted(matched, key=lambda h: h.matched_at)
-        first = ordered[0]
+        first = min(matched, key=lambda h: h.order)
         return EvaluationResult(
             decision=(
                 Decision.PERMIT if first.effect == PolicyEffect.PERMIT else Decision.DENY
@@ -224,7 +226,7 @@ class ABACEngine:
             matched_policies=matched,
             reason=(
                 f"First applicable policy: '{first.policy_name}' ({first.policy_id}) "
-                f"with effect={first.effect.value}"
+                f"with effect={first.effect.value}, order={first.order}"
             ),
             resolved_by="FIRST_APPLICABLE",
         )

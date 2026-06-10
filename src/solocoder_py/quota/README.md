@@ -6,10 +6,21 @@
 
 1. **双层配额模型**：每个租户可配置独立配额，同时系统存在全局总配额，资源申请时需同时校验两级限制。
 2. **配额联动判定**：当租户级或全局级任一配额不足时拒绝本次申请，并给出明确拒绝原因（租户不足 / 全局不足 / 两者都不足）。
-3. **用量累计与释放**：申请成功后增加用量，释放资源时回收用量，使用细粒度锁保证并发下用量统计一致不超发。
-4. **用量重置**：按租户或全局手动触发重置用量，重置后新周期从零开始计量；全局重置会同步重置所有租户用量。
+3. **用量累计与释放**：申请成功后增加用量，释放资源时回收用量，使用统一的锁顺序保证并发下用量统计一致不超发。
+4. **用量重置**：
+   - 手动重置：按租户或全局手动触发重置用量，全局重置会同步重置所有租户用量。
+   - 周期自动重置：支持按小时、日、周、月等周期自动重置，在每次操作（申请、释放、查询）前自动检测周期是否到期，到期后进入新周期从零开始计量。
+5. **限额调整一致性**：调小租户或全局配额上限时，同步回收对应层级的已用量，始终保持 `sum(tenant_used) == global_used`。
 
 ## 核心类职责
+
+### clock.py
+
+| 类名 | 职责 |
+|------|------|
+| `Clock` (ABC) | 时钟抽象接口，提供 `now()` 方法返回当前时间 |
+| `SystemClock` | 基于系统时间的真实时钟实现 |
+| `ManualClock` | 可手动推进的模拟时钟，用于测试周期重置等时间相关场景，支持 `advance_seconds()` 和 `set()` |
 
 ### exceptions.py
 
@@ -28,8 +39,9 @@
 
 | 类名/函数 | 职责 |
 |-----------|------|
-| `GlobalQuota` | 全局配额数据模型：配额ID、总限额、已用量、创建时间、重置时间；提供 `remaining` 属性和 `copy()` 方法 |
-| `TenantQuota` | 租户配额数据模型：租户ID、租户限额、已用量、创建时间、重置时间；提供 `remaining` 属性和 `copy()` 方法 |
+| `QuotaPeriod` | 配额周期枚举：`NONE`（无周期，仅手动重置）、`HOURLY`、`DAILY`、`WEEKLY`、`MONTHLY` |
+| `GlobalQuota` | 全局配额数据模型：配额ID、总限额、周期类型、已用量、创建时间、周期起始时间、重置时间；提供 `remaining` 属性和 `copy()` 方法 |
+| `TenantQuota` | 租户配额数据模型：租户ID、租户限额、周期类型、已用量、创建时间、周期起始时间、重置时间；提供 `remaining` 属性和 `copy()` 方法 |
 | `make_global_quota()` | 工厂函数，创建带唯一ID的全局配额 |
 | `make_tenant_quota()` | 工厂函数，创建带唯一ID的租户配额 |
 
@@ -37,7 +49,7 @@
 
 | 类名 | 职责 |
 |------|------|
-| `QuotaManager` | 配额管理器，线程安全，维护全局配额、租户配额字典、租户锁；提供全局/租户配额的创建、更新、查询、资源申请、释放、用量重置等核心操作 |
+| `QuotaManager` | 配额管理器，线程安全，通过注入 `Clock` 支持可测试的时间驱动；维护全局配额、租户配额字典、租户锁；提供全局/租户配额的创建、更新、查询、资源申请、释放、手动/周期用量重置等核心操作 |
 
 ## 异常层次
 
@@ -62,33 +74,62 @@ QuotaError
 | `global_insufficient` | 仅全局配额不足 |
 | `both_tenant_and_global_insufficient` | 租户配额和全局配额均不足 |
 
+## 周期配额与自动重置
+
+### 周期类型
+
+`QuotaPeriod` 枚举支持以下周期：
+
+| 枚举值 | 含义 | 判定规则 |
+|--------|------|----------|
+| `NONE` | 无周期 | 从不自动重置，仅支持手动重置 |
+| `HOURLY` | 按小时 | 从 `period_start` 起经过 ≥ 1 小时视为周期到期 |
+| `DAILY` | 按日 | 从 `period_start` 起经过 ≥ 1 天视为周期到期 |
+| `WEEKLY` | 按周 | 从 `period_start` 起经过 ≥ 7 天视为周期到期 |
+| `MONTHLY` | 按月 | 从 `period_start` 起经过 ≥ 1 个自然月视为周期到期（按月份和日对齐） |
+
+### 自动重置触发时机
+
+所有会读写配额状态的公共方法（`acquire`、`release`、`reset_tenant_quota`、`get_tenant_quota`、`get_global_quota`、`list_tenants`）在执行前都会调用 `_maybe_reset_tenant_period()` 或 `_maybe_reset_global_period()` 检测周期：
+
+- 若全局周期到期 → 重置所有租户及全局的 `used = 0`，更新 `period_start` 和 `reset_at`
+- 若仅单个租户周期到期 → 重置该租户 `used = 0`，同步减少全局 `used`，更新 `period_start` 和 `reset_at`
+
+### 使用时钟注入测试周期重置
+
+生产环境使用默认的 `SystemClock`，测试时可注入 `ManualClock` 精确控制时间：
+
+```python
+from datetime import datetime
+from solocoder_py.quota import ManualClock, QuotaManager, QuotaPeriod
+
+clock = ManualClock(datetime(2025, 1, 1, 12, 0, 0))
+manager = QuotaManager(_clock=clock)
+manager.set_global_quota(100, period=QuotaPeriod.HOURLY)
+manager.create_tenant_quota("t1", 100, period=QuotaPeriod.HOURLY)
+manager.acquire("t1", 80)
+
+clock.advance_seconds(59 * 60)
+assert manager.get_tenant_quota("t1").used == 80  # 未到期
+
+clock.advance_seconds(61)  # 超过 1 小时
+assert manager.get_tenant_quota("t1").used == 0   # 自动重置
+```
+
 ## 双层配额联动规则
 
-资源申请（`acquire`）时按以下步骤执行（与 [manager.py](file:///c:/Users/vince/GoletaLab/SoloCoder-3/solocoder-py/src/solocoder_py/quota/manager.py#L105-L138) 中 `acquire()` 的实际执行顺序一致）：
+资源申请（`acquire`）时按以下步骤执行（与 [manager.py](file:///c:/Users/vince/GoletaLab/SoloCoder-3/solocoder-py/src/solocoder_py/quota/manager.py#L219-L253) 中 `acquire()` 的实际执行顺序一致）：
 
 1. **参数校验**：`amount` 必须为正整数，否则抛 `InvalidQuotaAmountError`
-2. **存在性校验**：全局配额必须已设置、租户必须存在
-3. **双层校验（原子操作）**：在同时持有「租户锁 + 全局锁」的情况下：
+2. **周期检测**：检测并重置已到期的租户或全局周期用量
+3. **存在性校验**：全局配额必须已设置、租户必须存在
+4. **双层校验（原子操作）**：在「全局锁 → 租户锁」的统一锁顺序下：
    - 读取 `tenant_remaining = tenant_quota.limit - tenant_quota.used`
    - 读取 `global_remaining = global_quota.limit - global_quota.used`
    - 若 `tenant_remaining < amount` **且** `global_remaining < amount` → 抛 `QuotaLimitExceededError(reason="both_tenant_and_global_insufficient")`
    - 若仅 `tenant_remaining < amount` → 抛 `QuotaLimitExceededError(reason="tenant_insufficient")`
    - 若仅 `global_remaining < amount` → 抛 `QuotaLimitExceededError(reason="global_insufficient")`
-4. **原子扣减**：双层校验通过后，在同一临界区内同时增加 `tenant_quota.used` 和 `global_quota.used`
-
-### 示例
-
-全局配额 = 100，租户 A 配额 = 50，租户 B 配额 = 50：
-
-| 操作 | 租户 A 已用 | 租户 B 已用 | 全局已用 | 结果 |
-|------|------------|------------|---------|------|
-| A 申请 30 | 30 | 0 | 30 | 成功 |
-| B 申请 40 | 30 | 40 | 70 | 成功 |
-| A 申请 25 | 30 | 40 | 70 | 失败：A 剩余 20 < 25（tenant_insufficient） |
-| B 申请 20 | 30 | 40 | 70 | 失败：全局剩余 30 ≥ 20，但 B 剩余 10 < 20（tenant_insufficient） |
-| B 申请 10 | 30 | 50 | 80 | 成功 |
-| A 申请 20 | 30 | 50 | 80 | 失败：A 剩余 20 ≥ 20，但全局剩余 20 ≥ 20？→ 实际 A 剩余 20 且全局剩余 20，成功 |
-| A 申请 21 | 50 | 50 | 100 | 失败：全局剩余 0 < 21（global_insufficient） |
+5. **原子扣减**：双层校验通过后，在同一临界区内同时增加 `tenant_quota.used` 和 `global_quota.used`
 
 ## 释放机制
 
@@ -103,22 +144,54 @@ QuotaError
 
 | 方法 | 作用 |
 |------|------|
-| `reset_tenant_quota(tenant_id)` | 重置单个租户的用量为 0，同步减少全局已用量（相当于释放该租户的全部已用资源） |
-| `reset_global_quota()` | 重置全局用量为 0，同时将所有租户的用量重置为 0 |
+| `reset_tenant_quota(tenant_id)` | 重置单个租户的用量为 0，同步减少全局已用量（相当于释放该租户的全部已用资源）；更新 `period_start` 和 `reset_at` |
+| `reset_global_quota()` | 重置全局用量为 0，同时将所有租户的用量重置为 0；为全局和所有租户更新 `period_start` 和 `reset_at` |
 | `reset_all()` | 等同于 `reset_global_quota()` |
 
-重置时会记录 `reset_at` 时间戳。
+## 限额调整语义
+
+调小配额上限时可能导致当前 `used > limit`，此时会**同步回收**已用量，始终保证两级用量一致：
+
+### 调小租户配额上限
+
+当 `update_tenant_quota_limit(tenant_id, new_limit)` 中 `new_limit < old_limit` 且 `tenant.used > new_limit` 时：
+
+- `tenant.used = new_limit`（截断到新上限）
+- `global.used -= (old_used - new_limit)`（同步回收全局用量）
+
+这样 `sum(tenant_used) == global_used` 恒成立，后续 `release` 不会因为「租户已用量被截断而全局未同步」而出现失败。
+
+### 调小全局配额上限
+
+当 `set_global_quota(new_limit)` 中 `new_limit < old_limit` 且 `global.used > new_limit` 时：
+
+- `global.used = new_limit`（截断到新上限）
+- 按租户 ID 字典序遍历，依次从各租户的 `used` 中回收差额，直到补齐 `overage = old_global_used - new_limit`
+
+回收顺序是确定性的（按租户 ID 升序），保证并发或重复调用的结果一致。
+
+### 调大配额上限
+
+调大配额上限时不会触发已用量调整，仅更新 `limit`，已用量保持不变。
 
 ## 并发一致性保证
 
-采用双层锁架构：
+采用「全局锁 → 租户锁」的**统一锁顺序**架构，彻底避免死锁：
 
 | 锁 | 保护范围 |
 |----|----------|
 | `_global_lock` (`threading.RLock`) | 全局配额对象、租户配额字典、租户锁字典 |
 | 每个租户独立的 `threading.RLock` | 单个租户的配额读写 |
 
-**核心原则**：`acquire` 和 `release` 操作需同时持有「租户锁 + 全局锁」，确保双层配额的扣减/释放是原子操作，杜绝并发下的超发问题。所有结构操作（创建租户、查询等）仅持全局锁。
+**统一加锁顺序**：所有需要同时操作全局和租户数据的方法（`acquire`、`release`、`reset_tenant_quota`、`update_tenant_quota_limit`、`reset_global_quota`）都严格按照**先获取 `_global_lock`，再获取对应租户锁**的顺序执行，绝不反向嵌套。
+
+- `acquire` / `release` / `update_tenant_quota_limit` / `reset_tenant_quota`：`_global_lock` → `tenant_lock`
+- `reset_global_quota`：持有 `_global_lock`，内部依次获取各租户 `tenant_lock` 并立即释放
+
+该策略保证：
+1. 无死锁：任意两个线程获取锁的顺序一致，不会出现循环等待
+2. 原子性：双层配额的扣减/释放/截断在同一临界区内完成，用量不会出现中间可见状态
+3. `sum(tenant_used) == global_used` 恒成立
 
 ## 封装保护
 
@@ -137,6 +210,18 @@ manager.set_global_quota(1000)
 
 manager.create_tenant_quota("tenant-001", 500)
 manager.create_tenant_quota("tenant-002", 300)
+```
+
+### 周期配额（按日重置）
+
+```python
+from solocoder_py.quota import QuotaPeriod
+
+manager.set_global_quota(10000, period=QuotaPeriod.DAILY)
+manager.create_tenant_quota("tenant-001", 5000, period=QuotaPeriod.DAILY)
+
+manager.acquire("tenant-001", 3000)
+# 次日再次操作时自动进入新周期，用量从零开始
 ```
 
 ### 资源申请与释放
@@ -174,8 +259,10 @@ try:
 except QuotaLimitExceededError as e:
     print(e.reason)  # "tenant_insufficient"（A 仅 30 额度）
 
-manager.acquire("tenant-A", 30)  # 全局已用 110？→ 此时全局剩余 20，失败
-# 实际：全局剩余 100-80=20，A 剩余 30，申请 30 → global_insufficient
+try:
+    manager.acquire("tenant-A", 30)
+except QuotaLimitExceededError as e:
+    print(e.reason)  # "global_insufficient"（全局剩余 20）
 ```
 
 ### 用量重置
@@ -194,6 +281,23 @@ print(manager.get_tenant_quota("tenant-002").used)  # 0
 print(manager.get_global_quota().used)              # 0
 ```
 
+### 调小配额上限保持用量一致
+
+```python
+manager.set_global_quota(1000)
+manager.create_tenant_quota("t1", 500)
+manager.create_tenant_quota("t2", 500)
+manager.acquire("t1", 400)
+manager.acquire("t2", 300)
+assert manager.get_global_quota().used == 700
+
+manager.update_tenant_quota_limit("t1", 200)  # 调小 t1 上限
+assert manager.get_tenant_quota("t1").used == 200  # 截断到新上限
+assert manager.get_global_quota().used == 500      # 同步回收全局 200
+assert manager.get_tenant_quota("t2").used == 300  # 其他租户不受影响
+# sum(t1.used=200, t2.used=300) == global.used=500 ✓
+```
+
 ## 运行测试
 
 ```bash
@@ -202,8 +306,9 @@ poetry run pytest tests/quota/ -q
 
 测试覆盖以下场景：
 
-- **正常流程**：全局/租户配额创建、资源申请、释放、重置
-- **边界条件**：租户配额等于全局配额、申请量刚好等于剩余额度、重置临界时刻（重置前后行为差异）、更新配额限制后已用量自动截断
+- **正常流程**：全局/租户配额创建、资源申请、释放、手动重置、周期自动重置
+- **边界条件**：租户配额等于全局配额、申请量刚好等于剩余额度、重置临界时刻（重置前后行为差异）、周期到期前后行为差异、HOURLY/DAILY 周期边界
 - **异常分支**：未知租户申请、释放超过已用量、负数/零数额校验、全局配额未设置时操作、超限原因精确区分（租户不足/全局不足/两者都不足）
-- **并发一致性**：多线程并发申请无超发、并发申请与释放无异常
+- **限额调整一致性**：调小租户限额时两级用量同步、调小全局限额时按顺序同步回收租户用量、调大限额不影响已用量、多租户场景下 `sum(tenant_used) == global_used` 恒成立
+- **并发一致性**：多线程并发申请无超发、并发申请与释放无异常、全局重置与申请/释放交错执行无死锁且一致性成立
 - **封装保护**：返回对象均为独立副本，修改返回值不影响内部状态

@@ -58,7 +58,7 @@ class Instance:
     def is_available(self) -> bool:
         if self.health != InstanceHealth.HEALTHY:
             return False
-        if self.circuit_state == CircuitState.OPEN:
+        if self.circuit_state != CircuitState.CLOSED:
             return False
         if self.weight <= 0:
             return False

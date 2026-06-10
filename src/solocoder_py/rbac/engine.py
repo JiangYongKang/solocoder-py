@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, List, Optional, Set
+from typing import Dict, FrozenSet, List, Set
 
 from .exceptions import (
     CircularInheritanceError,
@@ -19,6 +19,13 @@ class RBACEngine:
     _user_bindings: Dict[str, UserRoleBinding] = field(default_factory=dict)
     _lock: threading.RLock = field(default_factory=threading.RLock)
 
+    def _copy_role(self, role: Role) -> Role:
+        return Role(
+            name=role.name,
+            permissions=set(role.permissions),
+            parent_roles=set(role.parent_roles),
+        )
+
     def create_role(self, name: str) -> Role:
         if not name:
             raise ValueError("role name cannot be empty")
@@ -27,7 +34,7 @@ class RBACEngine:
                 raise RoleAlreadyExistsError(f"role '{name}' already exists")
             role = Role(name=name)
             self._roles[name] = role
-            return role
+            return self._copy_role(role)
 
     def get_role(self, name: str) -> Role:
         if not name:
@@ -36,7 +43,7 @@ class RBACEngine:
             role = self._roles.get(name)
             if role is None:
                 raise RoleNotFoundError(f"role '{name}' not found")
-            return role
+            return self._copy_role(role)
 
     def delete_role(self, name: str) -> bool:
         if not name:
@@ -120,6 +127,20 @@ class RBACEngine:
                 stack.extend(current_role.parent_roles)
         return False
 
+    def _collect_inheritance_chain_iter(self, start_names, chain, visited):
+        stack = list(start_names)
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            chain.append(current)
+            role = self._roles.get(current)
+            if role is not None:
+                for parent_name in role.parent_roles:
+                    if parent_name not in visited:
+                        stack.append(parent_name)
+
     def get_role_inheritance_chain(self, role_name: str) -> List[str]:
         if not role_name:
             raise ValueError("role name cannot be empty")
@@ -128,20 +149,8 @@ class RBACEngine:
                 raise RoleNotFoundError(f"role '{role_name}' not found")
             chain: List[str] = []
             visited: Set[str] = set()
-            self._collect_inheritance_chain(role_name, chain, visited)
+            self._collect_inheritance_chain_iter([role_name], chain, visited)
             return chain
-
-    def _collect_inheritance_chain(
-        self, role_name: str, chain: List[str], visited: Set[str]
-    ) -> None:
-        if role_name in visited:
-            return
-        visited.add(role_name)
-        chain.append(role_name)
-        role = self._roles.get(role_name)
-        if role is not None:
-            for parent_name in role.parent_roles:
-                self._collect_inheritance_chain(parent_name, chain, visited)
 
     def bind_user_to_roles(self, user_id: str, role_names: List[str]) -> None:
         if not user_id:
@@ -181,8 +190,7 @@ class RBACEngine:
                 return []
             effective: List[str] = []
             visited: Set[str] = set()
-            for role_name in binding.role_names:
-                self._collect_inheritance_chain(role_name, effective, visited)
+            self._collect_inheritance_chain_iter(binding.role_names, effective, visited)
             return effective
 
     def get_role_effective_permissions(self, role_name: str) -> Set[Permission]:

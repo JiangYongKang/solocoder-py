@@ -168,7 +168,7 @@ class TestVerifySignature:
         with pytest.raises(SignatureVerificationError):
             verify_signature(
                 payload={"x": 2},
-                signing_secret="wrong_secret",
+                signing_secret="secret",
                 timestamp=1000.0,
                 signature=sig,
             )
@@ -285,4 +285,72 @@ class TestVerifySignature:
             signature=sig,
             tolerance_seconds=10,
             current_time=ts + 10,
+        )
+
+    def test_payload_tamper_add_key_raises(self):
+        original = {"a": 1}
+        sig = compute_signature(original, "secret", 1000.0)
+        tampered = {"a": 1, "b": 2}
+        with pytest.raises(SignatureVerificationError):
+            verify_signature(
+                payload=tampered,
+                signing_secret="secret",
+                timestamp=1000.0,
+                signature=sig,
+            )
+
+    def test_payload_tamper_remove_key_raises(self):
+        original = {"a": 1, "b": 2}
+        sig = compute_signature(original, "secret", 1000.0)
+        tampered = {"a": 1}
+        with pytest.raises(SignatureVerificationError):
+            verify_signature(
+                payload=tampered,
+                signing_secret="secret",
+                timestamp=1000.0,
+                signature=sig,
+            )
+
+    def test_payload_tamper_change_value_type_raises(self):
+        original = {"amount": 100}
+        sig = compute_signature(original, "secret", 1000.0)
+        tampered = {"amount": "100"}
+        with pytest.raises(SignatureVerificationError):
+            verify_signature(
+                payload=tampered,
+                signing_secret="secret",
+                timestamp=1000.0,
+                signature=sig,
+            )
+
+    def test_payload_tamper_nested_value_raises(self):
+        original = {"order": {"id": "123", "total": 99.99}}
+        sig = compute_signature(original, "secret", 1000.0)
+        tampered = {"order": {"id": "123", "total": 199.99}}
+        with pytest.raises(SignatureVerificationError):
+            verify_signature(
+                payload=tampered,
+                signing_secret="secret",
+                timestamp=1000.0,
+                signature=sig,
+            )
+
+    def test_payload_tamper_empty_to_nonempty_raises(self):
+        sig = compute_signature({}, "secret", 1000.0)
+        with pytest.raises(SignatureVerificationError):
+            verify_signature(
+                payload={"x": 1},
+                signing_secret="secret",
+                timestamp=1000.0,
+                signature=sig,
+            )
+
+    def test_payload_valid_identical_content_passes(self):
+        payload = {"b": 2, "a": 1, "nested": {"z": 26, "a": 1}}
+        sig = compute_signature(payload, "secret", 1000.0)
+        verify_signature(
+            payload=payload,
+            signing_secret="secret",
+            timestamp=1000.0,
+            signature=sig,
         )

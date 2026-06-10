@@ -99,13 +99,41 @@ class TestPolicyValidation:
         with pytest.raises(InvalidPolicyError, match="Invalid effect"):
             Policy(policy_id="p1", name="test", effect="BAD")
 
-    def test_deny_policy_marked_explicit_deny(self):
+    def test_deny_policy_not_marked_explicit_deny_by_default(self):
         p = Policy(policy_id="p1", name="deny all", effect=PolicyEffect.DENY)
+        assert p.is_explicit_deny is False
+
+    def test_deny_policy_can_be_marked_explicit(self):
+        p = Policy(
+            policy_id="p1",
+            name="explicit deny all",
+            effect=PolicyEffect.DENY,
+            is_explicit_deny=True,
+        )
         assert p.is_explicit_deny is True
 
     def test_permit_policy_not_marked_explicit_deny(self):
         p = Policy(policy_id="p1", name="permit all", effect=PolicyEffect.PERMIT)
         assert p.is_explicit_deny is False
+
+    def test_permit_policy_cannot_be_marked_explicit_deny(self):
+        p = Policy(
+            policy_id="p1",
+            name="permit",
+            effect=PolicyEffect.PERMIT,
+            is_explicit_deny=True,
+        )
+        assert p.effect == PolicyEffect.PERMIT
+        assert p.is_explicit_deny is True
+
+    def test_is_explicit_deny_must_be_bool(self):
+        with pytest.raises(InvalidPolicyError, match="is_explicit_deny must be a boolean"):
+            Policy(
+                policy_id="p1",
+                name="x",
+                effect=PolicyEffect.DENY,
+                is_explicit_deny="yes",
+            )
 
     def test_valid_policy_created(self):
         p = Policy(
@@ -650,6 +678,7 @@ class TestExplicitDenyOverride:
                 name="Deny high sensitivity",
                 effect=PolicyEffect.DENY,
                 priority=1,
+                is_explicit_deny=True,
                 condition=AttributeCondition(
                     "resource.sensitivity", ComparisonOperator.EQ, "high"
                 ),
@@ -677,6 +706,7 @@ class TestExplicitDenyOverride:
                 name="Deny low priority",
                 effect=PolicyEffect.DENY,
                 priority=1,
+                is_explicit_deny=True,
                 condition=AttributeCondition(
                     "subject.role", ComparisonOperator.EQ, "admin"
                 ),
@@ -688,6 +718,7 @@ class TestExplicitDenyOverride:
                 name="Deny high priority",
                 effect=PolicyEffect.DENY,
                 priority=50,
+                is_explicit_deny=True,
                 condition=AttributeCondition(
                     "resource.type", ComparisonOperator.EQ, "document"
                 ),
@@ -716,6 +747,7 @@ class TestExplicitDenyOverride:
                 name="Deny high sensitivity",
                 effect=PolicyEffect.DENY,
                 priority=1,
+                is_explicit_deny=True,
                 condition=AttributeCondition(
                     "resource.sensitivity", ComparisonOperator.EQ, "high"
                 ),
@@ -749,6 +781,122 @@ class TestExplicitDenyOverride:
         result = engine.evaluate(admin_context)
         assert result.decision == Decision.PERMIT
         assert result.resolved_by == "ONLY_PERMIT"
+
+    def test_normal_deny_does_not_bypass_conflict_strategy_permit_overrides(
+        self, permit_overrides_engine
+    ):
+        permit_overrides_engine.add_policy(
+            Policy(
+                policy_id="permit1",
+                name="Permit by role",
+                effect=PolicyEffect.PERMIT,
+                priority=1,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        permit_overrides_engine.add_policy(
+            Policy(
+                policy_id="deny_normal",
+                name="Normal deny by dept",
+                effect=PolicyEffect.DENY,
+                priority=100,
+                is_explicit_deny=False,
+                condition=AttributeCondition(
+                    "subject.department", ComparisonOperator.EQ, "IT"
+                ),
+            )
+        )
+        ctx = RequestContext(subject={"role": "admin", "department": "IT"})
+        result = permit_overrides_engine.evaluate(ctx)
+        assert result.decision == Decision.PERMIT
+        assert result.resolved_by == "PERMIT_OVERRIDES"
+
+    def test_normal_deny_vs_explicit_deny_difference(self):
+        engine_normal = ABACEngine(
+            conflict_strategy=ConflictResolutionStrategy.PERMIT_OVERRIDES
+        )
+        engine_normal.add_policy(
+            Policy(
+                policy_id="p1",
+                name="Permit",
+                effect=PolicyEffect.PERMIT,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        engine_normal.add_policy(
+            Policy(
+                policy_id="p2",
+                name="Normal Deny",
+                effect=PolicyEffect.DENY,
+                is_explicit_deny=False,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+
+        engine_explicit = ABACEngine(
+            conflict_strategy=ConflictResolutionStrategy.PERMIT_OVERRIDES
+        )
+        engine_explicit.add_policy(
+            Policy(
+                policy_id="p1",
+                name="Permit",
+                effect=PolicyEffect.PERMIT,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        engine_explicit.add_policy(
+            Policy(
+                policy_id="p2",
+                name="Explicit Deny",
+                effect=PolicyEffect.DENY,
+                is_explicit_deny=True,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+
+        ctx = RequestContext(subject={"role": "admin"})
+        assert engine_normal.evaluate(ctx).decision == Decision.PERMIT
+        assert engine_explicit.evaluate(ctx).decision == Decision.DENY
+
+    def test_normal_deny_uses_highest_priority(self, highest_priority_engine):
+        highest_priority_engine.add_policy(
+            Policy(
+                policy_id="permit_low",
+                name="Low priority permit",
+                effect=PolicyEffect.PERMIT,
+                priority=1,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        highest_priority_engine.add_policy(
+            Policy(
+                policy_id="deny_high_normal",
+                name="High priority normal deny",
+                effect=PolicyEffect.DENY,
+                priority=100,
+                is_explicit_deny=False,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        ctx = RequestContext(subject={"role": "admin"})
+        result = highest_priority_engine.evaluate(ctx)
+        assert result.decision == Decision.DENY
+        assert result.resolved_by == "HIGHEST_PRIORITY"
+        assert "High priority normal deny" in result.reason
 
 
 # =============================
@@ -877,7 +1025,7 @@ class TestConflictResolution:
         assert result.decision == Decision.PERMIT
         assert result.resolved_by == "HIGHEST_PRIORITY"
 
-    def test_first_applicable_strategy(self):
+    def test_first_applicable_strategy_deny_first(self):
         engine = ABACEngine(conflict_strategy=ConflictResolutionStrategy.FIRST_APPLICABLE)
         engine.add_policy(
             Policy(
@@ -904,7 +1052,73 @@ class TestConflictResolution:
         )
         ctx = RequestContext(subject={"role": "admin"})
         result = engine.evaluate(ctx)
+        assert result.decision == Decision.DENY
         assert result.resolved_by == "FIRST_APPLICABLE"
+        assert "First deny" in result.reason
+        assert "p_deny" in result.reason
+
+    def test_first_applicable_strategy_permit_first(self):
+        engine = ABACEngine(conflict_strategy=ConflictResolutionStrategy.FIRST_APPLICABLE)
+        engine.add_policy(
+            Policy(
+                policy_id="p_permit",
+                name="First permit",
+                effect=PolicyEffect.PERMIT,
+                priority=1,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        engine.add_policy(
+            Policy(
+                policy_id="p_deny",
+                name="Second deny",
+                effect=PolicyEffect.DENY,
+                priority=100,
+                is_explicit_deny=False,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        ctx = RequestContext(subject={"role": "admin"})
+        result = engine.evaluate(ctx)
+        assert result.decision == Decision.PERMIT
+        assert result.resolved_by == "FIRST_APPLICABLE"
+        assert "First permit" in result.reason
+        assert "p_permit" in result.reason
+
+    def test_first_applicable_stable_order_regardless_of_priority(self):
+        engine = ABACEngine(conflict_strategy=ConflictResolutionStrategy.FIRST_APPLICABLE)
+        engine.add_policy(
+            Policy(
+                policy_id="first",
+                name="Low priority first",
+                effect=PolicyEffect.PERMIT,
+                priority=0,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        engine.add_policy(
+            Policy(
+                policy_id="second",
+                name="High priority second",
+                effect=PolicyEffect.DENY,
+                priority=9999,
+                is_explicit_deny=False,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        ctx = RequestContext(subject={"role": "admin"})
+        result = engine.evaluate(ctx)
+        assert result.decision == Decision.PERMIT
+        assert result.resolved_by == "FIRST_APPLICABLE"
+        assert "Low priority first" in result.reason
 
 
 # =============================
@@ -1055,6 +1269,7 @@ class TestAuditInformation:
         assert hit.priority == 10
         assert hit.is_explicit_deny is False
         assert hit.matched_at > 0
+        assert hit.order == 0
 
     def test_multiple_matched_policies_recorded(self, engine, admin_context):
         engine.add_policy(
@@ -1094,14 +1309,35 @@ class TestAuditInformation:
         assert len(result.matched_policies) == 3
         ids = {h.policy_id for h in result.matched_policies}
         assert ids == {"p1", "p2", "p3"}
+        orders = sorted(h.order for h in result.matched_policies)
+        assert orders == [0, 1, 2]
 
-    def test_deny_policy_hit_recorded(self, engine, admin_context):
+    def test_normal_deny_policy_hit_recorded(self, engine, admin_context):
         engine.add_policy(
             Policy(
                 policy_id="d1",
-                name="Deny high sensitivity",
+                name="Normal deny high sensitivity",
                 effect=PolicyEffect.DENY,
                 priority=100,
+                is_explicit_deny=False,
+                condition=AttributeCondition(
+                    "resource.sensitivity", ComparisonOperator.EQ, "high"
+                ),
+            )
+        )
+        result = engine.evaluate(admin_context)
+        hit = result.matched_policies[0]
+        assert hit.is_explicit_deny is False
+        assert hit.effect == PolicyEffect.DENY
+
+    def test_explicit_deny_policy_hit_recorded(self, engine, admin_context):
+        engine.add_policy(
+            Policy(
+                policy_id="d1",
+                name="Explicit deny high sensitivity",
+                effect=PolicyEffect.DENY,
+                priority=100,
+                is_explicit_deny=True,
                 condition=AttributeCondition(
                     "resource.sensitivity", ComparisonOperator.EQ, "high"
                 ),
@@ -1111,6 +1347,82 @@ class TestAuditInformation:
         hit = result.matched_policies[0]
         assert hit.is_explicit_deny is True
         assert hit.effect == PolicyEffect.DENY
+
+    def test_multi_policy_conflict_audit_contains_all_hits(self, engine):
+        engine.add_policy(
+            Policy(
+                policy_id="perm1",
+                name="Permit by role",
+                effect=PolicyEffect.PERMIT,
+                priority=10,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        engine.add_policy(
+            Policy(
+                policy_id="deny1",
+                name="Normal deny by dept",
+                effect=PolicyEffect.DENY,
+                priority=20,
+                is_explicit_deny=False,
+                condition=AttributeCondition(
+                    "subject.department", ComparisonOperator.EQ, "IT"
+                ),
+            )
+        )
+        engine.add_policy(
+            Policy(
+                policy_id="perm2",
+                name="Permit by ip",
+                effect=PolicyEffect.PERMIT,
+                priority=5,
+                condition=AttributeCondition(
+                    "environment.ip", ComparisonOperator.EQ, "192.168.1.1"
+                ),
+            )
+        )
+        ctx = RequestContext(
+            subject={"role": "admin", "department": "IT"},
+            environment={"ip": "192.168.1.1"},
+        )
+        result = engine.evaluate(ctx)
+        assert len(result.matched_policies) == 3
+        hit_ids = [h.policy_id for h in result.matched_policies]
+        assert hit_ids == ["perm1", "deny1", "perm2"]
+        for i, h in enumerate(result.matched_policies):
+            assert h.order == i
+        assert result.decision == Decision.DENY
+        assert result.resolved_by == "DENY_OVERRIDES"
+
+    def test_audit_order_preserved_across_evaluations(self, engine, admin_context):
+        engine.add_policy(
+            Policy(
+                policy_id="a",
+                name="Policy A",
+                effect=PolicyEffect.PERMIT,
+                condition=AttributeCondition(
+                    "subject.role", ComparisonOperator.EQ, "admin"
+                ),
+            )
+        )
+        engine.add_policy(
+            Policy(
+                policy_id="b",
+                name="Policy B",
+                effect=PolicyEffect.PERMIT,
+                condition=AttributeCondition(
+                    "resource.type", ComparisonOperator.EQ, "document"
+                ),
+            )
+        )
+        r1 = engine.evaluate(admin_context)
+        r2 = engine.evaluate(admin_context)
+        assert [h.order for h in r1.matched_policies] == [0, 1]
+        assert [h.order for h in r2.matched_policies] == [0, 1]
+        assert [h.policy_id for h in r1.matched_policies] == ["a", "b"]
+        assert [h.policy_id for h in r2.matched_policies] == ["a", "b"]
 
 
 # =============================
@@ -1128,6 +1440,7 @@ class TestIntegrationScenarios:
                 name="Deny access outside business hours",
                 effect=PolicyEffect.DENY,
                 priority=100,
+                is_explicit_deny=True,
                 condition=ConditionExpression(
                     LogicalOperator.NOT,
                     operands=[

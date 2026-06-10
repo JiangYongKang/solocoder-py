@@ -12,7 +12,6 @@ from .exceptions import (
     ReleaseAlreadyExistsError,
     ReleaseNotFoundError,
     RollbackNotAllowedError,
-    VersionNotFoundError,
 )
 from .models import (
     CanaryRelease,
@@ -40,8 +39,11 @@ class CanaryController:
             if name in self._releases:
                 raise ReleaseAlreadyExistsError(f"release '{name}' already exists")
 
-            self._router.register_version(config.baseline_version, VersionType.BASELINE)
-            self._router.register_version(config.candidate_version, VersionType.CANDIDATE)
+            self._router.register_release(
+                release_name=name,
+                baseline_version=config.baseline_version,
+                candidate_version=config.candidate_version,
+            )
 
             release = CanaryRelease(
                 name=name,
@@ -65,7 +67,7 @@ class CanaryController:
             release.started_at = time.time()
             release.current_step_index = -1
             release.current_traffic_percentage = 0
-            self._router.set_traffic_percentage(0)
+            self._router.set_traffic_percentage(name, 0)
 
             self._advance_to_next_step(release)
             release.phase = CanaryPhase.RUNNING
@@ -126,7 +128,7 @@ class CanaryController:
                 )
 
             release.current_traffic_percentage = percentage
-            self._router.set_traffic_percentage(percentage)
+            self._router.set_traffic_percentage(name, percentage)
             return release
 
     def rollback(self, name: str, reason: str = "Manual rollback") -> CanaryRelease:
@@ -190,17 +192,35 @@ class CanaryController:
             raise InvalidReleasePhaseError(
                 f"cannot route request for release '{release_name}' in phase {release.phase.value}"
             )
-        return self._router.route(request_key, release_name)
+        return self._router.route(release_name, request_key)
 
     def record_request_metrics(
         self,
         release_name: str,
+        version_type: VersionType,
         latency_ms: float,
         is_error: bool = False,
     ) -> None:
         if latency_ms < 0:
             raise ValueError("latency_ms must not be negative")
-        self._router.record_candidate_metrics(release_name, latency_ms, is_error)
+        self._get_release_or_raise(release_name)
+        self._router.record_metrics(release_name, version_type, latency_ms, is_error)
+
+    def record_candidate_metrics(
+        self,
+        release_name: str,
+        latency_ms: float,
+        is_error: bool = False,
+    ) -> None:
+        self.record_request_metrics(release_name, VersionType.CANDIDATE, latency_ms, is_error)
+
+    def record_baseline_metrics(
+        self,
+        release_name: str,
+        latency_ms: float,
+        is_error: bool = False,
+    ) -> None:
+        self.record_request_metrics(release_name, VersionType.BASELINE, latency_ms, is_error)
 
     def get_release(self, name: str) -> CanaryRelease:
         with self._lock:
@@ -262,7 +282,7 @@ class CanaryController:
         release.current_step_index += 1
         next_pct = release.config.traffic_steps[release.current_step_index]
         release.current_traffic_percentage = next_pct
-        self._router.set_traffic_percentage(next_pct)
+        self._router.set_traffic_percentage(release.name, next_pct)
 
     def _perform_rollback(
         self,
@@ -271,15 +291,17 @@ class CanaryController:
         detail: str,
         snapshot: MetricsSnapshot,
     ) -> RollbackRecord:
+        traffic_before_rollback = release.current_traffic_percentage
+
         release.phase = CanaryPhase.ROLLED_BACK
         release.rolled_back_at = time.time()
         release.current_traffic_percentage = 0
-        self._router.set_traffic_percentage(0)
+        self._router.set_traffic_percentage(release.name, 0)
 
         record = RollbackRecord(
             timestamp=time.time(),
             reason=reason,
-            traffic_percentage_at_rollback=release.current_traffic_percentage,
+            traffic_percentage_at_rollback=traffic_before_rollback,
             detail=detail,
             metrics_snapshot=snapshot,
         )
@@ -290,7 +312,7 @@ class CanaryController:
         release.phase = CanaryPhase.PROMOTED
         release.promoted_at = time.time()
         release.current_traffic_percentage = 100
-        self._router.set_traffic_percentage(100)
+        self._router.set_traffic_percentage(release.name, 100)
 
     def _take_metrics_snapshot(self, release: CanaryRelease) -> MetricsSnapshot:
         stats = self._router.get_stats(release.name)

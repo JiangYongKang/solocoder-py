@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from .channel import NotificationChannel
 from .exceptions import (
     ChannelTimeoutError,
     FanoutExecutionError,
+    InvalidChannelConfigError,
     UnknownChannelError,
 )
 from .models import (
@@ -44,12 +44,22 @@ class FanoutEngine:
     def registered_channels(self) -> list[str]:
         return list(self._channels.keys())
 
+    @staticmethod
+    def _validate_config_name(config_channel_name: str, expected_name: str) -> None:
+        if config_channel_name != expected_name:
+            raise InvalidChannelConfigError(
+                f"Config channel_name '{config_channel_name}' does not match "
+                f"registered channel name '{expected_name}'"
+            )
+
     def register_channel(
         self,
         name: str,
         channel: NotificationChannel,
         config: Optional[ChannelConfig] = None,
     ) -> None:
+        if config is not None:
+            self._validate_config_name(config.channel_name, name)
         self._channels[name] = channel
         self._channel_configs[name] = config or ChannelConfig(channel_name=name)
 
@@ -66,6 +76,7 @@ class FanoutEngine:
     def set_channel_config(self, name: str, config: ChannelConfig) -> None:
         if name not in self._channels:
             raise UnknownChannelError(name)
+        self._validate_config_name(config.channel_name, name)
         self._channel_configs[name] = config
 
     def fanout(
@@ -86,28 +97,21 @@ class FanoutEngine:
         start_time = self._time_provider()
         channel_results: dict[str, ChannelResult] = {}
 
-        with ThreadPoolExecutor(max_workers=min(len(target_channels), self._max_workers)) as executor:
-            futures: dict[str, Future[ChannelResult]] = {}
-            for ch_name in target_channels:
-                futures[ch_name] = executor.submit(
-                    self._deliver_with_retries,
-                    ch_name,
-                    notification,
-                )
+        results_lock = threading.Lock()
+        threads: list[threading.Thread] = []
 
-            for ch_name, future in futures.items():
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    result = ChannelResult(
-                        channel_name=ch_name,
-                        status=ChannelDeliveryStatus.FAILED,
-                        attempts=0,
-                        attempts_detail=[],
-                        final_error=exc,
-                        total_duration=0.0,
-                    )
+        def _worker(ch_name: str) -> None:
+            result = self._deliver_with_retries(ch_name, notification)
+            with results_lock:
                 channel_results[ch_name] = result
+
+        for ch_name in target_channels:
+            t = threading.Thread(target=_worker, args=(ch_name,), daemon=True)
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
 
         total_duration = self._time_provider() - start_time
         return FanoutResult(
@@ -180,9 +184,21 @@ class FanoutEngine:
         notification: Notification,
         timeout: float,
     ) -> None:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(channel.deliver, notification)
+        result_container: list[Optional[BaseException]] = [None]
+
+        def _target() -> None:
             try:
-                future.result(timeout=timeout)
-            except FuturesTimeoutError as exc:
-                raise ChannelTimeoutError(channel.name, timeout) from exc
+                channel.deliver(notification)
+            except BaseException as exc:
+                result_container[0] = exc
+
+        t = threading.Thread(target=_target, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            raise ChannelTimeoutError(channel.name, timeout)
+
+        exc = result_container[0]
+        if exc is not None:
+            raise exc

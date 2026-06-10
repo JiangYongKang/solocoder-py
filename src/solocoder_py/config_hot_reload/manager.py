@@ -118,14 +118,13 @@ class ConfigHotReloadManager:
             self._version_history.append(version_str)
             self._current_version = version_str
 
-            if changes:
-                event = ChangeEvent(
-                    version=version_str,
-                    timestamp=timestamp,
-                    changes=changes,
-                    is_rollback=False,
-                )
-                self._notify_listeners(event)
+            event = ChangeEvent(
+                version=version_str,
+                timestamp=timestamp,
+                changes=changes,
+                is_rollback=False,
+            )
+            self._notify_listeners(event)
 
             return config_version
 
@@ -133,7 +132,8 @@ class ConfigHotReloadManager:
         with self._lock:
             if self._current_version is None:
                 raise NoActiveVersionError("No active configuration version")
-            return self._versions[self._current_version].get(key, default)
+            value = self._versions[self._current_version].get(key, default)
+            return copy.deepcopy(value)
 
     def get_all(self) -> Dict[str, Any]:
         with self._lock:
@@ -164,9 +164,6 @@ class ConfigHotReloadManager:
             if version not in self._versions:
                 raise VersionNotFoundError(f"Version '{version}' not found")
 
-            if self._current_version == version:
-                return copy.deepcopy(self._versions[version])
-
             old_data: Dict[str, Any] = {}
             if self._current_version is not None:
                 old_data = self._versions[self._current_version].data
@@ -175,31 +172,18 @@ class ConfigHotReloadManager:
             new_data = target_version.data
 
             changes = self._compute_changes(old_data, new_data)
-
-            new_version_str = self._generate_version()
+            self._current_version = version
             timestamp = datetime.now()
 
-            rolled_back_version = ConfigVersion(
-                version=new_version_str,
+            event = ChangeEvent(
+                version=version,
                 timestamp=timestamp,
-                data=copy.deepcopy(new_data),
+                changes=changes,
                 is_rollback=True,
             )
+            self._notify_listeners(event)
 
-            self._versions[new_version_str] = rolled_back_version
-            self._version_history.append(new_version_str)
-            self._current_version = new_version_str
-
-            if changes:
-                event = ChangeEvent(
-                    version=new_version_str,
-                    timestamp=timestamp,
-                    changes=changes,
-                    is_rollback=True,
-                )
-                self._notify_listeners(event)
-
-            return rolled_back_version
+            return copy.deepcopy(target_version)
 
     def subscribe(self, listener: ConfigListener) -> str:
         if not callable(listener):

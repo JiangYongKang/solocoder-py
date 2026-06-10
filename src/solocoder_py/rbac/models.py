@@ -28,9 +28,7 @@ class Permission:
         return cls(action=action, resource=resource)
 
     def matches(self, action: str, resource: str) -> bool:
-        return _match_pattern(self.action, action) and _match_pattern(
-            self.resource, resource
-        )
+        return self.action == action and _match_pattern(self.resource, resource)
 
     def __str__(self) -> str:
         return f"{self.action}:{self.resource}"

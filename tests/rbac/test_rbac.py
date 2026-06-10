@@ -57,12 +57,12 @@ class TestPermissionModel:
         assert p.matches("write", "project:123") is False
         assert p.matches("read", "project:456") is False
 
-    def test_permission_matches_action_wildcard(self):
+    def test_permission_matches_action_wildcard_not_supported(self):
         p = Permission(action="*", resource="project:123")
-        assert p.matches("read", "project:123") is True
-        assert p.matches("write", "project:123") is True
-        assert p.matches("delete", "project:123") is True
-        assert p.matches("read", "project:456") is False
+        assert p.matches("*", "project:123") is True
+        assert p.matches("read", "project:123") is False
+        assert p.matches("write", "project:123") is False
+        assert p.matches("delete", "project:123") is False
 
     def test_permission_matches_resource_wildcard_top(self):
         p = Permission(action="read", resource="*")
@@ -82,10 +82,11 @@ class TestPermissionModel:
         assert p.matches("read", "project:read:456") is True
         assert p.matches("read", "project:write:123") is False
 
-    def test_permission_matches_both_wildcards(self):
+    def test_permission_matches_action_wildcard_ignored_but_resource_wildcard_works(self):
         p = Permission(action="*", resource="*")
-        assert p.matches("any", "thing:else") is True
-        assert p.matches("foo", "bar:baz:qux") is True
+        assert p.matches("*", "thing:else") is True
+        assert p.matches("*", "bar:baz:qux") is True
+        assert p.matches("any", "thing:else") is False
 
     def test_permission_matches_segment_count_mismatch(self):
         p = Permission(action="read", resource="project:123")
@@ -535,16 +536,15 @@ class TestPermissionChecking:
         with pytest.raises(ValueError, match="resource cannot be empty"):
             engine.check_permission("user-1", "read", "")
 
-    def test_check_permission_with_wildcard_action(self):
+    def test_check_permission_action_wildcard_not_granted(self):
         engine = make_engine()
         engine.create_role("admin")
         p = Permission(action="*", resource="project:123")
         engine.add_permission_to_role("admin", p)
         engine.bind_user_to_roles("user-1", ["admin"])
-        assert engine.check_permission("user-1", "read", "project:123") is True
-        assert engine.check_permission("user-1", "write", "project:123") is True
-        assert engine.check_permission("user-1", "delete", "project:123") is True
-        assert engine.check_permission("user-1", "read", "project:456") is False
+        assert engine.check_permission("user-1", "*", "project:123") is True
+        assert engine.check_permission("user-1", "read", "project:123") is False
+        assert engine.check_permission("user-1", "write", "project:123") is False
 
     def test_check_permission_with_wildcard_resource(self):
         engine = make_engine()
@@ -695,14 +695,15 @@ class TestEdgeCases:
         assert engine.check_permission("u", "read", "project:doc:999") is True
         assert engine.check_permission("u", "read", "project:img:1") is False
 
-    def test_both_wildcards_grant_all(self):
+    def test_action_wildcard_does_not_grant_all_actions(self):
         engine = make_engine()
         engine.create_role("superadmin")
         p = Permission(action="*", resource="*")
         engine.add_permission_to_role("superadmin", p)
         engine.bind_user_to_roles("u", ["superadmin"])
-        assert engine.check_permission("u", "anything", "something") is True
-        assert engine.check_permission("u", "anything", "something:else") is True
+        assert engine.check_permission("u", "*", "something") is True
+        assert engine.check_permission("u", "*", "something:else") is True
+        assert engine.check_permission("u", "anything", "something") is False
 
     def test_get_role_inheritance_chain_not_found(self):
         engine = make_engine()
@@ -770,3 +771,91 @@ class TestEdgeCases:
         engine = make_engine()
         with pytest.raises(ValueError, match="user_id cannot be empty"):
             engine.unbind_user("")
+
+
+class TestEncapsulationAndDeepInheritance:
+    def test_get_role_returns_defensive_copy_permission_mutation(self):
+        engine = make_engine()
+        engine.create_role("viewer")
+        role_copy = engine.get_role("viewer")
+        role_copy.add_permission(Permission(action="read", resource="secret:*"))
+        internal = engine.get_role("viewer")
+        assert len(internal.permissions) == 0
+
+    def test_get_role_returns_defensive_copy_parent_mutation(self):
+        engine = make_engine()
+        engine.create_role("viewer")
+        engine.create_role("other")
+        role_copy = engine.get_role("viewer")
+        role_copy.add_parent("other")
+        internal = engine.get_role("viewer")
+        assert len(internal.parent_roles) == 0
+
+    def test_create_role_returns_defensive_copy(self):
+        engine = make_engine()
+        role_copy = engine.create_role("admin")
+        role_copy.add_permission(Permission(action="write", resource="*"))
+        internal = engine.get_role("admin")
+        assert len(internal.permissions) == 0
+
+    def test_external_mutation_cannot_bypass_cycle_detection(self):
+        engine = make_engine()
+        engine.create_role("a")
+        engine.create_role("b")
+        engine.add_parent_role("b", "a")
+        role_a = engine.get_role("a")
+        try:
+            role_a.add_parent("b")
+        except Exception:
+            pass
+        internal_a = engine.get_role("a")
+        assert "b" not in internal_a.parent_roles
+
+    def test_external_mutation_cannot_add_nonexistent_parent(self):
+        engine = make_engine()
+        engine.create_role("a")
+        role_a = engine.get_role("a")
+        try:
+            role_a.add_parent("does_not_exist")
+        except Exception:
+            pass
+        internal_a = engine.get_role("a")
+        assert "does_not_exist" not in internal_a.parent_roles
+
+    def test_very_deep_inheritance_chain(self):
+        engine = make_engine()
+        depth = 500
+        for i in range(depth):
+            engine.create_role(f"level-{i}")
+            engine.add_permission_to_role(
+                f"level-{i}",
+                Permission(action=f"act-{i}", resource=f"res-{i}"),
+            )
+        for i in range(1, depth):
+            engine.add_parent_role(f"level-{i}", f"level-{i - 1}")
+        chain = engine.get_role_inheritance_chain(f"level-{depth - 1}")
+        assert len(chain) == depth
+        perms = engine.get_role_effective_permissions(f"level-{depth - 1}")
+        assert len(perms) == depth
+
+    def test_very_deep_inheritance_user_permission_check(self):
+        engine = make_engine()
+        depth = 500
+        for i in range(depth):
+            engine.create_role(f"lvl-{i}")
+        for i in range(1, depth):
+            engine.add_parent_role(f"lvl-{i}", f"lvl-{i - 1}")
+        engine.add_permission_to_role(
+            "lvl-0", Permission(action="read", resource="base:*")
+        )
+        engine.bind_user_to_roles("u", [f"lvl-{depth - 1}"])
+        assert engine.check_permission("u", "read", "base:anything") is True
+        assert engine.check_permission("u", "write", "base:anything") is False
+
+    def test_list_roles_also_returns_copies(self):
+        engine = make_engine()
+        engine.create_role("x")
+        roles = engine.list_roles()
+        roles[0].add_permission(Permission(action="a", resource="b"))
+        internal = engine.get_role("x")
+        assert len(internal.permissions) == 0

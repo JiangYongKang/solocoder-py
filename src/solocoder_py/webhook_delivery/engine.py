@@ -7,6 +7,7 @@ from typing import Any, Mapping, Optional
 from .clock import Clock, SystemClock
 from .exceptions import (
     DeliveryFailedError,
+    DeliveryNotReadyError,
     MaxRetriesExceededError,
     WebhookTargetNotFoundError,
 )
@@ -197,6 +198,14 @@ class WebhookDeliveryEngine:
 
         message = self._pending_messages[message_id]
         target = self._repository.get(message.target_id)
+
+        now = self._clock.now()
+        if message.next_delivery_at is not None and now < message.next_delivery_at:
+            raise DeliveryNotReadyError(
+                message_id=message_id,
+                next_delivery_at=message.next_delivery_at,
+                current_time=now,
+            )
 
         if not target.is_active:
             self._move_to_dead_letter(
