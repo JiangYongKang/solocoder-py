@@ -47,7 +47,7 @@ alwaysApply: true
 
 标注规范
 1. 每个会话的标注放在 tasks/taskXXX/assessment-N.txt 中（N 为会话序号）。
-2. 标注文件为纯文本格式，不使用任何 Markdown 符号，只使用最基础的逗号，句号，双引号，代码使用英文的双引号。
+2. 标注文件为纯文本格式，不使用任何 Markdown 符号，只使用最基础的逗号，句号，双引号，错误信息使用反引号作为代码块。
 3. 每一条标注内容不能过长也不能过短，必须在 150 ~ 250 字之间。
 4. 标注内容要忽略一些细节，比如第 xxx 行，比如第 xxx 步，只需要描述哪个文件中或者哪个方法中即可。
 5. 段落结构分为两段：
@@ -59,7 +59,7 @@ alwaysApply: true
 1. 触发节点（When）：模型在哪个步骤或者使用哪个工具调用出了问题？
 2. 实际行为（What）：模型做错了什么？
 3. 业务影响（Impact）：这个错误导致了什么后果？
-4. 根本原因（Root Cause）：问题的原因是什么？
+4. 根本原因（Root Cause）：造成这个问题的原因是什么？
 5. 解决方案（Solution）：解决这个问题的正确做法是什么？
 
 产物不满意原因的书写准则
@@ -102,11 +102,11 @@ alwaysApply: true
 标注示例二
 ```
 产物不满意：
-1. 提示词要求修复惰性过期回收但只在 lru_cache.py 的 get 中添加了 TTL 检查，遗漏 __setitem__ 和 __contains__ 两个入口。test_expired_entry_in_setitem 和 test_expired_entry_in_contains 均失败报 Expected None for expired key。模型只修补了 get 路径未系统性扫描所有缓存入口，应先 grep 所有访问缓存的方法再逐一添加过期检查。
+1. 提示词要求修复惰性过期回收但只在 lru_cache.py 的 get 中添加了 TTL 检查，遗漏 __setitem__ 和 __contains__ 两个入口。test_expired_entry_in_setitem 和 test_expired_entry_in_contains 均失败报 `Expected None for expired key`。模型只修补了 get 路径未系统性扫描所有缓存入口，应先 grep 所有访问缓存的方法再逐一添加过期检查。
 2. lru_cache.py _evict_if_needed 中 lock 获取放在 for 循环外面，驱逐大容量缓存时持锁超过 3 秒导致 test_concurrent_read_during_eviction 超时失败。锁粒度太粗，应在循环内部逐条目加锁或使用读写锁分离。
 3. lru_cache.py 中的 _is_expired 方法用 time.time() 而 _cleanup_expired 用 time.monotonic()，同一时刻两个方法对过期与否的判断相差约 17 亿秒，同一条目在 get 返回有效数据后 0.1 秒内被 cleanup 误回收。应统一使用 time.monotonic() 作为内部时间基准。
 过程不满意：
-1. 执行 pytest 测试失败后没有查看失败测试的堆栈信息就直接修改 lru_cache.py 三处代码，再次测试发现新引入 IndentationError 又改回去。属于试错式调试，遇到错误盲改而非先分析错误信息缩小范围，同一处代码两轮未修正。应先读堆栈定位具体行再做最小修正。
+1. 执行 pytest 测试失败后没有查看失败测试的堆栈信息就直接修改 lru_cache.py 三处代码，再次测试发现新引入 `IndentationError` 又改回去。属于试错式调试，遇到错误盲改而非先分析错误信息缩小范围，同一处代码两轮未修正。应先读堆栈定位具体行再做最小修正。
 2. 重写 test_concurrency.py 新增 unittest.mock.patch('threading.Lock') 规避多线程测试复杂性，但生产代码本身使用 threading.Lock，mock 后测试覆盖的是 mock 对象而非真实并发行为。属于生产代码向测试妥协，应使用 Barrier 同步线程执行时机而非绕过测试难点。
 ```
 
@@ -114,10 +114,10 @@ alwaysApply: true
 ```
 产物不满意：
 1. move_to_dlq 方法中的消息超过最大重试后转移到死信队列，但未记录投递次数和首次入队时间。提示词要求支持死信重试，缺失溯源信息无法判断死信是否值得再次投递。模型只关注转移动作忽略重试上下文，应在死信消息中保留 original_enqueue_time 和 delivery_count 字段。
-2. receive_message 中超时计时器只在消费者显式调用 ack 时停止，若消费者崩溃未调用 ack 则消息永久不可见。test_visibility_timeout_on_crash 失败报 Expected message to be visible again after timeout。原因是只实现了显式 ack 路径未实现被动超时检测的后台扫描，应添加定时扫描线程将超时未 ack 消息重新放回可见队列。
+2. receive_message 中超时计时器只在消费者显式调用 ack 时停止，若消费者崩溃未调用 ack 则消息永久不可见。test_visibility_timeout_on_crash 失败报 `Expected message to be visible again after timeout`。原因是只实现了显式 ack 路径未实现被动超时检测的后台扫描，应添加定时扫描线程将超时未 ack 消息重新放回可见队列。
 3. publish 方法中去重逻辑只比较消息 body 内容未校验 message_id，两条 body 相同但 id 不同的消息被误判为重复导致丢弃。test_message_deduplication 失败报 assert 2 == 1。模型混淆了投递去重与内容去重，应以 message_id 作为去重唯一键。
 过程不满意：
-1. 创建 tests/queue/test_queue.py 但运行 pytest 时找不到导入路径报 ModuleNotFoundError。原因是缺少项目基础设施的前置分析，未先阅读 pyproject.toml 了解 pytest 的 pythonpath 配置。应先理解 pyproject.toml 中的工具配置再动手写测试代码。
+1. 创建 tests/queue/test_queue.py 但运行 pytest 时找不到导入路径报 `ModuleNotFoundError`。原因是缺少项目基础设施的前置分析，未先阅读 pyproject.toml 了解 pytest 的 pythonpath 配置。应先理解 pyproject.toml 中的工具配置再动手写测试代码。
 2. 看到 5 个测试失败后直接选择完全重写 dead_letter.py 而非逐个分析失败原因，重写后引入新缺陷，且对去重逻辑连续做了三次相反修改（加 message_id 校验 -> 删掉 -> 又加回来）形成三轮不收敛的试错循环。应逐个分析失败用例对应的具体代码行再做最小修正。
 ```
 
