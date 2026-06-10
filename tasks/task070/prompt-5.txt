@@ -1,0 +1,7 @@
+测试代码的耦合问题已基本解决，但新测试存在两个小问题需要修正：
+
+1. 两个新测试的名称 test_adaptive_range_path_performance_with_dense_buckets 和 test_adaptive_items_path_performance_with_sparse_buckets 中直接出现了 "range_path" 和 "items_path" 这些内部实现术语。这与你本轮"消除测试对内部实现细节依赖"的目标矛盾——测试逻辑虽然去耦合了，但命名仍暴露了实现策略。需要将方法名改为仅描述场景特征，例如 test_adaptive_pruning_dense_buckets_small_threshold 和 test_adaptive_pruning_sparse_buckets_large_threshold。
+
+2. 两个测试中的时间断言 `elapsed < 3.0` 过于宽松。以密集桶测试为例，2000 次迭代每次只处理 5 个长度桶内的候选，3 秒阈值意味着单次 1.5ms，即使走错路径迭代 100 个桶也远低于此限制，性能断言无法有效区分路径。需要将阈值收紧到与实际算法耗时匹配的数量级，或改为验证迭代次数与耗时的比例关系来间接推断路径选择的有效性。
+
+3. 重新运行 poetry run pytest tests/fuzzy_match/ -v，确保所有测试通过。

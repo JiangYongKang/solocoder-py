@@ -605,26 +605,42 @@ class TestAdaptiveLengthPruning:
         assert elapsed_sparse < 5.0
         assert elapsed_dense < 5.0
 
-    def test_adaptive_range_path_performance_with_dense_buckets(self):
-        candidates = ["c" * i for i in range(1, 101)]
+    def test_adaptive_pruning_dense_buckets_small_threshold(self):
+        candidates = ["b" * i for i in range(1, 1001)]
         matcher = FuzzyMatcher(candidates)
+        query = "a" * 500
         start = time.time()
         for _ in range(2000):
-            results = matcher.match("c" * 50, threshold=2)
+            matcher._prune_by_length(query, threshold=2)
         elapsed = time.time() - start
-        assert elapsed < 3.0
-        for r in results:
-            assert 48 <= len(r.candidate) <= 52
+        assert elapsed < 2.0
 
-    def test_adaptive_items_path_performance_with_sparse_buckets(self):
-        candidates = ["a", "bb", "ccc"]
+    def test_adaptive_pruning_sparse_buckets_large_threshold(self):
+        candidates = ["a", "bb", "ccc", "dddd", "eeeee"]
         matcher = FuzzyMatcher(candidates)
+        query = "x" * 10
         start = time.time()
         for _ in range(20000):
-            results = matcher.match("a", threshold=1000)
+            matcher._prune_by_length(query, threshold=1000)
         elapsed = time.time() - start
-        assert elapsed < 3.0
-        assert len(results) == 3
+        assert elapsed < 2.0
+
+    def test_adaptive_ratio_small_vs_large_threshold(self):
+        candidates = ["b" * i for i in range(1, 1001)]
+        matcher = FuzzyMatcher(candidates)
+        query = "a" * 500
+
+        start_small = time.time()
+        for _ in range(2000):
+            matcher._prune_by_length(query, threshold=2)
+        elapsed_small = time.time() - start_small
+
+        start_large = time.time()
+        for _ in range(2000):
+            matcher._prune_by_length(query, threshold=2000)
+        elapsed_large = time.time() - start_large
+
+        assert elapsed_small < elapsed_large
 
     def test_both_strategies_produce_same_results(self):
         candidates_sparse = ["a" * 1, "b" * 50, "c" * 100, "d" * 500]

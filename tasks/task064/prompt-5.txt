@@ -1,0 +1,5 @@
+窗口衰减查询的断言方向正确，但 test_insert_each_has_independent_timestamp 中的 p50_full 断言区间仍需收紧：
+
+1. test_insert_each_has_independent_timestamp 中 80 个 10.0 加 20 个 100.0，TDigest 的 P50 理论值约为 10。当前 p50_full 断言区间为 5 至 40，跨度 35 是偏置值 10 的 3.5 倍。如果代码回退到共享时间戳逻辑，窗口衰减失效后 p50_full 和 p50_recent 返回相同值，此时 p50_full 仍可能偶然落在 5 至 40 的宽区间内而漏检。需要将 p50_full 断言收紧到 5 至 20，使测试对时间戳处理错误具有更高的敏感度。
+
+2. 重新运行 poetry run pytest tests/quantile/ -v，确保所有测试通过。

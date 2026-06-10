@@ -364,7 +364,7 @@ class TestTimestampPerInsert:
         assert clock._call_count == 100
 
         p50_full = est.quantile(0.5, window_seconds=2000.0)
-        assert 5 <= p50_full <= 40
+        assert 5 <= p50_full <= 20
 
         p50_recent = est.quantile(0.5, window_seconds=250.0)
         assert 80 <= p50_recent <= 110
