@@ -664,3 +664,107 @@ class TestManagerRollbackTagIsolation:
         assert manager.query_subject_usage("B")["w"].used == 10
         assert manager.query_subject_usage("C")["w"].used == 0
         assert manager.query_global_usage()["w"].used == 20
+
+    def test_granular_subject_cross_window_rollback(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(
+                    name="1min",
+                    window_seconds=60,
+                    max_operations=1000,
+                    slide_granularity_seconds=1,
+                ),
+                WindowConfig(
+                    name="1hour",
+                    window_seconds=3600,
+                    max_operations=10000,
+                    slide_granularity_seconds=10,
+                ),
+            ],
+            subject_quotas={
+                "X": SubjectQuotas("X", {"1min": 100, "1hour": 5}),
+            },
+            default_subject_quotas={"1min": 1000, "1hour": 10000},
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=30)
+        with pytest.raises(OperationRejectedError) as excinfo:
+            manager.check_operation("X", amount=20)
+        assert excinfo.value.dimension == "subject"
+        assert excinfo.value.window_name == "1hour"
+        x_usage = manager.query_subject_usage("X")
+        assert x_usage["1min"].used == 0
+        assert x_usage["1hour"].used == 0
+        a_usage = manager.query_subject_usage("A")
+        assert a_usage["1min"].used == 30
+        assert a_usage["1hour"].used == 30
+        global_usage = manager.query_global_usage()
+        assert global_usage["1min"].used == 30
+        assert global_usage["1hour"].used == 30
+
+    def test_precise_subject_cross_window_rollback(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(name="1min", window_seconds=60, max_operations=1000),
+                WindowConfig(name="1hour", window_seconds=3600, max_operations=10000),
+            ],
+            subject_quotas={
+                "X": SubjectQuotas("X", {"1min": 100, "1hour": 5}),
+            },
+            default_subject_quotas={"1min": 1000, "1hour": 10000},
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        for _ in range(30):
+            manager.check_operation("A")
+        with pytest.raises(OperationRejectedError) as excinfo:
+            manager.check_operation("X", amount=20)
+        assert excinfo.value.dimension == "subject"
+        assert excinfo.value.window_name == "1hour"
+        x_usage = manager.query_subject_usage("X")
+        assert x_usage["1min"].used == 0
+        assert x_usage["1hour"].used == 0
+        a_usage = manager.query_subject_usage("A")
+        assert a_usage["1min"].used == 30
+        assert a_usage["1hour"].used == 30
+        global_usage = manager.query_global_usage()
+        assert global_usage["1min"].used == 30
+        assert global_usage["1hour"].used == 30
+
+    def test_subject_cross_window_rollback_other_subject_in_same_bucket(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(
+                    name="1min",
+                    window_seconds=60,
+                    max_operations=1000,
+                    slide_granularity_seconds=10,
+                ),
+                WindowConfig(
+                    name="1hour",
+                    window_seconds=3600,
+                    max_operations=10000,
+                    slide_granularity_seconds=100,
+                ),
+            ],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"1min": 500, "1hour": 5000}),
+                "X": SubjectQuotas("X", {"1min": 100, "1hour": 5}),
+            },
+            default_subject_quotas={"1min": 1000, "1hour": 10000},
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=30)
+        manager.check_operation("X", amount=3)
+        with pytest.raises(OperationRejectedError) as excinfo:
+            manager.check_operation("X", amount=20)
+        assert excinfo.value.dimension == "subject"
+        assert excinfo.value.window_name == "1hour"
+        x_usage = manager.query_subject_usage("X")
+        assert x_usage["1min"].used == 3
+        assert x_usage["1hour"].used == 3
+        a_usage = manager.query_subject_usage("A")
+        assert a_usage["1min"].used == 30
+        assert a_usage["1hour"].used == 30
+        global_usage = manager.query_global_usage()
+        assert global_usage["1min"].used == 33
+        assert global_usage["1hour"].used == 33

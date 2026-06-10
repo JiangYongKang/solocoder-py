@@ -1,0 +1,7 @@
+产物不满意：
+本轮产物质量良好，代码修复精准且测试覆盖完整。manager.py 中 check_operation 方法将主体计数器 try_acquire 调用从 `try_acquire(amount)` 修改为 `try_acquire(amount, tag=subject_id)`，与 _rollback_subject 方法中 `counter._rollback_last(amount, tag=subject_id)` 的 tag 参数保持一致，消除了 tag 为 None 与 subject_id 不匹配导致 per_tag 字典查找不到对应条目、回滚变成空操作的缺陷，修复了多窗口场景下已成功扣减的主体窗口计数无法回滚导致配额永久泄露的问题。三个新增跨窗回滚测试用例覆盖了分桶模式、精确模式和同桶多主体场景，均正确验证了 1min 窗口通过但 1hour 窗口失败时主体计数被正确回滚且不影响其他主体和全局计数。全部 118 个测试通过，无回归。
+
+过程不满意：
+1. 模型在收到提示词后未经任何源码审查就直接创建了三项子任务的 TodoList 并开始修改代码，整个过程未对 manager.py、test_manager.py 或 sliding_window.py 执行 Read 操作。提示词虽然清楚描述了 tag 参数不一致的问题，但模型未通过阅读源码独立验证该诊断的准确性，而是直接接受提示词结论并立即动手修改。作为缺陷修复任务，正确做法是先阅读 check_operation 方法中 try_acquire 的调用点确认 tag 参数确实缺失，再阅读 sliding_window.py 中 _rollback_last 方法的 tag 查找逻辑理解为何不一致会导致 per_tag 查找失败，最后阅读现有测试确认 subject_acquired 在已有用例中始终为空这一覆盖缺口，在此基础上再制定修复计划。
+
+2. 模型在未阅读 test_manager.py 和 conftest.py 的情况下直接编辑追加新测试方法。虽然定位到 TestManagerRollbackTagIsolation 类末尾正确，但模型完全不了解已有 fixtures（如 simple_clock、subject_quotas_config）和现有回滚测试的断言模式，仅凭提示词对覆盖缺口的描述来设计新用例。正确做法是先用 Read 阅读 conftest 中的夹具定义和 TestManagerRollbackTagIsolation 下已有测试的配置构建方式与断言书写风格，在充分理解现有测试结构和辅助设施的基础上再编写新用例，避免在不了解上下文的情况下盲目追加代码。

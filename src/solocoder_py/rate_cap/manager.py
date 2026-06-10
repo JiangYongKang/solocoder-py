@@ -151,7 +151,7 @@ class RateCapManager:
                         s_counter = self._ensure_subject_counter(
                             subject_id, wname
                         )
-                        ok, used, limit = s_counter.try_acquire(amount)
+                        ok, used, limit = s_counter.try_acquire(amount, tag=subject_id)
                         if not ok:
                             raise OperationRejectedError(
                                 subject_id=subject_id,

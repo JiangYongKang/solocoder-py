@@ -1,0 +1,7 @@
+你的修复在全局计数器的回滚标签追踪上正确，但主体计数器的回滚路径存在 tag 参数不一致导致回滚静默失效的缺陷需要修复：
+
+1. manager.py 的 _rollback_subject 方法在调用 counter._rollback_last 时传入了 tag=subject_id，但 check_operation 中对主体计数器调用 s_counter.try_acquire 时未传入 tag 参数，默认 tag=None。两者 tag 不一致导致 _rollback_last 按 tag 查找时在 per_tag 中找不到 subject_id 对应的条目，主体计数器回滚变成空操作。在多窗口场景下，如果前几个主体窗口扣减成功而后续窗口失败，已成功扣减的主体窗口计数无法被回滚，导致主体配额永久泄露。需要确保 try_acquire 和 _rollback_last 在主体计数器上的 tag 参数一致。
+
+2. 新增的测试存在覆盖缺口。TestManagerRollbackTagIsolation 下的所有用例中，触发回滚的主体 X 都在第一个窗口即超限，subject_acquired 为空列表，_rollback_subject 的 for 循环从未实际执行。需要补充一个跨窗回滚场景的测试用例：配置不对称主体配额（如 1min 窗口限制较高、1hour 窗口限制较低），让操作在 1min 窗口通过但在 1hour 窗口失败，然后断言 1min 窗口的主体计数被正确回滚。
+
+3. 重新运行 poetry run pytest tests/rate_cap/ -v，确保所有测试通过。

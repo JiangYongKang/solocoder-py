@@ -311,7 +311,7 @@ class TestSessionMerge:
         assert len(merged) == 2
 
     def test_merge_with_threshold_greater_than_gap_merges(self):
-        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=300.0)
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=301.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
         t2 = datetime(2025, 1, 1, 12, 5, 0)
         e1 = SessionEvent(subject_id="user1", event_time=t1)
@@ -321,9 +321,8 @@ class TestSessionMerge:
         sz.add_event(e2)
 
         merged = sz.merge_adjacent_sessions("user1")
-        assert len(merged) == 2
-        gap = (merged[1].start_time - merged[0].end_time).total_seconds()
-        assert gap == 300.0
+        assert len(merged) == 1
+        assert merged[0].event_count == 2
 
     def test_triple_merge_chain(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=120.0)
@@ -345,7 +344,7 @@ class TestSessionMerge:
         assert merged[0].event_count == 4
 
     def test_merge_active_session_also_closes(self):
-        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=120.0)
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=121.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
         t2 = datetime(2025, 1, 1, 12, 2, 0)
         e1 = SessionEvent(subject_id="user1", event_time=t1)
@@ -356,9 +355,9 @@ class TestSessionMerge:
 
         assert sz.get_active_session("user1") is not None
         merged = sz.merge_adjacent_sessions("user1")
+        assert len(merged) == 1
+        assert merged[0].is_active is False
         assert sz.get_active_session("user1") is None
-        for s in merged:
-            assert s.is_active is False
 
     def test_merge_single_session_returns_same(self):
         sz = make_sessionizer()

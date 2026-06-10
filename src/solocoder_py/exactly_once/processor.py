@@ -102,11 +102,13 @@ class ExactlyOnceProcessor:
                 self._current_offset = -1
                 self._uncommitted_records.clear()
                 self._uncommitted_results.clear()
+                self._last_skip_warning = None
                 raise CheckpointNotFoundError()
 
             self._current_offset = cp.committed_offset
             self._uncommitted_records.clear()
             self._uncommitted_results.clear()
+            self._last_skip_warning = None
             self._recovered = True
             return cp
 
@@ -118,6 +120,7 @@ class ExactlyOnceProcessor:
                 self._current_offset = -1
                 self._uncommitted_records.clear()
                 self._uncommitted_results.clear()
+                self._last_skip_warning = None
                 self._recovered = True
                 return None
 
@@ -500,4 +503,5 @@ class ExactlyOnceProcessor:
             self._current_offset = -1
             self._uncommitted_records.clear()
             self._uncommitted_results.clear()
+            self._last_skip_warning = None
             self._recovered = False

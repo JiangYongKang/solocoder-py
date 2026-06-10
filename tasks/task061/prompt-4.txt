@@ -1,0 +1,7 @@
+你的修复解决了大部分问题，但 _last_skip_warning 属性的生命周期管理仍有缺口需要修复：
+
+1. processor.py 的 _maybe_clear_skip_warning 方法只在 process_next 推进到超过跳跃偏移后清除告警，但 reset 方法、recover_from_checkpoint 方法和 recover_or_start_fresh 方法都没有清除 _last_skip_warning。调用方在 reset 后读取 last_skip_warning 仍会得到上一轮生命周期中产生的过期告警，其 expected_offset 和 actual_offset 指向的偏移已与清空后的消息源和去重存储无关。需要在这三个方法中同步清除该属性，确保属性生命周期与处理器状态保持一致。
+
+2. 为该补充的场景编写单元测试：reset 后 last_skip_warning 应为 None、从检查点恢复后 last_skip_warning 应为 None。
+
+3. 重新运行 poetry run pytest tests/exactly_once/ -v，确保所有测试通过。

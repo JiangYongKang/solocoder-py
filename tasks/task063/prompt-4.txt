@@ -1,0 +1,7 @@
+你的修复解决了大部分测试覆盖问题，但 TestSessionMerge 类中的两个已有测试存在意图与行为不一致的问题需要修复：
+
+1. test_merge_with_threshold_greater_than_gap_merges 当前的 t2=12:05:00 配合 merge_threshold=300.0 使间隔 gap 恰好等于阈值（300 秒），合并不会发生，但方法名声明的是"阈值大于间隔则合并"。新创建的 TestSessionMergeBoundaries 中的 test_gap_exactly_equal_to_threshold_not_merges 已覆盖了"等于阈值不合并"的场景，而 TestSessionMerge 中反而缺失了"阈值大于间隔时合并"的验证。需要将该测试的时间值或阈值调整为真正的"间隔小于阈值"场景，使其名称与行为一致，恢复原有的合并验证意图。
+
+2. test_merge_active_session_also_closes 当前的 t2=12:02:00 配合 merge_threshold=120.0 使间隔 gap 恰好等于阈值（120 秒），合并不会发生。原测试的意图是验证"合并后产生一个合并后的会话且该会话已关闭"，但现在 gap 等于阈值不合并，TestSessionMergeBoundaries 中已有覆盖该边界条件。需要将该测试恢复为"阈值大于间隔"的场景，使其合并实际发生，同时保留对合并后所有会话 is_active 为 False 的验证。
+
+3. 重新运行 poetry run pytest tests/sessionization/ -v，确保所有测试通过。

@@ -1,0 +1,5 @@
+产物不满意：
+1. test_matcher.py 中新增的两个自适应策略测试 test_adaptive_range_path_performance_with_dense_buckets 和 test_adaptive_items_path_performance_with_sparse_buckets 的时间断言阈值均为 `elapsed < 3.0`，过于宽松。以第一个测试为例，2000 次迭代每次只处理 5 个长度桶内的候选，3 秒阈值意味着单次迭代允许耗时 1.5 毫秒，即使走错了 items 路径迭代全部 100 个桶也远低于此限制，性能断言无法有效区分两条路径。根因是模型只关注了"让测试通过"而非"让测试具有判别力"，应将阈值收紧到与实际算法耗时相匹配的数量级，或改为验证迭代次数与耗时的比例关系来间接推断路径选择。
+2. 新测试名称 test_adaptive_range_path_performance_with_dense_buckets 中直接出现了 "range_path" 这一内部实现术语，test_adaptive_items_path_performance_with_sparse_buckets 同理出现了 "items_path"。本轮提示词的核心要求正是消除测试对内部实现细节的依赖，但新测试名称仍将策略名直接写入方法名中，与去耦合的设计意图相悖。原因是模型在移除 TrackingDict 后只关注了测试逻辑的去耦合而忽略了命名的去耦合，应将方法名改为仅描述场景特征如 test_adaptive_pruning_dense_buckets_small_threshold 和 test_adaptive_pruning_sparse_buckets_large_threshold。
+过程不满意：
+1. 模型在收到提示词后的第一个动作就是 todo_write 创建 3 项子任务计划，然后才通过 view_files 读取 test_matcher.py，之后连续两次 search_replace 完成修改。规划在前、分析在后的顺序违反了标注规范中"先分析问题再规划"的要求。虽然本轮任务简单且改动量小，但跳过分析环节意味着模型缺少对原测试为何依赖 TrackingDict 的内部实现细节、新测试应该验证哪些可观测行为边界等问题的深度理解，后续两次 edits 更像是机械的代码替换而非经过推敲的设计。正确的做法是先阅读提示词指出的两个具体测试方法和当前测试文件，理清需要修改的代码范围、新测试的验证目标和边界条件，再制定执行计划。

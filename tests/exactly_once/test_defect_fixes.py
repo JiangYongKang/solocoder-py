@@ -175,6 +175,56 @@ class TestSkipWarningLifecycle:
         assert proc.current_offset == 9
         assert proc.last_skip_warning is None
 
+    def test_reset_clears_skip_warning(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(5)
+        assert proc.last_skip_warning is not None
+
+        proc.reset()
+        assert proc.last_skip_warning is None
+        assert proc.current_offset == -1
+
+    def test_recover_from_checkpoint_clears_skip_warning(self):
+        clock = make_clock(start_time=0.0)
+        msg_src = make_message_source(clock=clock)
+        dedup = make_dedup_store(clock=clock)
+        cp_store = make_checkpoint_store(clock=clock)
+        proc = make_processor_with_components(
+            msg_src, dedup, cp_store, auto_commit_interval=100, clock=clock
+        )
+
+        for i in range(20):
+            proc.publish_message(f"m{i}", i)
+
+        for _ in range(6):
+            proc.process_next()
+        proc.commit_checkpoint()
+
+        assert proc.committed_offset == 5
+        assert proc.current_offset == 5
+
+        proc.process_message_at(15)
+        assert proc.last_skip_warning is not None
+        assert proc.current_offset == 5
+
+        proc.recover_from_checkpoint()
+        assert proc.last_skip_warning is None
+        assert proc.current_offset == 5
+
+    def test_recover_or_start_fresh_clears_skip_warning(self):
+        proc = make_processor(auto_commit_interval=100)
+        for i in range(10):
+            proc.publish_message(f"m{i}", i)
+
+        proc.process_message_at(5)
+        assert proc.last_skip_warning is not None
+
+        proc.recover_or_start_fresh()
+        assert proc.last_skip_warning is None
+
 
 class TestSkippedOffsetsDetail:
     def test_warning_contains_skipped_offsets_list(self):

@@ -1,0 +1,7 @@
+你的修复完成了自适应剪枝的核心功能和文档更新，但测试代码存在两个需要修正的问题：
+
+1. test_threshold_zero_single_length 测试方法的名称暗示它测试 threshold 为零的场景，但实际代码中使用的 threshold=1000，名实不符。虽然测试逻辑本身无误，但命名错误会让后续维护者误解测试意图。需要将该方法重命名为能准确反映"大阈值下全长度匹配"场景的名称。
+
+2. test_adaptive_uses_range_iteration_when_range_smaller 和 test_adaptive_uses_items_iteration_when_buckets_fewer 通过自定义 TrackingDict 子类拦截 dict.get() 和 dict.items() 调用，直接检查了剪枝方法的内部实现细节而非可观测行为。一旦 _prune_by_length 的内部实现方式改变但功能不变，这两个测试就会误报失败。需要将这些测试改为通过性能特征或正确性验证来间接确认策略选择有效，而不是通过 monkey-patch 直接断言内部调用了哪个具体方法。
+
+3. 重新运行 poetry run pytest tests/fuzzy_match/ -v，确保所有测试通过。

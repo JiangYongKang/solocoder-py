@@ -349,26 +349,27 @@ class TestTimestampPerInsert:
                 return t
 
         clock = AdvancingMockClock(100.0, 10.0)
-        config = WindowConfig(window_seconds=50.0)
-        est = QuantileEstimator(delta=100.0, window_config=config, clock=clock)
+        est = QuantileEstimator(delta=100.0, clock=clock)
 
-        for _ in range(20):
+        for _ in range(80):
             est.insert(10.0)
 
-        assert clock._call_count == 20
+        assert clock._call_count == 80
 
-        clock.advance(200.0)
+        clock.advance(50.0)
 
         for _ in range(20):
             est.insert(100.0)
 
-        assert clock._call_count == 40
+        assert clock._call_count == 100
 
-        p50 = est.p50(window_seconds=80.0)
-        assert 70 <= p50 <= 110
+        p50_full = est.quantile(0.5, window_seconds=2000.0)
+        assert 5 <= p50_full <= 40
 
-        p50_recent = est.p50(window_seconds=30.0)
+        p50_recent = est.quantile(0.5, window_seconds=250.0)
         assert 80 <= p50_recent <= 110
+
+        assert p50_recent > p50_full + 30
 
     def test_insert_many_each_has_independent_timestamp(self):
         class AdvancingMockClock(MockClock):
@@ -383,23 +384,24 @@ class TestTimestampPerInsert:
                 return t
 
         clock = AdvancingMockClock(100.0, 5.0)
-        config = WindowConfig(window_seconds=30.0)
-        est = QuantileEstimator(delta=100.0, window_config=config, clock=clock)
+        est = QuantileEstimator(delta=100.0, clock=clock)
 
-        old_values = [10.0] * 5
+        old_values = [10.0] * 20
         new_values = [100.0] * 5
 
         est.insert_many(old_values)
-        clock.advance(50.0)
+        clock.advance(30.0)
         est.insert_many(new_values)
 
-        assert clock._call_count == 10
+        assert clock._call_count == 25
 
-        p50 = est.p50()
-        assert 60 <= p50 <= 110
+        p50_full = est.quantile(0.5, window_seconds=500.0)
+        assert 5 <= p50_full <= 50
 
-        p50_narrow = est.quantile(0.5, window_seconds=20.0)
-        assert 80 <= p50_narrow <= 110
+        p50_recent = est.quantile(0.5, window_seconds=60.0)
+        assert 80 <= p50_recent <= 110
+
+        assert p50_recent > p50_full + 20
 
     def test_concurrent_inserts_have_timestamps_in_lock(self):
         class TrackingClock(MockClock):
