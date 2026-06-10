@@ -1,0 +1,8 @@
+产物不满意：
+1. 在验证失败指数重试阶段，"engine.py" 的 "deliver" 方法没有检查 "next_delivery_at"，第一次失败后即使当前时间仍是 1000.0，计划重试时间是 1010.0，外部再次调用 "deliver" 仍会立即发起第二次投递，复现结果为 "delivery_count=2"。这会让调用方绕过退避限流，故障目标被连续打爆。根本原因是只在 "deliver_all_ready" 做到期过滤，应在单条投递入口也拒绝未到期消息或统一走调度入口。
+2. 在检查重试转死信机制文档时，"README.md" 写着 "failure_count < max_retries" 才重试、"failure_count >= max_retries" 转死信，但 "RetryStrategy.should_retry" 实际允许 "failure_count == max_retries" 继续重试，"max_retries=3" 时第 4 次失败才进死信。文档与行为冲突会误导使用者配置重试阈值。根本原因是修复测试失败后没有同步文档语义，应明确最大重试表示额外重试次数，并让 README、异常信息和测试保持一致。
+3. 在签名失败测试覆盖阶段，"test_signature.py" 的 "test_tampered_payload_raises" 同时把 payload 从 "x=1" 改成 "x=2"，又把密钥改成 "wrong_secret"，测试失败无法证明载荷篡改本身会被识别。这样会让提示词要求的签名边界和校验失败覆盖出现假阳性。根本原因是断言变量不单一，应保留正确密钥，只修改 payload，并补充对实际投递 body 与签名计算口径一致性的校验。
+过程不满意：
+1. 在任务刚开始阶段，模型第一步就调用 "todo_write" 创建 8 个待办，然后才查看目录和既有模块，属于先规划后理解。这样容易把实现方案提前固化，后续虽然补看了 "retry" 和 "outbox" 模块，但没有先从提示词拆出重试入口、签名口径、死信语义这些关键约束。根本原因是分析不足就进入计划，应先阅读需求和相邻代码，再形成可验证的任务拆分。
+2. 在第一次运行 ".venv\\Scripts\\python.exe -m pytest tests/webhook_delivery/ -v" 出现 4 个失败后，模型一边修改 "should_retry" 逻辑，一边直接调整 "test_models.py" 和 "test_engine.py" 的期望值来匹配新语义，没有回到提示词确认 "max_retries" 的业务含义。结果留下 README 与实现不一致的问题。正确做法应先定义最大重试次数的判定边界，再同时更新代码、测试和文档。
+3. 在修复 "test_signature.py" 语法错误和参数错误阶段，模型连续两次重新查看同一个文件后只修补了括号和误传参数，没有系统复核签名失败用例是否只改变一个变量。该过程导致 "test_tampered_payload_raises" 仍然用错误密钥掩盖载荷篡改场景，测试通过但覆盖价值不足。根本原因是只追求消除当前报错，应在修完显式错误后重新审查同类测试的断言意图。

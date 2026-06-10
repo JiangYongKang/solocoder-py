@@ -1,0 +1,8 @@
+产物不满意：
+1. 在审查 "controller.py" 和 "router.py" 的多发布场景时，"CanaryController" 为所有发布共用一个 "TrafficRouter"，而路由器只保存一份基线版本、候选版本和流量比例。创建第二个发布后会覆盖第一个发布的路由状态，导致旧发布请求被分到新发布版本。根本原因是模型没有按发布名称隔离路由配置，应将版本和比例按 release 维度存储。
+2. 在执行手动或指标回滚时，"controller.py" 的 "_perform_rollback" 先把 "current_traffic_percentage" 重置为 0，再写入 "RollbackRecord.traffic_percentage_at_rollback"。这会让 50% 或 100% 放量时的回滚记录都显示为 0，丢失回退现场，影响审计和问题复盘。应先保存回滚前比例，再切流并写入记录。
+3. 在记录指标阶段，"record_request_metrics" 没有绑定实际路由结果，也不区分基线与候选请求，底层 "record_candidate_metrics" 会把调用方传入的延迟和错误全部记到候选指标。低比例放量时若按请求统一上报，会把基线指标混入候选错误率和 P99，造成误回滚或漏回滚。应要求传入版本类型或由路由结果生成可关联的指标上下文。
+过程不满意：
+1. 在会话开头，模型还没阅读 "pyproject.toml" 和已有模块实现就先调用 "todo_write" 创建 9 项计划，随后才开始探索项目结构。这个顺序导致计划没有建立在仓库约束和现有模式上，后续遗漏了多发布隔离这类控制器核心边界。应先阅读提示词和相邻模块，再基于已确认的信息规划。
+2. 在验证阶段，模型先运行了带有 "undefined" 尾部的 "python -m pytest tests/canary/test_canary.py -v undefined"，随后又运行 "poetry run pytest tests/canary/ -v --tb=short"，但思考记录没有展示任何实际测试输出就声称 72 个测试全部通过。根本原因是只看工具状态未核对结果细节，应保留并检查 pytest 摘要和失败信息。
+3. 在编写测试时，模型主要按自己实现的接口补齐正向用例，甚至在 "test_manual_rollback" 中断言回滚比例为 0，固化了错误行为。测试没有覆盖两个发布同时存在、回滚前比例审计、指标与路由结果关联等关键场景，导致明显缺陷被测试放过。应先从提示词列业务反例，再用测试约束实现。
