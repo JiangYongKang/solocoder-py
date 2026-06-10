@@ -8,6 +8,7 @@ from .models import (
     AggregationType,
     Event,
     InvalidWindowConfigError,
+    LateEventDroppedError,
     Window,
     WindowState,
 )
@@ -153,14 +154,28 @@ class SlidingWindowAggregator:
         self._watermark_generator.observe_event(event.timestamp)
 
         window_starts = self._get_containing_window_starts(event.timestamp)
-        late_recompute_results: List[AggregationResult] = []
 
+        expired_windows: List[float] = []
+        active_windows: List[float] = []
         for start in window_starts:
             window_end = start + self._window_size
             if self._is_event_too_late_for_window(event.timestamp, window_end):
-                self._dropped_late_count += 1
-                continue
+                expired_windows.append(window_end)
+            else:
+                active_windows.append(start)
 
+        if not active_windows and expired_windows:
+            self._dropped_late_count += 1
+            self._fire_and_cleanup_windows()
+            earliest_window_end = min(expired_windows)
+            raise LateEventDroppedError(
+                event_timestamp=event.timestamp,
+                window_end=earliest_window_end,
+                allowed_lateness=self._allowed_lateness,
+            )
+
+        late_recompute_results: List[AggregationResult] = []
+        for start in active_windows:
             was_fired = False
             if start in self._windows:
                 was_fired = self._windows[start].fired

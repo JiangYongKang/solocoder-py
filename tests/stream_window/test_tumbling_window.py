@@ -7,6 +7,7 @@ from solocoder_py.stream_window import (
     AggregationType,
     Event,
     InvalidWindowConfigError,
+    LateEventDroppedError,
     TumblingWindowAggregator,
     Window,
 )
@@ -202,7 +203,8 @@ class TestTumblingWindowWatermarkAndFiring:
         agg = TumblingWindowAggregator(window_size_seconds=10.0)
         agg.on_event(Event(timestamp=20.0))
         assert agg.get_watermark() == pytest.approx(20.0)
-        agg.on_event(Event(timestamp=5.0))
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=5.0))
         assert agg.get_watermark() == pytest.approx(20.0)
 
     def test_empty_window_does_not_fire(self):
@@ -278,9 +280,13 @@ class TestTumblingWindowLateEvents:
         agg.advance_watermark(15.0)
         assert agg.dropped_late_count == 0
 
-        results = agg.on_event(Event(timestamp=3.0))
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=3.0))
         assert agg.dropped_late_count == 1
         assert agg.get_window_state(0.0) is None
+        assert excinfo.value.event_timestamp == 3.0
+        assert excinfo.value.window_end == 10.0
+        assert excinfo.value.allowed_lateness == 2.0
 
     def test_event_exactly_at_lateness_boundary_is_dropped(self):
         agg = TumblingWindowAggregator(
@@ -291,8 +297,12 @@ class TestTumblingWindowLateEvents:
         agg.on_event(Event(timestamp=5.0))
         agg.advance_watermark(15.0)
 
-        results = agg.on_event(Event(timestamp=3.0))
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=3.0))
         assert agg.dropped_late_count == 1
+        assert excinfo.value.event_timestamp == 3.0
+        assert excinfo.value.window_end == 10.0
+        assert excinfo.value.allowed_lateness == 5.0
 
     def test_multiple_late_events_within_lateness(self):
         agg = TumblingWindowAggregator(
@@ -321,9 +331,13 @@ class TestTumblingWindowLateEvents:
         agg.on_event(Event(timestamp=5.0))
         agg.advance_watermark(10.0)
 
-        results = agg.on_event(Event(timestamp=5.0))
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=5.0))
         assert agg.dropped_late_count == 1
         assert agg.get_window_state(0.0) is None
+        assert excinfo.value.event_timestamp == 5.0
+        assert excinfo.value.window_end == 10.0
+        assert excinfo.value.allowed_lateness == 0.0
 
     def test_late_event_at_window_boundary(self):
         agg = TumblingWindowAggregator(
@@ -573,3 +587,105 @@ class TestTumblingWindowEdgeCases:
         assert len(late) == 1
         assert late[0].value == pytest.approx(30.0)
         assert late[0].agg_type == AggregationType.SUM
+
+
+class TestTumblingWindowLateEventDroppedError:
+    def test_error_contains_correct_event_timestamp(self):
+        agg = TumblingWindowAggregator(
+            window_size_seconds=10.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=20.0))
+
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=5.0))
+        assert excinfo.value.event_timestamp == 5.0
+
+    def test_error_contains_correct_window_end(self):
+        agg = TumblingWindowAggregator(
+            window_size_seconds=10.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=20.0))
+
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=5.0))
+        assert excinfo.value.window_end == 10.0
+
+    def test_error_contains_correct_allowed_lateness(self):
+        agg = TumblingWindowAggregator(
+            window_size_seconds=10.0,
+            allowed_lateness_seconds=3.0,
+        )
+        agg.on_event(Event(timestamp=20.0))
+
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=5.0))
+        assert excinfo.value.allowed_lateness == 3.0
+
+    def test_error_is_subclass_of_stream_window_error(self):
+        from solocoder_py.stream_window import StreamWindowError
+
+        agg = TumblingWindowAggregator(
+            window_size_seconds=10.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=20.0))
+
+        with pytest.raises(StreamWindowError):
+            agg.on_event(Event(timestamp=5.0))
+
+    def test_error_message_contains_details(self):
+        agg = TumblingWindowAggregator(
+            window_size_seconds=10.0,
+            allowed_lateness_seconds=2.0,
+        )
+        agg.on_event(Event(timestamp=20.0))
+
+        with pytest.raises(LateEventDroppedError, match="Event at 5.0 dropped"):
+            agg.on_event(Event(timestamp=5.0))
+
+
+class TestTumblingWindowDroppedLateCountSemantics:
+    def test_single_dropped_event_counts_as_one(self):
+        agg = TumblingWindowAggregator(
+            window_size_seconds=10.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=20.0))
+        assert agg.dropped_late_count == 0
+
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=5.0))
+        assert agg.dropped_late_count == 1
+
+    def test_multiple_dropped_events_counted_individually(self):
+        agg = TumblingWindowAggregator(
+            window_size_seconds=10.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=50.0))
+
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=5.0))
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=15.0))
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=25.0))
+        assert agg.dropped_late_count == 3
+
+    def test_non_dropped_events_do_not_affect_count(self):
+        agg = TumblingWindowAggregator(
+            window_size_seconds=10.0,
+            allowed_lateness_seconds=5.0,
+        )
+        agg.on_event(Event(timestamp=5.0))
+        agg.advance_watermark(10.0)
+        assert agg.dropped_late_count == 0
+
+        agg.on_event(Event(timestamp=7.0))
+        assert agg.dropped_late_count == 0
+
+    def test_count_starts_at_zero(self):
+        agg = TumblingWindowAggregator(window_size_seconds=10.0)
+        assert agg.dropped_late_count == 0

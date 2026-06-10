@@ -41,7 +41,7 @@ class InvertedIndex:
             self._index[term][doc_id] = freq
 
     def get_postings(self, term: str) -> list[Posting]:
-        normalized = term.lower().strip()
+        normalized = self._normalize_term(term)
         if normalized not in self._index:
             return []
         return [
@@ -58,15 +58,21 @@ class InvertedIndex:
         if not query_terms:
             raise EmptyQueryError("Query terms list cannot be empty")
 
-        normalized = [t.lower().strip() for t in query_terms if t.strip()]
+        normalized: list[str] = []
+        for t in query_terms:
+            terms = self._tokenize(t)
+            normalized.extend(terms)
+
         if not normalized:
             raise EmptyQueryError("Query terms list cannot be empty after normalization")
 
-        matching_doc_ids = self._intersect(normalized)
+        unique_terms = list(dict.fromkeys(normalized))
+
+        matching_doc_ids = self._intersect(unique_terms)
         if not matching_doc_ids:
             return SearchResponse(results=[], next_cursor=None, total_count=0)
 
-        scored = self._score_documents(matching_doc_ids, normalized)
+        scored = self._score_documents(matching_doc_ids, unique_terms)
         scored.sort(key=lambda r: (-r.score, r.doc_id))
 
         start_idx = 0
@@ -102,15 +108,19 @@ class InvertedIndex:
         self, doc_ids: set[str], terms: list[str]
     ) -> list[SearchResult]:
         n = self.document_count
+        idf_cache: dict[str, float] = {}
+        for term in terms:
+            if term in self._index:
+                df = len(self._index[term])
+                idf_cache[term] = math.log((1 + n) / (1 + df)) + 1
+
         results: list[SearchResult] = []
         for doc_id in doc_ids:
             score = 0.0
             for term in terms:
-                if term in self._index and doc_id in self._index[term]:
+                if term in idf_cache and doc_id in self._index[term]:
                     tf = self._index[term][doc_id]
-                    df = len(self._index[term])
-                    idf = math.log((1 + n) / (1 + df)) + 1
-                    score += tf * idf
+                    score += tf * idf_cache[term]
             results.append(SearchResult(doc_id=doc_id, score=score))
         return results
 
@@ -132,6 +142,11 @@ class InvertedIndex:
     @staticmethod
     def _tokenize(text: str) -> list[str]:
         return [t.lower() for t in re.findall(r"\w+", text)]
+
+    @staticmethod
+    def _normalize_term(term: str) -> str:
+        tokens = [t.lower() for t in re.findall(r"\w+", term)]
+        return tokens[0] if tokens else ""
 
     @staticmethod
     def _encode_cursor(score: float, doc_id: str) -> str:

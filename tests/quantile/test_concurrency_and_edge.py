@@ -5,9 +5,11 @@ import pytest
 
 from solocoder_py.quantile import (
     EmptyDigestError,
+    InvalidValueError,
     MockClock,
     QuantileEstimator,
     QuantileResult,
+    TDigest,
     WindowConfig,
 )
 
@@ -271,3 +273,218 @@ class TestQuantileEstimatorEdgeCases:
 
         est = QuantileEstimator(delta=50.0)
         assert est.delta == 50.0
+
+
+class TestInsertManyAtomicity:
+    def test_insert_many_partial_failure_no_pollution(self, estimator_no_window):
+        initial_count = estimator_no_window.insert_count
+        initial_weight = estimator_no_window.total_weight
+
+        values = [1.0, 2.0, float("nan"), 4.0, 5.0]
+        with pytest.raises(InvalidValueError):
+            estimator_no_window.insert_many(values)
+
+        assert estimator_no_window.insert_count == initial_count
+        assert estimator_no_window.total_weight == initial_weight
+
+    def test_insert_many_negative_weight_no_pollution(self, estimator_no_window):
+        initial_count = estimator_no_window.insert_count
+        initial_weight = estimator_no_window.total_weight
+
+        values = [1.0, 2.0, 3.0]
+        weights = [1.0, -1.0, 1.0]
+        with pytest.raises(InvalidValueError):
+            estimator_no_window.insert_many(values, weights)
+
+        assert estimator_no_window.insert_count == initial_count
+        assert estimator_no_window.total_weight == initial_weight
+
+    def test_insert_many_zero_weight_no_pollution(self, estimator_no_window):
+        initial_count = estimator_no_window.insert_count
+
+        values = [1.0, 2.0, 3.0]
+        weights = [1.0, 0.0, 1.0]
+        with pytest.raises(InvalidValueError):
+            estimator_no_window.insert_many(values, weights)
+
+        assert estimator_no_window.insert_count == initial_count
+
+    def test_insert_many_all_valid_succeeds(self, estimator_no_window):
+        values = [1.0, 2.0, 3.0, 4.0, 5.0]
+        estimator_no_window.insert_many(values)
+        assert estimator_no_window.insert_count == 5
+        assert estimator_no_window.total_weight == 5.0
+
+    def test_insert_many_length_mismatch_no_pollution(self, estimator_no_window):
+        initial_count = estimator_no_window.insert_count
+
+        values = [1.0, 2.0, 3.0]
+        weights = [1.0, 2.0]
+        with pytest.raises(InvalidValueError):
+            estimator_no_window.insert_many(values, weights)
+
+        assert estimator_no_window.insert_count == initial_count
+
+    def test_insert_many_inf_value_no_pollution(self, estimator_no_window):
+        initial_count = estimator_no_window.insert_count
+
+        values = [1.0, float("inf"), 3.0]
+        with pytest.raises(InvalidValueError):
+            estimator_no_window.insert_many(values)
+
+        assert estimator_no_window.insert_count == initial_count
+
+
+class TestTimestampPerInsert:
+    def test_insert_each_has_independent_timestamp(self, mock_clock):
+        est = QuantileEstimator(delta=100.0, clock=mock_clock)
+
+        est.insert(10.0)
+        mock_clock.advance(5.0)
+        est.insert(20.0)
+        mock_clock.advance(5.0)
+        est.insert(30.0)
+
+        config = WindowConfig(window_seconds=7.0)
+        est_win = QuantileEstimator(delta=100.0, window_config=config, clock=mock_clock)
+        est_win.insert(10.0)
+        mock_clock.advance(5.0)
+        est_win.insert(20.0)
+        mock_clock.advance(5.0)
+        est_win.insert(30.0)
+
+        p50 = est_win.p50()
+        assert 15 <= p50 <= 35
+
+    def test_insert_many_each_has_independent_timestamp(self, mock_clock):
+        config = WindowConfig(window_seconds=8.0)
+        est = QuantileEstimator(delta=100.0, window_config=config, clock=mock_clock)
+
+        mock_clock.set(100.0)
+
+        class AdvancingMockClock(MockClock):
+            def __init__(self, start, step):
+                super().__init__(start)
+                self._step = step
+                self._call_count = 0
+
+            def now(self):
+                t = super().now() + self._call_count * self._step
+                self._call_count += 1
+                return t
+
+        clock = AdvancingMockClock(100.0, 2.0)
+        est2 = QuantileEstimator(delta=100.0, window_config=config, clock=clock)
+
+        values = [float(i) for i in range(10)]
+        est2.insert_many(values)
+
+        assert est2.insert_count == 10
+
+    def test_concurrent_inserts_have_timestamps_in_lock(self):
+        class TrackingClock(MockClock):
+            def __init__(self):
+                super().__init__(0.0)
+                self.call_count = 0
+                self._lock = threading.Lock()
+
+            def now(self):
+                with self._lock:
+                    self.call_count += 1
+                    t = self._current_time + self.call_count * 0.001
+                    return t
+
+        clock = TrackingClock()
+        est = QuantileEstimator(delta=200.0, clock=clock)
+        errors = []
+
+        def writer(start, count):
+            try:
+                for i in range(count):
+                    est.insert(float(start + i))
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer, args=(i * 100, 100)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+        assert est.insert_count == 800
+        assert clock.call_count == 800
+
+
+class TestWindowFilterBeforeCompression:
+    def test_old_data_not_preserved_after_window_filter(self, mock_clock):
+        td = TDigest(delta=100.0)
+
+        for i in range(50):
+            td.add(10.0 + i * 0.01, timestamp=0.0)
+
+        for i in range(50):
+            td.add(100.0 + i * 0.01, timestamp=200.0)
+
+        td.trim(current_time=200.0, window_seconds=50.0)
+
+        p50 = td.quantile(0.5)
+        assert 90 <= p50 <= 110
+
+    def test_centroid_merge_does_not_revive_old_data(self, mock_clock):
+        td = TDigest(delta=10.0)
+
+        td.add(50.0, weight=10.0, timestamp=0.0)
+        td.add(50.1, weight=10.0, timestamp=0.0)
+
+        td.add(50.2, weight=10.0, timestamp=200.0)
+        td.add(50.3, weight=10.0, timestamp=200.0)
+
+        td.trim(current_time=200.0, window_seconds=50.0)
+
+        assert td.total_weight > 0
+        assert td.total_weight < 30.0
+
+    def test_buffer_data_also_filtered(self, mock_clock):
+        td = TDigest(delta=500.0)
+
+        for i in range(10):
+            td.add(10.0, timestamp=0.0)
+
+        for i in range(10):
+            td.add(100.0, timestamp=300.0)
+
+        td.trim(current_time=300.0, window_seconds=50.0)
+
+        if not td.is_empty:
+            p50 = td.quantile(0.5)
+            assert 50 <= p50 <= 150
+
+    def test_estimator_window_query_filters_before_compress(self, mock_clock):
+        config = WindowConfig(window_seconds=60.0)
+        est = QuantileEstimator(delta=10.0, window_config=config, clock=mock_clock)
+
+        mock_clock.set(0.0)
+        for i in range(20):
+            est.insert(10.0 + i * 0.1)
+
+        mock_clock.set(200.0)
+        for i in range(20):
+            est.insert(100.0 + i * 0.1)
+
+        p50 = est.p50()
+        assert 80 <= p50 <= 120
+
+    def test_half_life_decay_applied_before_compress(self, mock_clock):
+        td = TDigest(delta=100.0)
+
+        for _ in range(100):
+            td.add(10.0, timestamp=0.0)
+
+        for _ in range(100):
+            td.add(100.0, timestamp=100.0)
+
+        td.trim(current_time=100.0, window_seconds=200.0, half_life_seconds=50.0)
+
+        p50 = td.quantile(0.5)
+        assert 50 <= p50 <= 100

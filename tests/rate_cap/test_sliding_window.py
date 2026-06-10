@@ -349,3 +349,184 @@ class TestSlidingWindowConcurrency:
             t.join()
 
         assert counter.current_count() <= 500
+
+
+class TestSlidingWindowTagTracking:
+    def test_precise_count_by_tag(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        counter.try_acquire(3, tag="A")
+        counter.try_acquire(2, tag="B")
+        counter.try_acquire(5, tag="A")
+        assert counter.count_by_tag("A") == 8
+        assert counter.count_by_tag("B") == 2
+        assert counter.count_by_tag("C") == 0
+        assert counter.current_count() == 10
+
+    def test_granular_count_by_tag(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(3, tag="A")
+        clock.advance(12)
+        counter.try_acquire(2, tag="B")
+        counter.try_acquire(5, tag="A")
+        assert counter.count_by_tag("A") == 8
+        assert counter.count_by_tag("B") == 2
+        assert counter.current_count() == 10
+
+    def test_precise_remove_by_tag_all(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        counter.try_acquire(3, tag="A")
+        counter.try_acquire(2, tag="B")
+        counter.try_acquire(5, tag="A")
+        removed = counter.remove_by_tag("A")
+        assert removed == 8
+        assert counter.count_by_tag("A") == 0
+        assert counter.count_by_tag("B") == 2
+        assert counter.current_count() == 2
+
+    def test_granular_remove_by_tag_all(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(3, tag="A")
+        clock.advance(12)
+        counter.try_acquire(2, tag="B")
+        counter.try_acquire(5, tag="A")
+        removed = counter.remove_by_tag("A")
+        assert removed == 8
+        assert counter.count_by_tag("A") == 0
+        assert counter.count_by_tag("B") == 2
+        assert counter.current_count() == 2
+
+    def test_precise_remove_by_tag_partial(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        counter.try_acquire(10, tag="A")
+        removed = counter.remove_by_tag("A", amount=3)
+        assert removed == 3
+        assert counter.count_by_tag("A") == 7
+        assert counter.current_count() == 7
+
+    def test_granular_remove_by_tag_partial(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(10, tag="A")
+        removed = counter.remove_by_tag("A", amount=3)
+        assert removed == 3
+        assert counter.count_by_tag("A") == 7
+        assert counter.current_count() == 7
+
+    def test_granular_remove_by_tag_across_buckets(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(3, tag="A")
+        clock.advance(12)
+        counter.try_acquire(4, tag="A")
+        clock.advance(12)
+        counter.try_acquire(2, tag="B")
+        counter.try_acquire(5, tag="A")
+        assert counter.count_by_tag("A") == 12
+        assert counter.current_count() == 14
+        removed = counter.remove_by_tag("A", amount=6)
+        assert removed == 6
+        assert counter.count_by_tag("A") == 6
+        assert counter.count_by_tag("B") == 2
+        assert counter.current_count() == 8
+
+    def test_remove_by_tag_nonexistent_returns_zero(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        counter.try_acquire(3, tag="A")
+        removed = counter.remove_by_tag("GHOST")
+        assert removed == 0
+        assert counter.current_count() == 3
+
+    def test_count_by_tag_expires_with_window(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        counter.try_acquire(5, tag="A")
+        counter.try_acquire(3, tag="B")
+        assert counter.count_by_tag("A") == 5
+        clock.advance(61)
+        assert counter.count_by_tag("A") == 0
+        assert counter.count_by_tag("B") == 0
+        assert counter.current_count() == 0
+
+
+class TestSlidingWindowClear:
+    def test_clear_precise(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=100, clock=clock
+        )
+        counter.try_acquire(50, tag="A")
+        counter.try_acquire(30, tag="B")
+        assert counter.current_count() == 80
+        counter.clear()
+        assert counter.current_count() == 0
+        assert counter.count_by_tag("A") == 0
+        counter.try_acquire(100)
+        assert counter.current_count() == 100
+
+    def test_clear_granular(self):
+        clock = ManualClock(start_time=0.0)
+        counter = SlidingWindowCounter(
+            window_seconds=60,
+            max_operations=100,
+            slide_granularity_seconds=10,
+            clock=clock,
+        )
+        counter.try_acquire(50, tag="A")
+        clock.advance(15)
+        counter.try_acquire(30, tag="B")
+        assert counter.current_count() == 80
+        counter.clear()
+        assert counter.current_count() == 0
+        assert counter.count_by_tag("A") == 0
+        counter.try_acquire(100)
+        assert counter.current_count() == 100
+
+    def test_clear_is_idempotent(self):
+        clock = ManualClock()
+        counter = SlidingWindowCounter(
+            window_seconds=60, max_operations=50, clock=clock
+        )
+        counter.clear()
+        counter.clear()
+        assert counter.current_count() == 0
+        counter.try_acquire(10)
+        counter.clear()
+        counter.clear()
+        assert counter.current_count() == 0
+

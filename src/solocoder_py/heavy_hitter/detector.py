@@ -53,29 +53,28 @@ class HeavyHitterDetector:
                 self._store[item] += count
                 return
 
-            cms_estimate = self._cms.estimate(item)
-            conservative_estimate = count
-            initial_count = max(count, cms_estimate)
-
             if len(self._store) < self._capacity:
-                self._store[item] = initial_count
+                self._store[item] = count
                 return
 
             min_item, min_count = self._find_min_count_item()
 
-            if conservative_estimate > min_count:
+            if count > min_count:
                 del self._store[min_item]
-                self._store[item] = initial_count
+                self._store[item] = count
                 self._evicted_count += 1
 
     def estimate_count(self, item: Any) -> int:
         with self._lock:
             if item in self._store:
-                return max(self._store[item], self._cms.estimate(item))
-            return self._cms.estimate(item)
+                return self._store[item]
+            return self._cms.lower_bound(item)
 
     def lower_bound(self, item: Any) -> int:
-        return self._cms.lower_bound(item)
+        with self._lock:
+            if item in self._store:
+                return self._store[item]
+            return self._cms.lower_bound(item)
 
     def upper_bound(self, item: Any) -> int:
         return self._cms.upper_bound(item)
@@ -132,11 +131,9 @@ class HeavyHitterDetector:
 
                 merged_store: dict[Any, int] = {}
                 for item in all_items:
-                    est = max(
-                        self._store.get(item, 0),
-                        other._store.get(item, 0),
-                        self._cms.estimate(item),
-                    )
+                    self_count = self._store.get(item, 0)
+                    other_count = other._store.get(item, 0)
+                    est = max(self_count, other_count, self._cms.lower_bound(item))
                     merged_store[item] = est
 
                 if len(merged_store) > self._capacity:

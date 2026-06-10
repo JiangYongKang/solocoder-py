@@ -174,7 +174,9 @@ class TestQueryNonExistentItemCases:
         detector = HeavyHitterDetector(capacity=10)
         detector.record("A", count=100)
         lower = detector.lower_bound("nonexistent")
+        upper = detector.upper_bound("nonexistent")
         assert lower >= 0
+        assert lower <= upper
 
     def test_upper_bound_nonexistent_item(self):
         detector = HeavyHitterDetector(capacity=10)
@@ -188,8 +190,10 @@ class TestQueryNonExistentItemCases:
         detector.record("B", count=20)
         detector.record("C", count=30)
         assert detector.contains("A") is False
-        est = detector.estimate_count("A")
-        assert est >= 10
+        assert detector.upper_bound("A") >= 10, "CMS upper bound should be >= true count"
+        lower = detector.lower_bound("A")
+        upper = detector.upper_bound("A")
+        assert lower <= upper
 
     def test_cms_estimate_nonexistent(self):
         cms = CountMinSketch()

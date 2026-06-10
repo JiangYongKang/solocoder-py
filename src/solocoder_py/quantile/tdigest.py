@@ -98,7 +98,10 @@ class TDigest:
         return [self.quantile(q) for q in quantiles]
 
     def trim(self, current_time: float, window_seconds: float, half_life_seconds: Optional[float] = None) -> None:
-        self._flush_buffer()
+        all_centroids: list[Centroid] = []
+        all_centroids.extend(self._centroids)
+        all_centroids.extend(self._buffer)
+        self._buffer.clear()
 
         cutoff_time = current_time - window_seconds
         if half_life_seconds is not None and half_life_seconds > 0:
@@ -106,10 +109,10 @@ class TDigest:
         else:
             decay_lambda = 0.0
 
-        new_centroids: list[Centroid] = []
+        filtered: list[Centroid] = []
         new_total = 0.0
 
-        for c in self._centroids:
+        for c in all_centroids:
             if c.timestamp < cutoff_time:
                 continue
             if decay_lambda > 0:
@@ -119,11 +122,12 @@ class TDigest:
                     continue
             else:
                 w = c.weight
-            new_centroids.append(Centroid(mean=c.mean, weight=w, timestamp=c.timestamp))
+            filtered.append(Centroid(mean=c.mean, weight=w, timestamp=c.timestamp))
             new_total += w
 
-        self._centroids = new_centroids
+        self._centroids = filtered
         self._total_weight = new_total
+
         if len(self._centroids) > 1:
             self._compress()
 

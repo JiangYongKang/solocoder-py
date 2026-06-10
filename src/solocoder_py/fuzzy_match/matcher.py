@@ -76,7 +76,7 @@ def levenshtein_distance_bounded(s1: str, s2: str, threshold: int) -> int:
                 row_min = curr_row[j]
 
         if end < len2:
-            curr_row[end + 1] = threshold + 1 if end + 1 <= len2 else curr_row[end + 1]
+            curr_row[end + 1] = threshold + 1
 
         if row_min > threshold:
             return threshold + 1
@@ -158,8 +158,9 @@ class FuzzyMatcher:
         max_len = query_len + threshold
 
         result: list[str] = []
-        for length, bucket in self._length_index.items():
-            if min_len <= length <= max_len:
+        for length in range(min_len, max_len + 1):
+            bucket = self._length_index.get(length)
+            if bucket is not None:
                 result.extend(bucket)
 
         return result

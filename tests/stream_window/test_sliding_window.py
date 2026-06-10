@@ -7,6 +7,7 @@ from solocoder_py.stream_window import (
     AggregationType,
     Event,
     InvalidWindowConfigError,
+    LateEventDroppedError,
     SlidingWindowAggregator,
     Window,
 )
@@ -360,10 +361,14 @@ class TestSlidingWindowLateEvents:
         agg.advance_watermark(15.0)
         initial_dropped = agg.dropped_late_count
 
-        agg.on_event(Event(timestamp=3.0))
-        assert agg.dropped_late_count > initial_dropped
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=3.0))
+        assert agg.dropped_late_count == initial_dropped + 1
+        assert excinfo.value.event_timestamp == 3.0
+        assert excinfo.value.window_end == 10.0
+        assert excinfo.value.allowed_lateness == 2.0
 
-    def test_late_event_counted_per_window(self):
+    def test_late_event_counted_per_event(self):
         agg = SlidingWindowAggregator(
             window_size_seconds=10.0,
             slide_seconds=5.0,
@@ -371,8 +376,12 @@ class TestSlidingWindowLateEvents:
         )
         agg.on_event(Event(timestamp=20.0))
         initial_dropped = agg.dropped_late_count
-        agg.on_event(Event(timestamp=5.0))
-        assert agg.dropped_late_count > initial_dropped
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=5.0))
+        assert agg.dropped_late_count == initial_dropped + 1
+        assert excinfo.value.event_timestamp == 5.0
+        assert excinfo.value.window_end == 10.0
+        assert excinfo.value.allowed_lateness == 0.0
 
     def test_late_recompute_updates_value(self):
         agg = SlidingWindowAggregator(
@@ -585,3 +594,120 @@ class TestSlidingWindowEdgeCases:
         assert agg.get_window_state(0.0) is None
         assert agg.get_window_state(5.0).count == 1
         assert agg.get_window_state(10.0).count == 1
+
+
+class TestSlidingWindowLateEventDroppedError:
+    def test_error_contains_correct_event_timestamp(self):
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=5.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=30.0))
+
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=5.0))
+        assert excinfo.value.event_timestamp == 5.0
+
+    def test_error_contains_earliest_window_end(self):
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=5.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=30.0))
+
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=7.0))
+        assert excinfo.value.window_end == 10.0
+
+    def test_error_contains_correct_allowed_lateness(self):
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=5.0,
+            allowed_lateness_seconds=4.0,
+        )
+        agg.on_event(Event(timestamp=30.0))
+
+        with pytest.raises(LateEventDroppedError) as excinfo:
+            agg.on_event(Event(timestamp=5.0))
+        assert excinfo.value.allowed_lateness == 4.0
+
+    def test_error_is_subclass_of_stream_window_error(self):
+        from solocoder_py.stream_window import StreamWindowError
+
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=5.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=30.0))
+
+        with pytest.raises(StreamWindowError):
+            agg.on_event(Event(timestamp=5.0))
+
+
+class TestSlidingWindowDroppedLateCountSemantics:
+    def test_single_dropped_event_counts_as_one_even_with_multiple_windows(self):
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=2.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=50.0))
+        assert agg.dropped_late_count == 0
+
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=5.0))
+        assert agg.dropped_late_count == 1
+
+    def test_multiple_dropped_events_counted_individually(self):
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=5.0,
+            allowed_lateness_seconds=0.0,
+        )
+        agg.on_event(Event(timestamp=100.0))
+
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=3.0))
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=13.0))
+        with pytest.raises(LateEventDroppedError):
+            agg.on_event(Event(timestamp=23.0))
+        assert agg.dropped_late_count == 3
+
+    def test_partial_window_expiry_does_not_count_as_dropped(self):
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=5.0,
+            allowed_lateness_seconds=0.0,
+            watermark_delay_seconds=100.0,
+        )
+        agg.on_event(Event(timestamp=12.0))
+        agg.advance_watermark(10.0)
+
+        assert agg.dropped_late_count == 0
+        results = agg.on_event(Event(timestamp=7.0))
+        assert agg.dropped_late_count == 0
+        assert agg.get_window_state(5.0).count == 2
+
+    def test_non_dropped_events_do_not_affect_count(self):
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=5.0,
+            allowed_lateness_seconds=10.0,
+        )
+        agg.on_event(Event(timestamp=7.0))
+        agg.advance_watermark(10.0)
+        assert agg.dropped_late_count == 0
+
+        agg.on_event(Event(timestamp=3.0))
+        assert agg.dropped_late_count == 0
+
+    def test_count_starts_at_zero(self):
+        agg = SlidingWindowAggregator(
+            window_size_seconds=10.0,
+            slide_seconds=5.0,
+        )
+        assert agg.dropped_late_count == 0

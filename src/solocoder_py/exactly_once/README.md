@@ -6,8 +6,10 @@
 
 1. **消息去重机制**：每条消息携带唯一 `message_id`，消费端维护已处理消息记录，重复消息自动跳过并返回已处理结果
 2. **原子化提交**：偏移量（Offset）与去重记录在同一原子操作中写入，避免部分写入导致的状态不一致
-3. **崩溃重启恢复**：从最近检查点（Checkpoint）恢复状态，已处理消息被去重拦截，未处理消息继续正常流转
-4. **手动消息重放**：支持指定偏移范围重放消息，重放期间自动去重，不产生重复的去重记录
+3. **崩溃重启恢复**：从最近检查点（Checkpoint）恢复状态，**保留去重记录用于拦截已处理消息**，未处理消息继续正常流转
+4. **手动消息重放**：支持指定偏移范围重放消息，重放期间自动去重（含已提交和未提交记录），不产生重复的去重记录
+5. **顺序消费偏移连续性**：`process_message_at` 随机访问不影响顺序消费偏移，跳跃时产生 `OffsetSkipWarning`
+6. **检查点单调性保证**：`committed_offset` 单调递增，重放产生的低偏移检查点不会覆盖已有的高偏移检查点
 
 ## 核心类职责
 
@@ -69,10 +71,55 @@ Phase 2 (COMMIT):
 ```python
 processor.recover_or_start_fresh()
   → 调用 checkpoint_store.restore_from_checkpoint(dedup_store)
-  → 清除 dedup_store（依赖检查点重建或重新消费去重）
+  → 保留 dedup_store 中的去重记录（用于拦截已处理消息）
   → 清除 pending 的 CommitBatch
   → 重置 current_offset 至 checkpoint.committed_offset
   → 后续 process_next() 从 committed_offset + 1 继续
+```
+
+**关键设计**：恢复时**不清空**去重存储。保留去重记录确保：
+- 崩溃前去重记录已写入但检查点未写入的场景下，已处理消息不会被重复执行业务逻辑
+- 恢复后从旧偏移重放时，去重记录能正确拦截已处理消息
+
+### 检查点单调性保证
+
+`committed_offset` 严格单调递增，不会出现低偏移检查点覆盖高偏移检查点的情况：
+
+- **自动提交**：`_auto_checkpoint` 在提交前检查 `target_offset > current_committed_offset`，不满足时跳过提交
+- **重放提交**：`replay_range` 中，若重放产生的 `target_offset <= current_committed_offset`，仅将去重记录写入 `dedup_store`，不创建新检查点
+- **崩溃恢复**：`recover_from_checkpoint` 始终从最新的（最高偏移的）检查点恢复
+
+## 顺序消费偏移连续性保证
+
+### process_message_at 与 process_next 的隔离
+
+`process_message_at(offset)` 是**随机访问**方法，用于处理指定偏移的消息，它：
+- **不修改** `_current_offset`：调用后顺序消费的偏移位置不变
+- 去重记录加入 `_uncommitted_records`，在下次检查点提交时落盘
+- 当跳跃偏移（跳过中间未处理消息）时，会设置 `last_skip_warning` 属性
+
+`process_next()` 是**顺序消费**方法，始终从 `_current_offset + 1` 开始：
+- `_current_offset` 只在 `process_next` 中递增
+- 不受 `process_message_at` 的影响
+
+### 偏移跳跃检测
+
+```python
+proc = ExactlyOnceProcessor.create(auto_commit_interval=100)
+
+# 发布 10 条消息
+for i in range(10):
+    proc.publish_message(f"m{i}", i)
+
+# 直接跳到 offset 5 处理
+r = proc.process_message_at(5)
+assert proc.last_skip_warning is not None
+assert proc.last_skip_warning.expected_offset == 0
+assert proc.last_skip_warning.actual_offset == 5
+
+# 顺序消费不受影响，仍从 offset 0 开始
+r0 = proc.process_next()
+assert r0.message.offset == 0
 ```
 
 ## 消息重放机制
@@ -80,9 +127,12 @@ processor.recover_or_start_fresh()
 重放期间保持处理器主状态不变：
 1. 保存 `current_offset`、`_uncommitted_records`、`_uncommitted_results`
 2. 遍历指定范围的消息，查询去重记录：
-   - 已存在 → 跳过（`duplicate_count++`）
+   - 已存在于 `dedup_store` → 跳过（`duplicate_count++`）
+   - 已存在于 `_uncommitted_records` → 跳过（`duplicate_count++`）
    - 不存在 → 执行 handler，累积到临时去重列表
-3. 临时去重列表通过原子提交写入
+3. 临时去重列表通过原子提交写入：
+   - 若 `target_offset > current_committed_offset` → 创建新检查点（单调递增）
+   - 若 `target_offset <= current_committed_offset` → 仅写入去重记录，不创建检查点
 4. 恢复主状态变量
 
 重放的去重记录会标记 `replayed=True`，便于审计区分。
@@ -173,6 +223,7 @@ proc2 = ExactlyOnceProcessor(
 )
 
 # 从最近检查点恢复
+# 注意：去重记录被保留，已处理消息会被拦截
 proc2.recover_or_start_fresh()
 
 # 继续生产 + 消费剩余消息
@@ -211,6 +262,29 @@ print(f"  去重跳过: {replay_result.duplicate_count}") # 15 条 (10~24)
 print(f"  新增去重记录: {replay_result.new_dedup_count}")
 ```
 
+### 随机访问与偏移跳跃检测
+
+```python
+proc = ExactlyOnceProcessor.create(auto_commit_interval=100)
+
+for i in range(10):
+    proc.publish_message(f"m{i}", i)
+
+# 随机访问 offset 5，不影响顺序消费
+r = proc.process_message_at(5, handler=lambda m: f"out-of-order-{m.payload}")
+assert r.is_new is True
+assert proc.current_offset == -1  # 顺序偏移不变
+
+# 检查跳跃告警
+if proc.last_skip_warning:
+    print(f"警告: 从 offset {proc.last_skip_warning.expected_offset} "
+          f"跳到了 {proc.last_skip_warning.actual_offset}")
+
+# 顺序消费不受影响
+r0 = proc.process_next()
+assert r0.message.offset == 0  # 从头开始
+```
+
 ### 有限容量去重存储
 
 ```python
@@ -236,6 +310,8 @@ except DedupStoreOverflowError:
 | `AtomicCommitInterruptedError` | 原子提交中途模拟崩溃 | 调用 `recover_or_start_fresh()` 恢复 |
 | `MessageNotFoundError` | 查询不存在的消息偏移 | 检查偏移范围 |
 | `CheckpointNotFoundError` | 无可用检查点时尝试恢复 | 使用 `recover_or_start_fresh()` 从 0 开始 |
+| `OffsetSkipWarning` | `process_message_at` 跳过中间未处理消息 | 检查 `last_skip_warning` 属性确认跳跃范围 |
+| `CheckpointMonotonicityError` | 尝试写入低于当前 committed_offset 的检查点 | 检查是否有重放或并发写入导致偏移回退 |
 
 ## 线程安全
 

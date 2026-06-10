@@ -5,6 +5,8 @@ from .exceptions import (
     DedupStoreOverflowError,
     InvalidOffsetError,
     AtomicCommitInterruptedError,
+    OffsetSkipWarning,
+    CheckpointMonotonicityError,
 )
 from .models import (
     Message,
@@ -32,6 +34,8 @@ __all__ = [
     "DedupStoreOverflowError",
     "InvalidOffsetError",
     "AtomicCommitInterruptedError",
+    "OffsetSkipWarning",
+    "CheckpointMonotonicityError",
     "Message",
     "DedupRecord",
     "Checkpoint",

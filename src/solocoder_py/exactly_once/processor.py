@@ -6,8 +6,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .exceptions import (
     AtomicCommitInterruptedError,
+    CheckpointMonotonicityError,
     CheckpointNotFoundError,
     InvalidOffsetError,
+    OffsetSkipWarning,
 )
 from .models import (
     Checkpoint,
@@ -253,6 +255,10 @@ class ExactlyOnceProcessor:
             return None
 
         target_offset = self._uncommitted_records[-1].offset
+        current_committed = self.committed_offset
+        if target_offset <= current_committed:
+            return None
+
         batch_records = list(self._uncommitted_records)
 
         try:
@@ -309,6 +315,20 @@ class ExactlyOnceProcessor:
                         duplicate_count += 1
                         continue
 
+                    uncommitted = self._find_uncommitted(msg.message_id)
+                    if uncommitted is not None:
+                        duplicate_count += 1
+                        continue
+
+                    already_in_new = False
+                    for r in new_dedup_records:
+                        if r.message_id == msg.message_id:
+                            already_in_new = True
+                            skipped_count += 1
+                            break
+                    if already_in_new:
+                        continue
+
                     result_data: Any = None
                     if handler is not None:
                         result_data = handler(msg)
@@ -321,15 +341,6 @@ class ExactlyOnceProcessor:
                         replayed=True,
                     )
 
-                    already_in_uncommitted = False
-                    for r in new_dedup_records:
-                        if r.message_id == msg.message_id:
-                            already_in_uncommitted = True
-                            skipped_count += 1
-                            break
-                    if already_in_uncommitted:
-                        continue
-
                     new_dedup_records.append(dedup_record)
                     processed_count += 1
 
@@ -337,15 +348,27 @@ class ExactlyOnceProcessor:
                     target_offset = max(
                         r.offset for r in new_dedup_records
                     )
-                    try:
-                        self.checkpoint_store.prepare_batch(
-                            target_offset=target_offset,
-                            dedup_records=new_dedup_records,
-                        )
-                        self.checkpoint_store.commit_batch(self.dedup_store)
-                    except Exception:
-                        self.checkpoint_store.rollback_batch()
-                        raise
+                    current_committed = self.committed_offset
+                    if target_offset <= current_committed:
+                        for rec in new_dedup_records:
+                            self.dedup_store.put(
+                                rec.message_id,
+                                rec.offset,
+                                rec.result_data,
+                                replayed=True,
+                            )
+                    else:
+                        try:
+                            self.checkpoint_store.prepare_batch(
+                                target_offset=target_offset,
+                                dedup_records=new_dedup_records,
+                            )
+                            self.checkpoint_store.commit_batch(
+                                self.dedup_store
+                            )
+                        except Exception:
+                            self.checkpoint_store.rollback_batch()
+                            raise
             finally:
                 self._current_offset = original_offset
                 self._uncommitted_records = original_uncommitted
@@ -387,7 +410,65 @@ class ExactlyOnceProcessor:
     ) -> ProcessResult:
         with self._lock:
             msg = self.message_source.get_message(offset)
-            return self._process_single(msg, handler, replaying=False)
+
+            existing = self.dedup_store.get(msg.message_id)
+            if existing is not None:
+                return ProcessResult(
+                    message=msg.snapshot(),
+                    status=ProcessStatus.DUPLICATE,
+                    dedup_record=existing.snapshot(),
+                    processed_new=False,
+                )
+
+            uncommitted = self._find_uncommitted(msg.message_id)
+            if uncommitted is not None:
+                return ProcessResult(
+                    message=msg.snapshot(),
+                    status=ProcessStatus.DUPLICATE,
+                    dedup_record=uncommitted.snapshot(),
+                    processed_new=False,
+                )
+
+            expected_next = self._current_offset + 1
+            if offset != expected_next:
+                warnings_emitted: List[OffsetSkipWarning] = []
+                for skipped in range(expected_next, offset):
+                    if self.message_source.contains_offset(skipped):
+                        w = OffsetSkipWarning(
+                            expected_offset=expected_next,
+                            actual_offset=offset,
+                        )
+                        warnings_emitted.append(w)
+                        break
+                if warnings_emitted:
+                    self._last_skip_warning = warnings_emitted[0]
+
+            result_data: Any = None
+            if handler is not None:
+                result_data = handler(msg)
+
+            dedup_record = DedupRecord(
+                message_id=msg.message_id,
+                offset=msg.offset,
+                processed_at=self._clock.now(),
+                result_data=result_data,
+                replayed=False,
+            )
+
+            self._uncommitted_records.append(dedup_record)
+            self._uncommitted_results[msg.message_id] = result_data
+
+            return ProcessResult(
+                message=msg.snapshot(),
+                status=ProcessStatus.NEW,
+                dedup_record=dedup_record.snapshot(),
+                processed_new=True,
+            )
+
+    @property
+    def last_skip_warning(self) -> Optional[OffsetSkipWarning]:
+        with self._lock:
+            return getattr(self, "_last_skip_warning", None)
 
     def force_evict_dedup(self, count: int = 1) -> List[DedupRecord]:
         return self.dedup_store.evict_oldest(count)

@@ -393,6 +393,55 @@ class TestRepeatedTerms:
         assert len(postings) == 1
         assert postings[0].term_freq == 3
 
+    def test_deduplicated_query_terms_same_score_as_single(self):
+        idx = InvertedIndex()
+        idx.add_document("doc1", "hello hello world")
+        resp_single = idx.search(["hello"])
+        resp_dup = idx.search(["hello", "hello", "hello"])
+        assert resp_single.results[0].score == resp_dup.results[0].score
+
+    def test_deduplicated_multi_term_same_score(self):
+        idx = InvertedIndex()
+        idx.add_document("doc1", "alpha beta alpha")
+        resp_unique = idx.search(["alpha", "beta"])
+        resp_dup = idx.search(["alpha", "beta", "alpha", "beta"])
+        assert resp_unique.results[0].score == resp_dup.results[0].score
+
+
+class TestQueryPunctuationNormalization:
+    def test_query_with_exclamation_mark(self):
+        idx = InvertedIndex()
+        idx.add_document("doc1", "hello world")
+        resp = idx.search(["hello!"])
+        assert resp.total_count == 1
+        assert resp.results[0].doc_id == "doc1"
+
+    def test_query_with_comma(self):
+        idx = InvertedIndex()
+        idx.add_document("doc1", "hello world")
+        resp = idx.search(["hello,"])
+        assert resp.total_count == 1
+
+    def test_query_with_hyphen(self):
+        idx = InvertedIndex()
+        idx.add_document("doc1", "foo bar")
+        resp = idx.search(["foo-bar"])
+        assert resp.total_count == 1
+
+    def test_query_with_mixed_punctuation(self):
+        idx = InvertedIndex()
+        idx.add_document("doc1", "hello world")
+        resp = idx.search(["(hello)", "world!"])
+        assert resp.total_count == 1
+        assert resp.results[0].doc_id == "doc1"
+
+    def test_get_postings_with_punctuation(self):
+        idx = InvertedIndex()
+        idx.add_document("doc1", "hello world")
+        postings = idx.get_postings("hello!")
+        assert len(postings) == 1
+        assert postings[0].term_freq == 1
+
 
 class TestCursorEncoding:
     def test_cursor_roundtrip(self):

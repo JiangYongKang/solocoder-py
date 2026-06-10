@@ -8,6 +8,7 @@ from solocoder_py.rate_cap import (
     OperationRejectedError,
     RateCapConfig,
     RateCapManager,
+    SubjectNotFoundError,
     SubjectQuotas,
     WindowConfig,
 )
@@ -364,3 +365,167 @@ class TestManagerGranularSliding:
         manager.check_operation("u1", amount=50)
         simple_clock.advance(31)
         manager.check_operation("u1", amount=50)
+
+
+class TestManagerResetIsolation:
+    def test_granular_reset_subject_a_does_not_affect_b(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(
+                    name="1min",
+                    window_seconds=60,
+                    max_operations=1000,
+                    slide_granularity_seconds=1,
+                )
+            ],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"1min": 500}),
+                "B": SubjectQuotas("B", {"1min": 500}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=30)
+        manager.check_operation("B", amount=20)
+
+        assert manager.query_subject_usage("A")["1min"].used == 30
+        assert manager.query_subject_usage("B")["1min"].used == 20
+        assert manager.query_global_usage()["1min"].used == 50
+
+        manager.reset_subject("A")
+
+        assert manager.query_subject_usage("A")["1min"].used == 0
+        assert manager.query_subject_usage("B")["1min"].used == 20
+        assert manager.query_global_usage()["1min"].used == 20
+
+        manager.check_operation("B", amount=480)
+        assert manager.query_subject_usage("B")["1min"].used == 500
+        assert manager.query_global_usage()["1min"].used == 500
+
+    def test_precise_reset_subject_a_does_not_affect_b(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(name="1min", window_seconds=60, max_operations=1000),
+            ],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"1min": 500}),
+                "B": SubjectQuotas("B", {"1min": 500}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        for _ in range(30):
+            manager.check_operation("A")
+        for _ in range(20):
+            manager.check_operation("B")
+
+        assert manager.query_subject_usage("A")["1min"].used == 30
+        assert manager.query_subject_usage("B")["1min"].used == 20
+        assert manager.query_global_usage()["1min"].used == 50
+
+        manager.reset_subject("A")
+
+        assert manager.query_subject_usage("A")["1min"].used == 0
+        assert manager.query_subject_usage("B")["1min"].used == 20
+        assert manager.query_global_usage()["1min"].used == 20
+
+    def test_granular_multiple_buckets_reset_isolation(self, simple_clock):
+        config = RateCapConfig(
+            windows=[
+                WindowConfig(
+                    name="w",
+                    window_seconds=60,
+                    max_operations=1000,
+                    slide_granularity_seconds=10,
+                )
+            ],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"w": 500}),
+                "B": SubjectQuotas("B", {"w": 500}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=10)
+        simple_clock.advance(12)
+        manager.check_operation("A", amount=15)
+        manager.check_operation("B", amount=5)
+        simple_clock.advance(12)
+        manager.check_operation("B", amount=25)
+        manager.check_operation("A", amount=5)
+
+        assert manager.query_subject_usage("A")["w"].used == 30
+        assert manager.query_subject_usage("B")["w"].used == 30
+        assert manager.query_global_usage()["w"].used == 60
+
+        manager.reset_subject("A")
+
+        assert manager.query_subject_usage("A")["w"].used == 0
+        assert manager.query_subject_usage("B")["w"].used == 30
+        assert manager.query_global_usage()["w"].used == 30
+
+    def test_reset_subject_with_nonexistent_subject(self, simple_clock):
+        config = RateCapConfig(
+            windows=[WindowConfig("w", 60, 100)],
+            subject_quotas={
+                "A": SubjectQuotas("A", {"w": 50}),
+                "B": SubjectQuotas("B", {"w": 50}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("A", amount=10)
+        manager.reset_subject("NONEXISTENT")
+        assert manager.query_subject_usage("A")["w"].used == 10
+        assert manager.query_global_usage()["w"].used == 10
+
+
+class TestManagerSubjectNotFound:
+    def test_strict_query_unknown_subject_raises(self, simple_clock):
+        config = RateCapConfig(
+            windows=[WindowConfig("1min", 60, 1000)],
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        with pytest.raises(SubjectNotFoundError, match="not found"):
+            manager.query_subject_usage("ghost-user", strict=True)
+
+    def test_strict_query_known_subject_ok(self, simple_clock):
+        config = RateCapConfig(
+            windows=[WindowConfig("1min", 60, 1000)],
+            subject_quotas={
+                "known-user": SubjectQuotas("known-user", {"1min": 50}),
+            },
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        usage = manager.query_subject_usage("known-user", strict=True)
+        assert usage["1min"].limit == 50
+
+    def test_strict_query_user_with_default_quota_ok(self, simple_clock):
+        config = RateCapConfig(
+            windows=[WindowConfig("1min", 60, 1000)],
+            default_subject_quotas={"1min": 100},
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        usage = manager.query_subject_usage("any-user", strict=True)
+        assert usage["1min"].limit == 100
+
+    def test_strict_query_user_with_history_ok(self, simple_clock):
+        config = RateCapConfig(
+            windows=[WindowConfig("1min", 60, 1000)],
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        manager.check_operation("once-user", amount=1)
+        usage = manager.query_subject_usage("once-user", strict=True)
+        assert usage["1min"].used == 1
+
+    def test_non_strict_query_unknown_subject_returns_default(
+        self, single_window_config, simple_clock
+    ):
+        manager = RateCapManager(single_window_config, clock=simple_clock)
+        usage = manager.query_subject_usage("ghost-user", strict=False)
+        assert usage["1min"].used == 0
+        assert usage["1min"].remaining == 100
+
+    def test_query_usage_strict_propagates(self, simple_clock):
+        config = RateCapConfig(
+            windows=[WindowConfig("1min", 60, 1000)],
+        )
+        manager = RateCapManager(config, clock=simple_clock)
+        with pytest.raises(SubjectNotFoundError, match="not found"):
+            manager.query_usage("ghost-user", strict=True)

@@ -1,0 +1,6 @@
+产物不满意：
+1. 提示词第5条要求修正 README.md 中淘汰算法描述与代码的实际策略一致，但 README.md 的"低频淘汰算法"部分第3条和第4条仍描述"初始计数为 max(本次出现次数, CMS 下界估计)"和"竞争值为 max(本次出现次数, CMS 下界估计)"，而 detector.py 的 record 方法实际实现直接使用裸 count（本次出现次数）作为初始值和竞争值，两处描述均与代码实际行为不符。根因是模型在修改 detector.py 统一淘汰策略时只改了代码但忘记同步更新 README 中对应的算法描述段落，应把 README 中这两处改为"初始计数为本次出现次数 count"和"如果 count > 当前最小计数则替换"，使文字描述与代码逻辑完全对齐。
+2. detector.py 的 lower_bound 方法新增了对已跟踪项返回 _store[item] 精确值的逻辑，但 estimate_count 方法内同样对已跟踪项返回 _store[item]，导致两个方法对已跟踪项的返回值完全一致。虽然语义上 lower_bound 等同 estimate_count 是合理的，但 README.md 中 upper_bound 的方法描述是"返回值 >= 实际频次"，而 lower_bound 的方法描述只说"同 estimate_count"，未明确解释为什么对已跟踪项下界等于精确值而不是 CMS 计算的保守下界。应在 README 中对高低界的不同数据来源（store 精确值 vs CMS 估计）做补充说明，避免调用方对两个方法返回相同值感到困惑。
+过程不满意：
+1. 模型在修改完 detector.py 和 count_min_sketch.py 后第一次运行 pytest 发现测试失败，随后写了 debug_test.py 调试脚本来理解问题根因，再将 debug_test.py 删除后对同一批代码做第二轮修改。这是典型的试错式调试模式——先动手修改代码再通过测试失败反推问题，而非在修改前先系统性地对比提示词中 6 条要求与现有代码的差距，列出所有需要修改的位置和预期的修改方向。正确做法是先逐条对照提示词检查代码，定位所有不一致点后一次性修改，再运行测试验证而非用测试失败驱动第二轮修补。
+2. 模型对测试文件的修改极度碎片化，对 test_count_min_sketch.py、test_heavy_hitter_detector.py、test_edge_cases.py、test_error_cases.py 四个文件分别执行了十几次 edit_file_search_replace，每次只改一两个断言方法。这种零散修改模式暴露了缺乏全局规划的思维习惯，正确的做法是先批量通读四个测试文件中所有涉及 upper_bound、lower_bound、estimate_count 断言的测试方法，整理出完整的修改清单后再一次性或按文件维度分批修改，而不是看到一个改一个。

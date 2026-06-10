@@ -60,6 +60,17 @@ class RateCapManager:
     def _window_names(self) -> List[str]:
         return [w.name for w in self._config.windows]
 
+    def _subject_is_known(self, subject_id: str) -> bool:
+        if subject_id in self._config.subject_quotas:
+            return True
+        if self._config.default_subject_quotas:
+            return True
+        for window in self._config.windows:
+            key = (subject_id, window.name)
+            if key in self._subject_counters:
+                return True
+        return False
+
     def _ensure_subject_counter(
         self, subject_id: str, window_name: str
     ) -> SlidingWindowCounter:
@@ -113,14 +124,14 @@ class RateCapManager:
         with self._lock:
             global_acquired: List[str] = []
             subject_acquired: List[str] = []
-            rollback_needed = False
 
             try:
                 for wname in self._window_names():
                     g_counter = self._global_counters[wname]
-                    ok, used, limit = g_counter.try_acquire(amount)
+                    ok, used, limit = g_counter.try_acquire(
+                        amount, tag=subject_id
+                    )
                     if not ok:
-                        rollback_needed = True
                         raise OperationRejectedError(
                             subject_id=subject_id,
                             dimension="global",
@@ -137,7 +148,6 @@ class RateCapManager:
                         )
                         ok, used, limit = s_counter.try_acquire(amount)
                         if not ok:
-                            rollback_needed = True
                             raise OperationRejectedError(
                                 subject_id=subject_id,
                                 dimension="subject",
@@ -196,11 +206,21 @@ class RateCapManager:
             window_seconds=counter.window_seconds,
         )
 
-    def query_subject_usage(self, subject_id: str) -> Dict[str, WindowUsage]:
+    def query_subject_usage(
+        self,
+        subject_id: str,
+        strict: bool = False,
+    ) -> Dict[str, WindowUsage]:
         if not subject_id:
             raise ValueError("subject_id cannot be empty")
 
         with self._lock:
+            if strict and not self._subject_is_known(subject_id):
+                raise SubjectNotFoundError(
+                    f"Subject '{subject_id}' not found: no quota configured, "
+                    f"no default quota available, and no operation history"
+                )
+
             result: Dict[str, WindowUsage] = {}
             for window in self._config.windows:
                 wname = window.name
@@ -237,13 +257,17 @@ class RateCapManager:
             return result
 
     def query_usage(
-        self, subject_id: str | None = None
+        self,
+        subject_id: str | None = None,
+        strict: bool = False,
     ) -> Dict[str, Dict[str, WindowUsage]]:
         result: Dict[str, Dict[str, WindowUsage]] = {
             "global": self.query_global_usage(),
         }
         if subject_id is not None:
-            result["subject"] = self.query_subject_usage(subject_id)
+            result["subject"] = self.query_subject_usage(
+                subject_id, strict=strict
+            )
         return result
 
     def add_subject_quota(
@@ -302,21 +326,18 @@ class RateCapManager:
                 if counter is not None:
                     used = counter.current_count()
                     if used > 0:
-                        for _ in range(used):
-                            counter._rollback_last(1)
+                        counter.clear()
                         g_counter = self._global_counters.get(wname)
                         if g_counter is not None:
-                            for _ in range(used):
-                                g_counter._rollback_last(1)
+                            g_counter.remove_by_tag(subject_id, amount=used)
 
     def reset_global(self) -> None:
         with self._lock:
             for counter in self._global_counters.values():
-                for _ in range(counter.current_count()):
-                    counter._rollback_last(1)
+                counter.clear()
 
     def reset_all(self) -> None:
         with self._lock:
             self.reset_global()
-            for (subject_id, _) in list(self._subject_counters.keys()):
-                self.reset_subject(subject_id)
+            for counter in self._subject_counters.values():
+                counter.clear()

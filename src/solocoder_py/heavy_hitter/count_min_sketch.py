@@ -80,10 +80,10 @@ class CountMinSketch:
             return min_count
 
     def lower_bound(self, item: Any) -> int:
-        return self.estimate(item)
+        return max(0, self.estimate(item) - int(self.error_bound()))
 
     def upper_bound(self, item: Any) -> int:
-        return self.estimate(item) + int(self._epsilon * self._total_count)
+        return self.estimate(item)
 
     def error_bound(self) -> float:
         with self._lock:

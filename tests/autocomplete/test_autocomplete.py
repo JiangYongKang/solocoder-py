@@ -5,6 +5,7 @@ import pytest
 from solocoder_py.autocomplete import (
     Candidate,
     EmptyWordError,
+    InvalidPrefixError,
     InvalidWeightError,
     TrieAutocomplete,
 )
@@ -51,7 +52,8 @@ class TestBasicOperations:
         sample_trie.clear()
         assert sample_trie.size == 0
         assert sample_trie.contains("apple") is False
-        assert sample_trie.search("a") == []
+        with pytest.raises(InvalidPrefixError, match="prefix 'a' does not exist"):
+            sample_trie.search("a")
 
 
 class TestSearchOperations:
@@ -73,9 +75,9 @@ class TestSearchOperations:
         assert "apple" in words
         assert "app" in words
 
-    def test_search_no_match(self, sample_trie):
-        results = sample_trie.search("xyz")
-        assert results == []
+    def test_search_no_match_raises(self, sample_trie):
+        with pytest.raises(InvalidPrefixError, match="prefix 'xyz' does not exist"):
+            sample_trie.search("xyz")
 
     def test_search_empty_prefix_returns_all(self, sample_trie):
         results = sample_trie.search("")
@@ -283,10 +285,10 @@ class TestEdgeCases:
         assert len(results) == 1
         assert results[0].word == "apple"
 
-    def test_search_prefix_longer_than_all_words(self, empty_trie):
+    def test_search_prefix_longer_than_all_words_raises(self, empty_trie):
         empty_trie.insert("app", weight=5)
-        results = empty_trie.search("application")
-        assert results == []
+        with pytest.raises(InvalidPrefixError, match="prefix 'application' does not exist"):
+            empty_trie.search("application")
 
     def test_zero_weight_word(self, empty_trie):
         empty_trie.insert("zero", weight=0)
@@ -348,6 +350,122 @@ class TestCandidateModel:
         assert c1 == c2
         assert c1 != c3
         assert c1 != c4
+
+    def test_candidate_lt_weight_comparison(self):
+        c_low = Candidate(word="a", weight=5)
+        c_high = Candidate(word="b", weight=10)
+        assert c_high < c_low
+        assert not c_low < c_high
+
+    def test_candidate_lt_equal_weight_lex_ascending(self):
+        c_apple = Candidate(word="apple", weight=10)
+        c_banana = Candidate(word="banana", weight=10)
+        assert c_apple < c_banana
+        assert not c_banana < c_apple
+
+    def test_candidate_gt_weight_comparison(self):
+        c_low = Candidate(word="a", weight=5)
+        c_high = Candidate(word="b", weight=10)
+        assert c_low > c_high
+        assert not c_high > c_low
+
+    def test_candidate_gt_equal_weight_lex_ascending(self):
+        c_apple = Candidate(word="apple", weight=10)
+        c_banana = Candidate(word="banana", weight=10)
+        assert c_banana > c_apple
+        assert not c_apple > c_banana
+
+    def test_candidate_ge_weight_comparison(self):
+        c_low = Candidate(word="a", weight=5)
+        c_high = Candidate(word="b", weight=10)
+        c_high2 = Candidate(word="c", weight=10)
+        assert c_low >= c_high
+        assert not c_high >= c_high2
+        assert c_high2 >= c_high
+        assert not c_high >= c_low
+
+    def test_candidate_ge_equal_weight_lex_ascending(self):
+        c_apple = Candidate(word="apple", weight=10)
+        c_banana = Candidate(word="banana", weight=10)
+        c_apple2 = Candidate(word="apple", weight=10)
+        assert c_banana >= c_apple
+        assert c_apple >= c_apple2
+        assert not c_apple >= c_banana
+
+    def test_candidate_le_weight_comparison(self):
+        c_low = Candidate(word="a", weight=5)
+        c_high = Candidate(word="b", weight=10)
+        c_low2 = Candidate(word="c", weight=5)
+        assert c_high <= c_low
+        assert c_low <= c_low2
+        assert not c_low <= c_high
+
+    def test_candidate_le_equal_weight_lex_ascending(self):
+        c_apple = Candidate(word="apple", weight=10)
+        c_banana = Candidate(word="banana", weight=10)
+        c_apple2 = Candidate(word="apple", weight=10)
+        assert c_apple <= c_banana
+        assert c_apple <= c_apple2
+        assert not c_banana <= c_apple
+
+    def test_candidate_list_sort_weight_descending(self):
+        c1 = Candidate(word="a", weight=5)
+        c2 = Candidate(word="b", weight=10)
+        c3 = Candidate(word="c", weight=3)
+        candidates = [c1, c2, c3]
+        candidates.sort()
+        assert candidates[0].weight == 10
+        assert candidates[1].weight == 5
+        assert candidates[2].weight == 3
+
+    def test_candidate_list_sort_equal_weight_lex_ascending(self):
+        c_banana = Candidate(word="banana", weight=10)
+        c_apple = Candidate(word="apple", weight=10)
+        c_cherry = Candidate(word="cherry", weight=10)
+        candidates = [c_banana, c_apple, c_cherry]
+        candidates.sort()
+        assert candidates[0].word == "apple"
+        assert candidates[1].word == "banana"
+        assert candidates[2].word == "cherry"
+
+    def test_candidate_list_sort_mixed(self):
+        c_zebra = Candidate(word="zebra", weight=10)
+        c_apple = Candidate(word="apple", weight=10)
+        c_banana = Candidate(word="banana", weight=15)
+        c_cat = Candidate(word="cat", weight=10)
+        candidates = [c_zebra, c_apple, c_banana, c_cat]
+        candidates.sort()
+        assert candidates[0].word == "banana"
+        assert candidates[0].weight == 15
+        assert candidates[1].word == "apple"
+        assert candidates[1].weight == 10
+        assert candidates[2].word == "cat"
+        assert candidates[2].weight == 10
+        assert candidates[3].word == "zebra"
+        assert candidates[3].weight == 10
+
+
+class TestInvalidPrefixError:
+    def test_search_nonexistent_prefix_raises(self, sample_trie):
+        with pytest.raises(InvalidPrefixError, match="prefix 'xyz' does not exist"):
+            sample_trie.search("xyz")
+
+    def test_search_partial_nonexistent_prefix_raises(self, sample_trie):
+        with pytest.raises(InvalidPrefixError, match="prefix 'appz' does not exist"):
+            sample_trie.search("appz")
+
+    def test_search_single_char_nonexistent_prefix_raises(self, sample_trie):
+        with pytest.raises(InvalidPrefixError, match="prefix 'x' does not exist"):
+            sample_trie.search("x")
+
+    def test_search_empty_trie_raises(self, empty_trie):
+        with pytest.raises(InvalidPrefixError, match="prefix 'a' does not exist"):
+            empty_trie.search("a")
+
+    def test_invalid_prefix_error_is_autocomplete_error(self):
+        from solocoder_py.autocomplete import AutocompleteError
+
+        assert issubclass(InvalidPrefixError, AutocompleteError)
 
 
 class TestTrieNode:

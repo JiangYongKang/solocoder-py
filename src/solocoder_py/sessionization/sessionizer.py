@@ -107,11 +107,14 @@ class Sessionizer:
     def check_timeouts(self) -> List[Session]:
         closed_sessions: List[Session] = []
 
+        subject_locks: List[tuple[str, threading.RLock]] = []
         with self._global_lock:
             subject_ids = list(self._active_session_by_subject.keys())
+            for subject_id in subject_ids:
+                lock = self._get_or_create_subject_lock(subject_id)
+                subject_locks.append((subject_id, lock))
 
-        for subject_id in subject_ids:
-            subject_lock = self._get_or_create_subject_lock(subject_id)
+        for subject_id, subject_lock in subject_locks:
             with subject_lock:
                 active_session = self._active_session_by_subject.get(subject_id)
                 if active_session is not None and active_session.is_active:
@@ -229,7 +232,7 @@ class Sessionizer:
                 next_session = sorted_sessions[i]
                 gap = (next_session.start_time - current.end_time).total_seconds()
 
-                if gap <= self.merge_threshold:
+                if gap < self.merge_threshold:
                     current = merge_sessions(current, next_session)
                 else:
                     merged.append(current)

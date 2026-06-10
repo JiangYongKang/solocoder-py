@@ -39,3 +39,25 @@ class AtomicCommitInterruptedError(ExactlyOnceError):
             f"Atomic commit was interrupted before completing. "
             f"offset={offset}, pending message_ids={message_ids}"
         )
+
+
+class OffsetSkipWarning(ExactlyOnceError):
+    def __init__(self, expected_offset: int, actual_offset: int) -> None:
+        self.expected_offset = expected_offset
+        self.actual_offset = actual_offset
+        super().__init__(
+            f"Offset skip detected: expected next offset {expected_offset}, "
+            f"but processed offset {actual_offset}. "
+            f"Messages in between are skipped without processing."
+        )
+
+
+class CheckpointMonotonicityError(ExactlyOnceError):
+    def __init__(self, new_offset: int, existing_offset: int) -> None:
+        self.new_offset = new_offset
+        self.existing_offset = existing_offset
+        super().__init__(
+            f"Checkpoint monotonicity violated: attempted to commit "
+            f"offset {new_offset} but latest committed offset is "
+            f"{existing_offset}"
+        )

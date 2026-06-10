@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
-from .exceptions import EmptyWordError, InvalidWeightError
+from .exceptions import EmptyWordError, InvalidPrefixError, InvalidWeightError
 from .models import Candidate, TrieNode
 
 
@@ -87,7 +87,7 @@ class TrieAutocomplete:
             node = self._root
             for char in prefix:
                 if char not in node.children:
-                    return []
+                    raise InvalidPrefixError(f"prefix '{prefix}' does not exist")
                 node = node.children[char]
 
             return node.get_top_candidates(top_n)
@@ -97,7 +97,7 @@ class TrieAutocomplete:
             Candidate(word=word, weight=weight)
             for word, weight in self._word_weights.items()
         ]
-        all_candidates.sort(key=lambda c: (-c.weight, c.word))
+        all_candidates.sort()
         if top_n is not None and top_n > 0:
             return all_candidates[:top_n]
         return all_candidates

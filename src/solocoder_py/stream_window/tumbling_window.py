@@ -8,6 +8,7 @@ from .models import (
     AggregationType,
     Event,
     InvalidWindowConfigError,
+    LateEventDroppedError,
     Window,
     WindowState,
 )
@@ -129,7 +130,12 @@ class TumblingWindowAggregator:
 
         if self._is_event_too_late(event.timestamp, window_end):
             self._dropped_late_count += 1
-            return self._fire_and_cleanup_windows()
+            self._fire_and_cleanup_windows()
+            raise LateEventDroppedError(
+                event_timestamp=event.timestamp,
+                window_end=window_end,
+                allowed_lateness=self._allowed_lateness,
+            )
 
         was_fired = False
         if window_start in self._windows:

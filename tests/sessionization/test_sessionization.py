@@ -313,7 +313,7 @@ class TestSessionMerge:
     def test_merge_with_threshold_greater_than_gap_merges(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=300.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 5, 0)
+        t2 = datetime(2025, 1, 1, 12, 4, 59)
         e1 = SessionEvent(subject_id="user1", event_time=t1)
         e2 = SessionEvent(subject_id="user1", event_time=t2)
 
@@ -324,7 +324,7 @@ class TestSessionMerge:
         assert len(merged) == 1
         assert merged[0].event_count == 2
 
-    def test_merge_exactly_equal_to_threshold_merges(self):
+    def test_merge_exactly_equal_to_threshold_not_merges(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=240.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
         t2 = datetime(2025, 1, 1, 12, 1, 0)
@@ -341,8 +341,48 @@ class TestSessionMerge:
         assert len(all_sessions) == 2
 
         merged = sz.merge_adjacent_sessions("user1")
+        assert len(merged) == 2
+        assert merged[0].event_count == 2
+        assert merged[1].event_count == 1
+
+    def test_merge_less_than_threshold_merges(self):
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=240.0)
+        t1 = datetime(2025, 1, 1, 12, 0, 0)
+        t2 = datetime(2025, 1, 1, 12, 1, 0)
+        t3 = datetime(2025, 1, 1, 12, 4, 59)
+        e1 = SessionEvent(subject_id="user1", event_time=t1)
+        e2 = SessionEvent(subject_id="user1", event_time=t2)
+        e3 = SessionEvent(subject_id="user1", event_time=t3)
+
+        sz.add_event(e1)
+        sz.add_event(e2)
+        sz.add_event(e3)
+
+        all_sessions = sz.get_all_sessions("user1")
+        assert len(all_sessions) == 2
+
+        merged = sz.merge_adjacent_sessions("user1")
         assert len(merged) == 1
         assert merged[0].event_count == 3
+
+    def test_merge_greater_than_threshold_not_merges(self):
+        sz = make_sessionizer(idle_threshold=60.0, merge_threshold=240.0)
+        t1 = datetime(2025, 1, 1, 12, 0, 0)
+        t2 = datetime(2025, 1, 1, 12, 1, 0)
+        t3 = datetime(2025, 1, 1, 12, 5, 1)
+        e1 = SessionEvent(subject_id="user1", event_time=t1)
+        e2 = SessionEvent(subject_id="user1", event_time=t2)
+        e3 = SessionEvent(subject_id="user1", event_time=t3)
+
+        sz.add_event(e1)
+        sz.add_event(e2)
+        sz.add_event(e3)
+
+        all_sessions = sz.get_all_sessions("user1")
+        assert len(all_sessions) == 2
+
+        merged = sz.merge_adjacent_sessions("user1")
+        assert len(merged) == 2
 
     def test_triple_merge_chain(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=120.0)
@@ -366,7 +406,7 @@ class TestSessionMerge:
     def test_merge_active_session_also_closes(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=120.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 2, 0)
+        t2 = datetime(2025, 1, 1, 12, 1, 59)
         e1 = SessionEvent(subject_id="user1", event_time=t1)
         e2 = SessionEvent(subject_id="user1", event_time=t2)
 
@@ -553,7 +593,7 @@ class TestSubjectIsolation:
     def test_merge_does_not_affect_other_subjects(self):
         sz = make_sessionizer(idle_threshold=60.0, merge_threshold=300.0)
         t1 = datetime(2025, 1, 1, 12, 0, 0)
-        t2 = datetime(2025, 1, 1, 12, 5, 0)
+        t2 = datetime(2025, 1, 1, 12, 4, 59)
 
         for uid in ["user1", "user2"]:
             sz.add_event(SessionEvent(subject_id=uid, event_time=t1))
@@ -935,6 +975,136 @@ class TestConcurrency:
         threads = [
             threading.Thread(target=adder),
             threading.Thread(target=clearer),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+
+
+class TestCheckTimeoutsConcurrency:
+    def test_check_timeouts_with_concurrent_add_event_no_exception(self):
+        sz = make_sessionizer(timeout=10.0)
+        errors = []
+        base_time = datetime(2025, 1, 1, 12, 0, 0)
+
+        for i in range(5):
+            event = SessionEvent(
+                subject_id=f"user{i}",
+                event_time=base_time,
+            )
+            sz.add_event(event)
+
+        def add_events():
+            for i in range(50):
+                try:
+                    subject_idx = i % 5
+                    event = SessionEvent(
+                        subject_id=f"user{subject_idx}",
+                        event_time=base_time,
+                    )
+                    sz.add_event(event)
+                except Exception as e:
+                    errors.append(e)
+
+        def check_timeouts_loop():
+            for _ in range(50):
+                try:
+                    sz.check_timeouts()
+                except Exception as e:
+                    errors.append(e)
+
+        threads = [
+            threading.Thread(target=add_events),
+            threading.Thread(target=check_timeouts_loop),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+
+    def test_check_timeouts_with_concurrent_clear_all_no_exception(self):
+        sz = make_sessionizer(timeout=10.0)
+        errors = []
+        base_time = datetime(2025, 1, 1, 12, 0, 0)
+
+        for i in range(5):
+            event = SessionEvent(
+                subject_id=f"user{i}",
+                event_time=base_time,
+            )
+            sz.add_event(event)
+
+        def check_timeouts_loop():
+            for _ in range(30):
+                try:
+                    sz.check_timeouts()
+                except Exception as e:
+                    errors.append(e)
+
+        def clear_all_loop():
+            for i in range(30):
+                try:
+                    sz.clear_all()
+                    for j in range(3):
+                        event = SessionEvent(
+                            subject_id=f"user{j}",
+                            event_time=base_time,
+                        )
+                        sz.add_event(event)
+                except Exception as e:
+                    errors.append(e)
+
+        threads = [
+            threading.Thread(target=check_timeouts_loop),
+            threading.Thread(target=clear_all_loop),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+
+    def test_check_timeouts_with_concurrent_clear_subject_no_exception(self):
+        sz = make_sessionizer(timeout=10.0)
+        errors = []
+        base_time = datetime(2025, 1, 1, 12, 0, 0)
+
+        for i in range(5):
+            event = SessionEvent(
+                subject_id=f"user{i}",
+                event_time=base_time,
+            )
+            sz.add_event(event)
+
+        def check_timeouts_loop():
+            for _ in range(30):
+                try:
+                    sz.check_timeouts()
+                except Exception as e:
+                    errors.append(e)
+
+        def clear_subject_loop():
+            for i in range(30):
+                try:
+                    subject_idx = i % 5
+                    sz.clear_subject(f"user{subject_idx}")
+                    event = SessionEvent(
+                        subject_id=f"user{subject_idx}",
+                        event_time=base_time,
+                    )
+                    sz.add_event(event)
+                except Exception as e:
+                    errors.append(e)
+
+        threads = [
+            threading.Thread(target=check_timeouts_loop),
+            threading.Thread(target=clear_subject_loop),
         ]
         for t in threads:
             t.start()

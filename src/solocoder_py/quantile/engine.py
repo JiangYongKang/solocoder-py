@@ -63,8 +63,8 @@ class QuantileEstimator:
         if not math.isfinite(weight):
             raise InvalidValueError(f"Weight must be finite, got {weight}")
 
-        timestamp = self._clock.now()
         with self._lock:
+            timestamp = self._clock.now()
             self._digest.add(value=value, weight=weight, timestamp=timestamp)
             self._insert_count += 1
 
@@ -72,14 +72,18 @@ class QuantileEstimator:
         if weights is not None and len(values) != len(weights):
             raise InvalidValueError("values and weights must have the same length")
 
-        timestamp = self._clock.now()
+        validated: list[tuple[float, float]] = []
+        for i, v in enumerate(values):
+            if not math.isfinite(v):
+                raise InvalidValueError(f"Value must be finite, got {v} at index {i}")
+            w = weights[i] if weights is not None else 1.0
+            if not math.isfinite(w) or w <= 0:
+                raise InvalidValueError(f"Weight must be finite and positive, got {w} at index {i}")
+            validated.append((v, w))
+
         with self._lock:
-            for i, v in enumerate(values):
-                if not math.isfinite(v):
-                    raise InvalidValueError(f"Value must be finite, got {v} at index {i}")
-                w = weights[i] if weights is not None else 1.0
-                if w <= 0 or not math.isfinite(w):
-                    raise InvalidValueError(f"Weight must be finite and positive, got {w} at index {i}")
+            for v, w in validated:
+                timestamp = self._clock.now()
                 self._digest.add(value=v, weight=w, timestamp=timestamp)
                 self._insert_count += 1
 

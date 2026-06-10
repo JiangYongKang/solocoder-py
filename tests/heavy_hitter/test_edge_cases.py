@@ -11,6 +11,8 @@ class TestEdgeCaseKEqualsCapacity:
         top5 = detector.get_top_k(5)
         assert len(top5) == 5
         assert detector.size == 5
+        for i in range(5):
+            assert detector.estimate_count(f"item{i}") == i + 1
 
     def test_k_equals_capacity_with_eviction(self):
         detector = HeavyHitterDetector(capacity=3)
@@ -21,6 +23,7 @@ class TestEdgeCaseKEqualsCapacity:
         top3 = detector.get_top_k(3)
         assert len(top3) == 3
         assert top3[0].item == "D"
+        assert top3[0].count == 200
 
     def test_k_equals_capacity_all_same_frequency(self):
         detector = HeavyHitterDetector(capacity=3)
@@ -30,7 +33,7 @@ class TestEdgeCaseKEqualsCapacity:
         top3 = detector.get_top_k(3)
         assert len(top3) == 3
         for hh in top3:
-            assert hh.count >= 10
+            assert hh.count == 10
 
 
 class TestEdgeCaseAllSameFrequency:
@@ -45,7 +48,7 @@ class TestEdgeCaseAllSameFrequency:
         assert len(top5) == 5
         counts = [hh.count for hh in top5]
         for c in counts:
-            assert c >= 50
+            assert c == 50
 
     def test_all_same_frequency_exceeds_capacity(self):
         detector = HeavyHitterDetector(capacity=3)
@@ -57,7 +60,7 @@ class TestEdgeCaseAllSameFrequency:
         tracked_items = [hh.item for hh in detector.get_all_tracked()]
         assert all(item in items for item in tracked_items)
         for hh in detector.get_all_tracked():
-            assert hh.count >= 10
+            assert hh.count == 10
 
     def test_all_same_frequency_skewed_insertion_order(self):
         detector = HeavyHitterDetector(capacity=3)
@@ -84,7 +87,9 @@ class TestEdgeCaseDataExceedsCapacity:
         assert detector.total_items_processed == 7300
         top3 = detector.get_top_k(3)
         assert top3[0].item == "A"
-        assert top3[0].count >= 1000
+        assert top3[0].count == 1000
+        assert detector.upper_bound("A") >= 1000
+        assert detector.upper_bound("B") >= 800
 
     def test_high_eviction_rate(self):
         detector = HeavyHitterDetector(capacity=5)
@@ -94,6 +99,8 @@ class TestEdgeCaseDataExceedsCapacity:
         assert detector.size == 5
         assert detector.evicted_count >= 0
         assert detector.total_items_processed == num_unique
+        for hh in detector.get_all_tracked():
+            assert hh.count == 1
 
     def test_heavy_hitters_emerge_from_noise(self):
         detector = HeavyHitterDetector(capacity=20)
@@ -110,6 +117,13 @@ class TestEdgeCaseDataExceedsCapacity:
         assert "HOT1" in top_items
         assert "HOT2" in top_items
         assert "HOT3" in top_items
+        for hh in top5[:3]:
+            if hh.item == "HOT1":
+                assert hh.count == 10000
+            elif hh.item == "HOT2":
+                assert hh.count == 8000
+            elif hh.item == "HOT3":
+                assert hh.count == 5000
 
     def test_eviction_count_tracking(self):
         detector = HeavyHitterDetector(capacity=3)
@@ -119,8 +133,10 @@ class TestEdgeCaseDataExceedsCapacity:
         initial_evicted = detector.evicted_count
         detector.record("D", count=20)
         assert detector.evicted_count == initial_evicted + 1
+        assert detector.estimate_count("D") == 20
         detector.record("E", count=30)
         assert detector.evicted_count == initial_evicted + 2
+        assert detector.estimate_count("E") == 30
 
     def test_item_replaces_itself_no_eviction(self):
         detector = HeavyHitterDetector(capacity=3)
@@ -130,7 +146,7 @@ class TestEdgeCaseDataExceedsCapacity:
         evicted_before = detector.evicted_count
         detector.record("A", count=5)
         assert detector.evicted_count == evicted_before
-        assert detector.estimate_count("A") >= 10
+        assert detector.estimate_count("A") == 10
 
 
 class TestEdgeCaseBoundaryValues:
@@ -139,17 +155,19 @@ class TestEdgeCaseBoundaryValues:
         detector.record("A", count=10)
         assert detector.size == 1
         assert detector.contains("A")
+        assert detector.estimate_count("A") == 10
         detector.record("B", count=20)
         assert detector.size == 1
-        assert detector.estimate_count("B") >= 20
+        assert detector.estimate_count("B") == 20
         assert detector.evicted_count == 1
+        assert detector.upper_bound("A") >= 10
 
     def test_single_item_repeated(self):
         detector = HeavyHitterDetector(capacity=10)
         for _ in range(10000):
             detector.record("only_item")
         assert detector.size == 1
-        assert detector.estimate_count("only_item") >= 10000
+        assert detector.estimate_count("only_item") == 10000
         assert detector.evicted_count == 0
 
     def test_item_not_tracked_but_cms_has_data(self):
@@ -159,7 +177,8 @@ class TestEdgeCaseBoundaryValues:
         detector.record("C", count=100)
         detector.record("D", count=50)
         assert detector.contains("D") is False
-        assert detector.estimate_count("D") >= 50
+        assert detector.upper_bound("D") >= 50
+        assert detector.lower_bound("D") <= detector.upper_bound("D")
 
     def test_zero_evictions_when_within_capacity(self):
         detector = HeavyHitterDetector(capacity=100)
@@ -167,6 +186,8 @@ class TestEdgeCaseBoundaryValues:
             detector.record(f"item_{i}")
         assert detector.evicted_count == 0
         assert detector.size == 50
+        for i in range(50):
+            assert detector.estimate_count(f"item_{i}") == 1
 
 
 class TestEdgeCaseApproximationQuality:
@@ -179,7 +200,14 @@ class TestEdgeCaseApproximationQuality:
             detector.record(f"item_{i}", count=count)
         for item, true_count in true_counts.items():
             est = detector.estimate_count(item)
-            assert est >= true_count, f"{item}: estimate {est} < true {true_count}"
+            tracked = detector.contains(item)
+            upper = detector.upper_bound(item)
+            lower = detector.lower_bound(item)
+            assert upper >= true_count, f"{item}: upper_bound {upper} should be >= true {true_count} (CMS is overestimate)"
+            assert lower <= upper, f"{item}: lower {lower} <= upper {upper}"
+            if tracked:
+                assert est == true_count, f"{item}: tracked item should have exact count {true_count}, got {est}"
+                assert lower == true_count, f"{item}: tracked item lower_bound should be exact"
 
     def test_top_k_order_maintained(self):
         detector = HeavyHitterDetector(capacity=10)
@@ -188,6 +216,8 @@ class TestEdgeCaseApproximationQuality:
         top10 = detector.get_top_k(10)
         for i in range(9):
             assert top10[i].count >= top10[i + 1].count
+        assert top10[0].count == 1000
+        assert top10[9].count == 100
 
     def test_evicted_item_still_queryable(self):
         detector = HeavyHitterDetector(capacity=2)
@@ -196,10 +226,11 @@ class TestEdgeCaseApproximationQuality:
         detector.record("Z", count=30)
         assert detector.contains("X") is False
         est_x = detector.estimate_count("X")
-        assert est_x >= 10
+        assert detector.upper_bound("X") >= 10, "CMS upper_bound should still be >= true count"
         lower = detector.lower_bound("X")
         upper = detector.upper_bound("X")
-        assert lower <= est_x <= upper
+        assert lower <= upper
+        assert est_x == lower, "estimate_count for untracked is CMS lower_bound"
 
 
 class TestEdgeCaseEmptyState:
@@ -228,8 +259,9 @@ class TestEdgeCaseLargeCountValues:
     def test_large_single_count(self):
         detector = HeavyHitterDetector(capacity=5)
         detector.record("big", count=1000000)
-        assert detector.estimate_count("big") >= 1000000
+        assert detector.estimate_count("big") == 1000000
         assert detector.total_items_processed == 1000000
+        assert detector.upper_bound("big") >= 1000000
 
     def test_many_small_counts(self):
         detector = HeavyHitterDetector(capacity=5)
@@ -239,4 +271,4 @@ class TestEdgeCaseLargeCountValues:
             total += 1
         assert detector.total_items_processed == total
         top1 = detector.get_top_k(1)
-        assert top1[0].count >= 10000
+        assert top1[0].count == 10000

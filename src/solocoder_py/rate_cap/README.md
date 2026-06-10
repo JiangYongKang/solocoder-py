@@ -26,7 +26,7 @@
 | `RateCapError` | 频次封顶域模块异常基类 |
 | `InvalidWindowConfigError` | 窗口配置参数非法（空窗口名、非正数限额、粒度越界、重复窗口名、引用未知窗口等） |
 | `OperationRejectedError` | 操作被拒绝，包含 `subject_id`、`dimension`（global/subject）、`window_name`、`used`、`limit` 字段，用于定位具体哪个维度的哪个窗口超限 |
-| `SubjectNotFoundError` | 指定主体不存在（预留异常） |
+| `SubjectNotFoundError` | 当 `query_subject_usage(strict=True)` 时，主体既无专属配置也无默认配置且从未有过操作记录，则抛出此异常；`strict=False`（默认）时未知主体返回默认配额而非抛错 |
 
 异常层次结构：
 ```
@@ -63,18 +63,26 @@ RateCapError
 
 | 维度 | 精确模式（granularity=0） | 分桶模式（granularity>0） |
 |------|--------------------------|--------------------------|
-| 实现方式 | `deque[float]` 存储每次操作的时间戳 | `Dict[bucket_key, count]` + `Deque[bucket_key]` 存储各时间桶的计数 |
+| 实现方式 | `deque[float]` + `deque[Optional[str]]` 并行存储每次操作的时间戳和标签 | `Dict[bucket_key, int]`（桶总数）+ `Dict[bucket_key, Dict[Optional[str], int]]`（桶内按标签细分） |
 | 精度 | 100% 精确，按时间戳精确驱逐 | 近似精确，误差 ≤ 1 个粒度 |
 | 内存占用 | O(N)，N 为窗口内操作次数 | O(W/G)，W 为窗口长度，G 为粒度 |
 | 适用场景 | 中小规模限频、对精度要求极高 | 大规模高 QPS 限频、内存敏感场景 |
-| 驱逐策略 | 每次操作前从 deque 左端弹出 `<= (now - window)` 的时间戳 | 每次操作前从 buckets 中删除 key `<= bucket_key(now - window)` 的桶 |
+| 驱逐策略 | 每次操作前从 deque 左端弹出 `<= (now - window)` 的时间戳和标签 | 每次操作前从 buckets 中删除 key `<= bucket_key(now - window)` 的桶 |
+
+#### 标签追踪机制（Tag-based Tracking）
+全局计数器在 `try_acquire` 时可附带 `tag` 参数（通常为 `subject_id`），每次操作的条目标记所属主体。标签仅用于 `reset_subject` 时按标签精确移除，不影响精确计数。两种模式均支持标签：
+- **精确模式**：`_timestamps` 与 `_tags` 两个并行 deque 同位元素一一对应，移除时遍历 `_tags[i] == tag` 匹配则跳过
+- **分桶模式**：每个桶同时维护总计数 `_bucket_totals[bucket]` 与标签细分之 `_bucket_by_tag[bucket][tag]`，移除时同步扣减两个 dict
 
 `SlidingWindowCounter` 关键方法：
-- `try_acquire(amount=1) -> (bool, int, int)`：尝试获取 amount 个配额，返回 (是否成功, 操作后计数, 限额)
+- `try_acquire(amount=1, tag=None) -> (bool, int, int)`：尝试获取 amount 个配额，tag 可附带标签用于后续标签化移除；返回 (是否成功, 操作后计数, 限额)
 - `can_acquire(amount=1) -> bool`：非消耗式探测是否可获取
 - `current_count() -> int`：返回窗口内当前计数（会先驱逐过期数据）
 - `remaining() -> int`：返回剩余配额 = `max(0, limit - current_count)`
-- `_rollback_last(amount=1)`：回滚最后 amount 次计数，供 manager 在跨维度联动失败时全局回滚
+- `count_by_tag(tag) -> int`：按标签查询该标签在窗口内的当前计数
+- `clear()`：**O(1) 清空所有计数，替代 O(n) 逐条回滚，用于 reset_global / reset_subject 主体侧
+- `remove_by_tag(tag, amount=None) -> int`：按标签精确移除指定数额（amount=None 表示移除全部），返回实际移除数量，用于 reset_subject 全局侧
+- `_rollback_last(amount=1)`：回滚最后 amount 次计数，供 manager 在跨维度联动失败时全局回滚最近一次 try_acquire 刚添加的条目（此时不需要按标签区分，因为都是当前主体自己的申请）
 
 ### manager.py
 
@@ -83,15 +91,15 @@ RateCapError
 | `RateCapManager` | 频次封顶域管理器，线程安全，通过注入 `Clock` 支持可测试的时间驱动；维护全局计数器集合、主体计数器集合、读写锁；提供操作申请、超限判断、用量查询、重置、动态添加主体配额等核心操作 |
 
 `RateCapManager` 关键方法：
-- `check_operation(subject_id, amount=1)`：核心入口，**先全局后主体**依次申请，任一维度失败则完整回滚已成功维度并抛 `OperationRejectedError`
+- `check_operation(subject_id, amount=1)`：核心入口，**先全局后主体**依次申请，全局申请时附带 `tag=subject_id` 以便后续按主体精确回滚；任一维度失败则完整回滚已成功维度并抛 `OperationRejectedError`
 - `is_allowed(subject_id, amount=1) -> bool`：非消耗式预检
-- `query_subject_usage(subject_id) -> Dict[str, WindowUsage]`：查询某主体在各窗口的用量；未激活主体返回 limit=默认配额、used=0、remaining=默认配额
+- `query_subject_usage(subject_id, strict=False) -> Dict[str, WindowUsage]`：查询某主体在各窗口的用量；未激活主体返回 limit=默认配额、used=0、remaining=默认配额；`strict=True` 时若主体既无专属配置也无默认配置且从未操作，则抛 `SubjectNotFoundError`
 - `query_global_usage() -> Dict[str, WindowUsage]`：查询全局各窗口用量
-- `query_usage(subject_id=None) -> Dict[str, Dict[str, WindowUsage]]`：统一返回全局用量 + 可选主体用量
+- `query_usage(subject_id=None, strict=False) -> Dict[str, Dict[str, WindowUsage]]`：统一返回全局用量 + 可选主体用量
 - `add_subject_quota(subject_id, per_window_quotas)`：动态添加主体专属限额；已存在的主体不覆盖
-- `reset_subject(subject_id)`：重置某主体所有窗口计数，同步扣减全局对应计数
-- `reset_global()`：重置全局所有窗口计数
-- `reset_all()`：重置全局 + 所有主体计数
+- `reset_subject(subject_id)`：重置某主体所有窗口计数（主体侧计数器调用 `clear()` O(1) 清空 + 全局计数器调用 `remove_by_tag(subject_id)` 按标签精确扣减，整个流程在单次 RLock 加锁范围内完成
+- `reset_global()`：重置全局所有窗口计数，各窗口调用 `clear()` O(1) 清空而非 O(n) 逐条回滚
+- `reset_all()`：先 `reset_global()`，再遍历所有主体计数器调用 `clear()`（避免嵌套 reset_subject 产生的额外查询开销）
 
 ## 滑动窗口 vs 固定窗口
 
@@ -176,11 +184,80 @@ t=61:            [==============================] (窗口: 1~61, t=0的请求已
 
 ## 重置语义
 
-| 方法 | 行为 | 全局一致性 |
-|------|------|-----------|
-| `reset_subject(sid)` | 将该主体各窗口计数归零，**同步从对应全局窗口扣减相同数量** | ✅ 保证 `sum(各主体used) ≤ global_used` 始终成立 |
-| `reset_global()` | 将全局各窗口计数归零（不影响各主体计数） | ⚠️ 调用后各主体已用计数可能 > 全局已用计数，因此 `reset_all()` 是更安全的选择 |
-| `reset_all()` | 先 `reset_global()`，再遍历所有主体调用 `reset_subject()` | ✅ 所有维度计数归零，完全一致 |
+| 方法 | 行为 | 全局一致性 | 锁开销 |
+|------|------|-----------|--------|
+| `reset_subject(sid)` | 将该主体各窗口计数归零，**同步从对应全局窗口按标签扣减相同数量**（使用 `remove_by_tag` 而非尾部盲删） | ✅ 保证重置 A 绝不影响 B 的计数，`global_used -= used_A` 精确成立 | O(1) 次加锁（全程在 manager 的 RLock 内完成） |
+| `reset_global()` | 将全局各窗口计数归零（调用每个窗口的 `clear()`） | ⚠️ 调用后各主体已用计数可能 > 全局已用计数，因此 `reset_all()` 是更安全的选择 | O(W)，W=窗口数，每窗口 1 次加锁 |
+| `reset_all()` | 先 `reset_global()`，再遍历所有主体计数器调用 `clear()`（避免嵌套 `reset_subject` 产生的额外按标签扣减开销） | ✅ 所有维度计数归零，完全一致 | O(1 + S) 次加锁，S=主体数（每主体 clear 内部加锁） |
+
+## 重置操作并发语义与回滚正确性保证
+
+本模块从机制层面确保「重置主体 A 绝不会影响主体 B 的计数」，以及所有回滚操作的正确性。以下是设计要点和论证：
+
+### 1. `_rollback_last` 与 `remove_by_tag` 的职责分离
+
+| 方法 | 设计目的 | 使用场景 | 移除策略 |
+|------|---------|---------|---------|
+| `_rollback_last(amount)` | **撤销"最近一次 `try_acquire` 刚添加的条目** | 跨维度联动失败时回滚（全局→主体失败，或窗口 N 失败时回滚窗口 1~N-1） | 从 deque/bucket **尾部盲删**，因为刚添加的条目必然位于尾部，不需要按标签区分 |
+| `remove_by_tag(tag, amount)` | **按主体标签精确移除任意位置的条目** | `reset_subject` 时从全局计数器扣减该主体的历史用量 | **遍历匹配标签**，不管条目处于窗口内哪个位置/哪个桶，仅扣减标签匹配的部分 |
+
+⚠️ **关键设计约束**：`_rollback_last` **绝不能用于 `reset_subject`**。在分桶模式下，如果主体 A 的操作时间早于主体 B，A 的条目位于更早的桶（deque 前端），此时调用 `_rollback_last(n)` 会从尾部删除 B 的最新条目而不是 A 的历史条目，导致 B 的计数被错误地扣减。本模块使用 `remove_by_tag` 彻底解决了此问题。
+
+### 2. 标签追踪的正确性保证
+
+全局计数器在 `check_operation` 的全局申请阶段调用：
+```python
+g_counter.try_acquire(amount, tag=subject_id)
+```
+即每次全局计数都标记了「这次操作属于谁」。当调用 `reset_subject("A")` 时：
+1. **主体侧**：`subject_counters["A"][window].clear()` —— O(1) 清空，直接释放
+2. **全局侧**：`g_counter.remove_by_tag("A", amount=used_A)` —— 遍历所有桶/时间戳，**仅对 `tag=="A"` 的条目扣减**，B 的条目（`tag=="B"`）完全不受影响
+
+两种模式下的标签移除细节：
+- **精确模式**：重建 deque，`_tags[i] == "A"` 的位置不复制到新 deque，其余保留。实现上保证 `len(new_timestamps) == len(new_tags)`，并行 deque 永远同步。
+- **分桶模式**：对每个活跃桶：
+  1. 读取 `_bucket_by_tag[bucket]["A"]`，得到该桶中 A 的贡献
+  2. 从 `_bucket_by_tag[bucket]["A"]` 扣减目标数额
+  3. **同步**从 `_bucket_totals[bucket]` 扣减相同数额
+  4. 若某标签扣减后为 0，则从 `_bucket_by_tag[bucket]` 中删除该标签 key
+  5. 若某桶总计数扣减后为 0，则整体从两个 dict 中删除该桶
+  整个过程确保 `sum(_bucket_by_tag[bucket].values()) == _bucket_totals[bucket]` 恒成立。
+
+### 3. 并发隔离：RLock 的全局保护
+
+`RateCapManager` 的所有公共方法（`check_operation` / `reset_subject` / `query_subject_usage` 等）都在同一把 `threading.RLock` 内执行。这保证了：
+
+- **原子重置**：`reset_subject` 的「读取 A 的 used → 主体 clear → 全局 remove_by_tag」三步构成一个原子事务，中间不会被其他线程的 `check_operation(B)` 打断。因此全局侧扣减的数额恰好是主体侧读取的数额，不会出现并发下「读了 used=30，期间又有线程给 A 加了 5，实际扣 30 但 A 实际贡献了 35」的不一致。
+- **无死锁风险**：Counter 内部的 Lock 仅被 Manager 持有外部 RLock 的线程调用，锁顺序恒为 `Manager.RLock → Counter.Lock`，不存在循环等待。且 Manager 使用的是 `RLock` 而非普通 `Lock`，允许同一线程在 `check_operation` → 回滚路径中重入。
+
+### 4. O(1) 锁开销优化
+
+原始实现中 `reset_subject` 和 `reset_global` 采用「循环调用 `_rollback_last(1)`」的方式：
+```python
+# ❌ 旧实现：O(n) 次加锁
+for _ in range(used):
+    counter._rollback_last(1)  # 每次 _rollback_last 都 acquire+release counter 的 Lock
+```
+重构后：
+```python
+# ✅ 新实现：每计数器 1 次加锁
+counter.clear()                          # clear() 内部 acquire 一次，直接丢弃所有数据结构
+g_counter.remove_by_tag(subject_id, used)  # remove_by_tag 内部 acquire 一次，遍历扣减
+```
+因此 `reset_subject` 的锁开销从「2×W×used_A 次加/解锁」降为「2×W 次加/解锁」，`reset_global` 从「W×global_used 次」降为「W 次」。在高限额（如窗口 1min=10000 次）的场景下，性能提升显著。
+
+### 5. 正确性验证的测试覆盖
+
+`tests/rate_cap/` 下的以下测试用例专门验证本章描述的机制：
+
+| 测试类 | 测试用例 | 验证内容 |
+|--------|---------|---------|
+| `TestManagerResetIsolation` | `test_granular_reset_subject_a_does_not_affect_b` | 分桶模式 A→B→reset(A)，B 的计数不变 |
+| `TestManagerResetIsolation` | `test_precise_reset_subject_a_does_not_affect_b` | 精确模式 A→B→reset(A)，B 的计数不变 |
+| `TestManagerResetIsolation` | `test_granular_multiple_buckets_reset_isolation` | 分桶跨桶场景 A→时间推进→B→再推进→reset(A)，B 不受影响 |
+| `TestSlidingWindowTagTracking` | 全部 9 个用例 | `count_by_tag` / `remove_by_tag` 在两种模式下的单元正确性 |
+| `TestSlidingWindowClear` | 全部 3 个用例 | `clear()` 的幂等性、清空后可继续使用 |
+| `TestManagerSubjectNotFound` | 全部 6 个用例 | `strict=True` 查未知主体抛异常、已知主体正常、strict=False 不抛错 |
 
 ## 使用示例
 

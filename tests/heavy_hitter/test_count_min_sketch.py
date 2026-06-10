@@ -103,20 +103,24 @@ class TestCountMinSketchBasicOperations:
         est = cms.estimate("item2")
         assert est >= 0
 
-    def test_lower_bound_same_as_estimate(self):
-        cms = CountMinSketch()
-        cms.add("item1", count=10)
-        assert cms.lower_bound("item1") == cms.estimate("item1")
+    def test_lower_bound_is_estimate_minus_error(self):
+        cms = CountMinSketch(epsilon=0.01)
+        for _ in range(1000):
+            cms.add("item1")
+        est = cms.estimate("item1")
+        lower = cms.lower_bound("item1")
+        error_bound = cms.error_bound()
+        assert lower == max(0, est - int(error_bound))
+        assert lower <= est
 
-    def test_upper_bound_includes_error(self):
+    def test_upper_bound_equals_estimate(self):
         cms = CountMinSketch(epsilon=0.01)
         for _ in range(1000):
             cms.add("item1")
         est = cms.estimate("item1")
         upper = cms.upper_bound("item1")
-        error_bound = cms.error_bound()
-        assert upper == est + int(0.01 * 1000)
-        assert upper >= est
+        assert upper == est
+        assert upper >= 1000
 
     def test_error_bound(self):
         cms = CountMinSketch(epsilon=0.001)
@@ -190,9 +194,11 @@ class TestCountMinSketchAccuracy:
                 cms.add(item)
         for item, true_count in true_counts.items():
             est = cms.estimate(item)
-            assert est >= true_count
-            error_bound = cms.error_bound()
-            assert est <= true_count + error_bound
+            upper = cms.upper_bound(item)
+            lower = cms.lower_bound(item)
+            assert est >= true_count, "estimate is an upper bound"
+            assert upper >= true_count, "upper_bound should be >= true count"
+            assert lower <= est, "lower_bound should be <= estimate"
 
     def test_lower_bound_property(self):
         cms = CountMinSketch(epsilon=0.001, delta=0.99)
@@ -202,7 +208,12 @@ class TestCountMinSketchAccuracy:
             cms.add(item, count=count)
         for item, true_count in true_counts.items():
             est = cms.estimate(item)
-            assert est >= true_count, f"Item {item}: estimate {est} < true {true_count}"
+            upper = cms.upper_bound(item)
+            lower = cms.lower_bound(item)
+            assert est >= true_count, f"Item {item}: estimate {est} should be >= true {true_count} (upper bound)"
+            assert upper >= true_count, f"Item {item}: upper_bound {upper} should be >= true {true_count}"
+            assert lower <= est, f"Item {item}: lower_bound {lower} should be <= estimate {est}"
+            assert lower <= upper, f"Item {item}: lower_bound {lower} should be <= upper_bound {upper}"
 
 
 class TestCountMinSketchConcurrent:

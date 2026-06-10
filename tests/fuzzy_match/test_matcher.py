@@ -362,3 +362,208 @@ class TestBoundedLevenshteinInternal:
         from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
 
         assert levenshtein_distance_bounded("a", "abcde", threshold=2) == 3
+
+
+class TestBoundedRowMinEarlyTermination:
+    def test_row_min_early_termination_completely_different_equal_length(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "abcdefghij"
+        s2 = "klmnopqrst"
+        full = levenshtein_distance(s1, s2)
+        assert full == 10
+        bounded = levenshtein_distance_bounded(s1, s2, threshold=3)
+        assert bounded == 4
+
+    def test_row_min_early_termination_long_vs_short(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "aaaaaaaaaa"
+        s2 = "bbbbbb"
+        full = levenshtein_distance(s1, s2)
+        assert full == 10
+        bounded = levenshtein_distance_bounded(s1, s2, threshold=2)
+        assert bounded == 3
+
+    def test_row_min_early_termination_short_vs_long(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        bounded = levenshtein_distance_bounded("abc", "xyzabcdefghij", threshold=2)
+        assert bounded == 3
+
+    def test_row_min_early_termination_at_row_one(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        bounded = levenshtein_distance_bounded("zzzzz", "aaaaa", threshold=0)
+        assert bounded == 1
+
+    def test_row_min_early_termination_mid_computation(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "aabbb"
+        s2 = "bbbaa"
+        full = levenshtein_distance(s1, s2)
+        assert full == 4
+        bounded = levenshtein_distance_bounded(s1, s2, threshold=2)
+        assert bounded == 3
+
+    def test_row_min_early_termination_various_thresholds(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "abcdef"
+        s2 = "uvwxyz"
+        full = levenshtein_distance(s1, s2)
+        assert full == 6
+        for t in range(6):
+            bounded = levenshtein_distance_bounded(s1, s2, threshold=t)
+            if full <= t:
+                assert bounded == full
+            else:
+                assert bounded == t + 1
+
+    def test_row_min_early_termination_with_partial_overlap(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "aaabbb"
+        s2 = "bbbccc"
+        full = levenshtein_distance(s1, s2)
+        bounded_tight = levenshtein_distance_bounded(s1, s2, threshold=full - 1)
+        assert bounded_tight == full
+        bounded_loose = levenshtein_distance_bounded(s1, s2, threshold=full)
+        assert bounded_loose == full
+
+    def test_row_min_termination_long_strings_tight_threshold(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "a" * 50
+        s2 = "b" * 50
+        bounded = levenshtein_distance_bounded(s1, s2, threshold=1)
+        assert bounded == 2
+
+
+class TestBoundedWindowBoundary:
+    def test_window_left_boundary_active(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "abcdefghij"
+        s2 = "abcx"
+        full = levenshtein_distance(s1, s2)
+        assert full == 7
+        bounded = levenshtein_distance_bounded(s1, s2, threshold=1)
+        assert bounded == 2
+
+    def test_window_right_boundary_active(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "abcx"
+        s2 = "abcdefghij"
+        full = levenshtein_distance(s1, s2)
+        assert full == 7
+        bounded = levenshtein_distance_bounded(s1, s2, threshold=1)
+        assert bounded == 2
+
+    def test_window_both_boundaries_active(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "abcdefghij"
+        s2 = "efghijklmn"
+        bounded = levenshtein_distance_bounded(s1, s2, threshold=2)
+        full = levenshtein_distance(s1, s2)
+        if full <= 2:
+            assert bounded == full
+        else:
+            assert bounded == 3
+
+    def test_window_boundary_with_threshold_one(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "abcde"
+        s2 = "xabcde"
+        full = levenshtein_distance(s1, s2)
+        assert full == 1
+        bounded = levenshtein_distance_bounded(s1, s2, threshold=1)
+        assert bounded == 1
+
+    def test_window_boundary_consistency_with_unbounded(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        pairs = [
+            ("abcdef", "abcxef", 1),
+            ("abcdef", "abqdef", 1),
+            ("abcdef", "abwdef", 2),
+            ("xabc", "abc", 1),
+            ("abcx", "abc", 1),
+            ("abcdef", "xbcdef", 1),
+            ("abcdef", "abcde", 1),
+        ]
+        for s1, s2, t in pairs:
+            full = levenshtein_distance(s1, s2)
+            bounded = levenshtein_distance_bounded(s1, s2, threshold=t)
+            if full <= t:
+                assert bounded == full, f"Failed for ({s1}, {s2}, t={t})"
+            else:
+                assert bounded == t + 1, f"Failed for ({s1}, {s2}, t={t})"
+
+    def test_window_truncation_with_unequal_lengths(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "abcdefgh"
+        s2 = "abc"
+        full = levenshtein_distance(s1, s2)
+        for t in range(full + 2):
+            bounded = levenshtein_distance_bounded(s1, s2, threshold=t)
+            if full <= t:
+                assert bounded == full, f"Failed for t={t}"
+            else:
+                assert bounded == t + 1, f"Failed for t={t}"
+
+    def test_window_truncation_swapped_unequal_lengths(self):
+        from solocoder_py.fuzzy_match.matcher import levenshtein_distance_bounded
+
+        s1 = "abc"
+        s2 = "abcdefgh"
+        full = levenshtein_distance(s1, s2)
+        for t in range(full + 2):
+            bounded = levenshtein_distance_bounded(s1, s2, threshold=t)
+            if full <= t:
+                assert bounded == full, f"Failed for t={t}"
+            else:
+                assert bounded == t + 1, f"Failed for t={t}"
+
+
+class TestLengthPruningPerformance:
+    def test_wide_length_distribution_does_not_degrade(self):
+        candidates = []
+        for length in range(1, 1001):
+            candidates.append("a" * length)
+        matcher = FuzzyMatcher(candidates)
+        start = time.time()
+        results = matcher.match("a" * 50, threshold=2)
+        elapsed = time.time() - start
+        assert elapsed < 1.0
+        for r in results:
+            assert 48 <= len(r.candidate) <= 52
+
+    def test_sparse_length_keys_still_efficient(self):
+        candidates = []
+        for length in [1, 5, 10, 50, 100, 500, 1000, 5000, 10000]:
+            for offset in range(10):
+                candidates.append(chr(ord('a') + offset) * length)
+        matcher = FuzzyMatcher(candidates)
+        start = time.time()
+        results = matcher.match("a" * 50, threshold=5)
+        elapsed = time.time() - start
+        assert elapsed < 1.0
+        for r in results:
+            assert 45 <= len(r.candidate) <= 55
+
+    def test_many_length_categories_range_iteration(self):
+        candidates = []
+        for length in range(1, 2001):
+            candidates.append("z" * length)
+        matcher = FuzzyMatcher(candidates)
+        start = time.time()
+        for _ in range(100):
+            matcher.match("a" * 100, threshold=3)
+        elapsed = time.time() - start
+        assert elapsed < 2.0

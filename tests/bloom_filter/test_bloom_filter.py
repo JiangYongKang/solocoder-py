@@ -329,6 +329,38 @@ class TestBloomFilterUnionIntersection:
         assert "only_a_in_bf1" not in inter
         assert "only_b_in_bf2" not in inter
 
+    def test_union_count_non_overlapping_sets(self):
+        bf1 = BloomFilter(m=50000, k=7)
+        bf2 = BloomFilter(m=50000, k=7)
+        for i in range(50):
+            bf1.add(f"bf1_only_{i}")
+        for i in range(50):
+            bf2.add(f"bf2_only_{i}")
+        union = bf1 | bf2
+        assert union.count >= max(bf1.count, bf2.count)
+        assert union.count <= bf1.count + bf2.count
+        assert union.count == 100
+
+    def test_union_count_overlapping_sets(self):
+        bf1 = BloomFilter(m=50000, k=7)
+        bf2 = BloomFilter(m=50000, k=7)
+        bf1.add("common")
+        bf1.add("only1")
+        bf2.add("common")
+        bf2.add("only2")
+        union = bf1 | bf2
+        assert union.count >= max(bf1.count, bf2.count)
+        assert union.count <= bf1.count + bf2.count
+
+    def test_union_count_same_element(self):
+        bf1 = BloomFilter(m=50000, k=7)
+        bf2 = BloomFilter(m=50000, k=7)
+        bf1.add("same")
+        bf2.add("same")
+        union = bf1 | bf2
+        assert union.count == 2
+        assert "same" in union
+
     def test_union_incompatible_m(self):
         bf1 = BloomFilter(m=1000, k=5)
         bf2 = BloomFilter(m=2000, k=5)
@@ -438,6 +470,24 @@ class TestCountingBloomFilterRemove:
         cbf = CountingBloomFilter(m=1000, k=5)
         with pytest.raises(ValueError, match="Cannot remove element that was not added"):
             cbf.remove("never_added")
+
+    def test_remove_error_message_contains_index(self):
+        cbf = CountingBloomFilter(m=1000, k=5)
+        try:
+            cbf.remove("test_elem")
+        except ValueError as e:
+            msg = str(e)
+            assert "{idx}" not in msg
+            assert "index" in msg
+            indices = cbf._hash_indices("test_elem")
+            found = False
+            for idx in indices:
+                if str(idx) in msg:
+                    found = True
+                    break
+            assert found, f"None of the indices {indices} found in error message: {msg}"
+        else:
+            pytest.fail("Expected ValueError was not raised")
 
     def test_remove_partially_not_added_raises(self):
         cbf = CountingBloomFilter(m=1000, k=5)
@@ -573,6 +623,29 @@ class TestCountingBloomFilterUnionIntersection:
         cbf2.add("shared")
         inter = cbf1 & cbf2
         assert "shared" in inter
+
+    def test_union_count_non_overlapping_sets(self):
+        cbf1 = CountingBloomFilter(m=50000, k=7)
+        cbf2 = CountingBloomFilter(m=50000, k=7)
+        for i in range(30):
+            cbf1.add(f"cbf1_only_{i}")
+        for i in range(30):
+            cbf2.add(f"cbf2_only_{i}")
+        union = cbf1 | cbf2
+        assert union.count >= max(cbf1.count, cbf2.count)
+        assert union.count <= cbf1.count + cbf2.count
+        assert union.count == 60
+
+    def test_union_count_overlapping_sets(self):
+        cbf1 = CountingBloomFilter(m=50000, k=7)
+        cbf2 = CountingBloomFilter(m=50000, k=7)
+        cbf1.add("common_item")
+        cbf1.add("only_in_1")
+        cbf2.add("common_item")
+        cbf2.add("only_in_2")
+        union = cbf1 | cbf2
+        assert union.count >= max(cbf1.count, cbf2.count)
+        assert union.count <= cbf1.count + cbf2.count
 
     def test_union_incompatible(self):
         cbf1 = CountingBloomFilter(m=1000, k=5)
