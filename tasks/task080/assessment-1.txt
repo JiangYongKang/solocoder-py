@@ -1,0 +1,9 @@
+产物不满意：
+1. timeout_manager.py 中 TimeoutContext.add_callback 方法在传入 None 回调时抛出 InvalidDeadlineError 异常，提示词要求对"空回调注册"做异常处理，但期限异常与回调参数为空毫无语义关联。当调用者捕获 InvalidDeadlineError 时无法区分到底是"期限值无效"还是"回调参数为空"两种完全不同的错误场景，根因是异常类型选择草率，没有为回调参数无效定义或使用专门的异常类型，应改用 TypeError 或新增 CallbackInvalidError 来传递准确的错误语义。
+2. timeout_manager.py 中 create_child_context 方法第 162 行在 parent_id 不存在于 _contexts 中时抛出 ContextCancelledError，信息为 "not found"。一个从未创建过的上下文不可能"被取消"，"不存在"和"已取消"是两个完全不同概念。同理 cancel_context 第 213 行也在查找不存在上下文时抛出此异常，调用者无法根据异常类型区分错误原因。根因是复用语义不匹配的异常类覆盖"未找到"场景，应为"上下文不存在"单独定义 ContextNotFoundError 等专门异常。
+3. timeout_manager.py 中 create_child_context 方法对已过期父上下文（第 170 行）和已取消父上下文（第 166 行）使用了不同异常类型：已取消抛 ContextAlreadyCancelledError，而已过期抛 ContextCancelledError。两者都是"父上下文已达终态不可再创建子上下文"的同类约束，不应使用不同异常类型。根因是没有统一抽象两种终态对子上下文创建的语义影响，应在两种终态下抛出同样异常或定义 ContextAlreadyExpiredError 使语义一致。
+4. README.md 第 129 行声称 is_cancelled 和 is_expired 两种状态"可以共存"，但实际上 _mark_expired 方法第 97 行在 is_cancelled 为 True 时直接返回，cancel_context 第 216 行在 is_expired 为 True 时也直接返回。代码保证了两种状态严格互斥，并非 README 描述的"共存"。根因是 README 描述状态模型时未对照代码校验，误将"有优先级判断"理解为"状态可共存"，应修正为"两种状态互斥，先达到终态的优先，后续操作被静默忽略"。
+过程不满意：
+1. 模型在刚收到提示词后未经需求分析就直接用 todo_write 创建了 5 项子任务计划（session-cot 第 3-8 行），然后才开始查看 watchdog 模块等已有代码理解项目风格。这违反了"先分析需求文档和代码骨架、理清模块职责边界后再制定执行计划"的正确工作流程，导致计划的粒度可能与实际模块设计不匹配。虽然本次任务的计划划分没有出大问题，但这种"没分析就先规划"的习惯在更复杂的任务中容易造成后续反复调整架构。
+2. 模型在执行 pytest 时经历了 6 轮以上"找 Python 命令→失败→换命令→又失败"试错循环：先后尝试了 python -m pytest、where python、py --version、python3.11 --version、递归扫描 python.exe 等共 7 种方式。始终没有先查看 pyproject.toml 了解项目使用 poetry 管理依赖和虚拟环境。根因是缺乏对项目基础设施的前置分析，正确做法是先阅读 pyproject.toml 了解构建工具和测试运行方式，避免在环境配置上浪费大量步骤。
+3. 模型的初始测试代码中存在自相矛盾的测试用例：既写了 test_callback_triggered_on_cancellation（期望取消操作触发回调），又写了 test_callback_not_triggered_on_cancel_before_expiry（期望取消不触发回调），两条测试的断言期望完全相反。说明模型在编码前没有理清提示词"手动取消后不再触发到期回调"这条需求的语义就先动手编写测试，导致后续不得不删除错误的测试。正确做法是先梳理取消和回调的触发关系、确认正确的行为语义，再基于正确的语义编写测试断言，避免出现两条互相矛盾的测试同时存在。

@@ -1,0 +1,6 @@
+产物不满意：
+1. 在 evaluator.py 的 parse 方法中，对 `2 + 3)` 这样多余的右括号抛出的是 ParseError 而非 MismatchedParenthesisError。缺少右括号已用 MismatchedParenthesisError，多余右括号却用 ParseError，两种括号不匹配场景异常类型不一致。test_extra_closing_parenthesis 将此偏差固化到断言中。根因是 parse 末尾的 EOF 校验未区分多余 token 类型，遇 RPAREN 应抛 MismatchedParenthesisError 让调用方能统一捕获。
+2. 在 tokenizer.py 的 _tokenize 方法中，入口 `ch.isdigit() or ch == "."` 将句点无条件路由给 _read_number。当出现孤立的点号时，_read_number 抛出 TokenizeError("Invalid number format '.'")。但孤立句点属于非法字符，应抛 InvalidCharacterError（它继承 TokenizeError 专为非法字符设计）。test_lone_dot 期望 TokenizeError 已将偏差固化。根因是没有在读点号后判断紧跟字符是否为数字来区分合法小数和非法字符。
+过程不满意：
+1. 模型在会话开始后的第一个工具调用就是 todo_write 创建 5 项子任务，之后才用 view_folder 和 file_search 查看项目已有模块。这违反了应先分析需求文档和代码骨架再制定计划的准则。在未了解项目包结构约定的情况下制定计划，导致文件组织返工——先创建 parser.py 后又删除并把 Parser 合并到 evaluator.py。正确做法是先阅读 pyproject.toml 和已有模块了解项目约定，再决定文件拆分。
+2. 模型编写测试时，test_mixed_operations_complex 期望值误写为 12.0（正确 11.0），test_deeply_nested_expression 误写为 49.5（正确 54.0），运行后两个失败。模型在思考中说"我的测试预期值有误"便直接修改值重跑，没有双向验证是代码逻辑问题还是预期值有误。`(1+2)*3-4/2+(5-1)` 这类简单表达式完全可在写断言前手工验算。正确做法是先核实结果，失败时不单方面假设预期有误。
