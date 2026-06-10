@@ -1,6 +1,6 @@
 产物不满意：
-1. test_matcher.py 中 TestAdaptiveLengthPruning 类的 test_adaptive_uses_range_iteration_when_range_smaller 和 test_adaptive_uses_items_iteration_when_buckets_fewer 两个测试方法通过自定义 TrackingDict 子类并 monkey-patch FuzzyMatcher.__init__ 来验证剪枝方法内部走了 range 路径还是 items 路径。这种测试方式直接检查了 _prune_by_length 的内部实现细节（调用的是 dict.get() 还是 dict.items()），而非验证自适应策略的可观测行为（如正确性和性能指标）。一旦未来剪枝方法的实现方式改变但功能不变，这两个测试就会误报失败，属于测试与实现强耦合的反模式。正确做法是通过性能对比和正确性验证来间接确认策略选择有效，而非直接断言内部调用了哪个方法。
-2. test_threshold_zero_single_length 测试方法的名称暗示它测试 threshold 为零的场景，但实际代码中使用的 threshold=1000，名实不符。虽然测试逻辑本身无误，但命名错误会让后续维护者误解测试意图，可能在该测试方法中错误地添加与阈值零相关的断言。应将该方法命名为 test_large_threshold_full_bucket_match 之类能准确反映测试场景的名称。
+1. test_adaptive_uses_range_iteration_when_range_smaller 和 test_adaptive_uses_items_iteration_when_buckets_fewer 两个测试通过自定义 TrackingDict 子类并 monkey-patch 来验证剪枝方法内部走了 range 路径还是 items 路径。这种方式直接检查了 _prune_by_length 内部实现细节而非验证自适应策略的可观测行为。一旦剪枝方法实现方式改变但功能不变这两个测试就会误报失败属测试与实现强耦合。应通过性能对比和正确性验证间接确认策略选择有效。
+2. test_threshold_zero_single_length 测试方法名暗示测试 threshold 为零的场景但实际使用 threshold=1000 名实不符。虽测试逻辑无误但命名错误让后续维护者误解测试意图可能错误地添加与阈值零相关的断言。应重命名为能准确反映测试场景的名称如 test_large_threshold_full_bucket_match。
 过程不满意：
-1. 模型在刚收到提示词后未经任何分析就直接用 todo_write 创建了 4 项子任务计划，之后才开始查看 matcher.py 源文件。这违反了标注规范中"不能刚收到任务就直接创建 TodoList，应先分析问题再规划"的要求。正确做法是先阅读当前 _prune_by_length 的实现，理解现有代码结构，再结合提示词中描述的稀疏长度分布退化问题制定修改计划。
-2. 模型在编写 TrackingDict 相关测试时，初始方案使用了 `patch.object(dict, 'items')` 来拦截 dict.items() 调用，运行时发现 dict.items 是 C 级别的只读描述符，patch 操作抛异常。这是对 Python 内建类型的 mock 机制理解不足导致的错误。模型随后将整个 TestAdaptiveLengthPruning 类的测试代码整体重写了一遍，而不是针对出错的几个具体断言做最小范围的修正，且在 test_adaptive_uses_range_iteration_when_range_smaller 和 test_adaptive_uses_items_iteration_when_buckets_fewer 中重复定义了完全相同的 TrackingDict 内部类和 patched_init 函数，产生了不必要的代码重复。正确做法是先分析 patch.object 失败的原因，再针对性地用 TrackingDict 方案替换出错的少数测试逻辑，并将公共的 TrackingDict 提取为模块级工具类避免重复。
+1. 模型收到提示词后未经任何分析直接创建了 4 项计划之后才开始查看源码。应遵循标应先阅读当前实现理解现有代码结构再结合提示词需求制定计划。
+2. 模型编写 TrackingDict 相关测试时初始使用 patch.object(dict, 'items') 但 dict.items 是 C 级别只读描述符 patch 抛异常。这是对 Python 内建类型 mock 机制理解不足导致随后将整个测试类整体重写一遍而非针对出错的几个断言做最小修正。应先分析 patch.object 失败原因再针对性地替换出错的少数测试逻辑并将公共的 TrackingDict 提取为模块级工具类避免重复。

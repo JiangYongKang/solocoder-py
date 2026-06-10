@@ -1,5 +1,4 @@
 产物不满意：
-本轮提示词的三个修复要求均已正确完成。index.py 的 _normalize_term 方法从 @staticmethod 改为 @classmethod，内部通过调用 cls._tokenize(term) 直接复用分词管道，消除了此前与 _tokenize 之间正则表达式 `r"\w+"` 加小写化逻辑的代码重复。README.md 新增了 "search(query_terms) — 完整分词管道" 和 "get_postings(term) — 单词元规范化" 两个分节，明确指出了 search 会对 "foo-bar" 拆分为 ["foo", "bar"] 全部词元而 get_postings 仅取第一个词元 "foo" 的语义差异，消除了此前 README 声称两者使用 "完全一致" 规范化管道的错误表述。运行 poetry run pytest tests/inverted_index/ 后 63 个测试全部通过，无回归问题。本轮产物代码修复和文档更新完全符合提示词第 1 条和第 2 条的要求，未发现实现缺陷。
-
+本轮提示词的三个修复要求均已正确完成。_normalize_term 从 @staticmethod 改为 @classmethod 内部直接调用 cls._tokenize 复用分词管道消除了代码重复。README 新增了两个分节明确指出了 search 会对 "foo-bar" 拆分为全部词元而 get_postings 仅取首词元的语义差异，消除了此前"完全一致"管道的错误表述。63 个测试全部通过无回归，产物完全符合提示词要求未发现实现缺陷。
 过程不满意：
-模型在收到提示词后的第一步直接使用 todo_write 创建了 3 项子任务计划，然后再通过 view_files 读取 index.py 了解现有代码中 _normalize_term 和 _tokenize 的实际实现。虽然本轮任务需求清晰且修改范围仅限于 index.py 和 README.md，但 "先规划后分析" 的执行顺序仍然不符合标注规范中 "不能刚收到任务就直接创建 TodoList，应先分析问题再规划" 的要求。正确的做法是先阅读 index.py 中 _normalize_term 与 _tokenize 的重复代码问题以及 README 中 "完全一致" 的待修正描述，在充分理解现状后再制定修改计划。除此之外本轮过程整体高效，模型按序完成代码修复和文档更新，然后立即执行 pytest 验证产物正确性，整个过程中无试错式调试、无重复查阅同一文件、无文件修改回退等低效行为。
+模型收到提示词后第一步直接创建了 3 项计划再通过 view_files 读取源码了解现有实现。虽然本轮任务需求清晰修改范围仅限于 index.py 和 README，但先规划后分析的执行顺序仍不符合标注规范中应先分析再规划的要求。正确的做法是先阅读需要修复的代码和文档在充分理解现状后再制定计划。除此之外本轮过程整体高效模型按序完成修改后立即执行 pytest 验证无试错式调试无重复查阅等低效行为。

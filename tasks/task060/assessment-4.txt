@@ -1,5 +1,5 @@
 产物不满意：
-1. test_coordinator.py 的 test_owner_record_mismatch_with_actual_holder_via_public_path 声明通过公共路径触发但关键的 `coordinator._partition_owner[0] = "c2"` 直接写入下划线内部字段未通过任何 Coordinator 公共接口制造不一致。提示词要求的测试覆盖本意通过公共 API 路径验证，该测试异常状态依赖人工注入内部数据篡改无法真实反映公共 API 路径下的一致性检测能力。根因是模型在无法通过公共 API 构造该分支输入时选择绕过封装直接操作内部状态而非分析该分支是否真实可达。
+1. test_coordinator.py 的 test_owner_record_mismatch_with_actual_holder_via_public_path 声明通过公共路径触发但关键操作直接写入内部字段未通过任何公共接口制造不一致。提示词要求的测试覆盖本意是通过公共 API 路径验证，该测试依赖人工注入内部数据篡改无法反映公共 API 下的一致性检测能力。根因是模型在无法通过公共 API 构造该分支输入时选择绕过封装而非分析该分支是否真实可达。
 过程不满意：
-1. 模型编写该测试经历三轮试错：第一轮用 c1.revoke_partition 失败因撤销后内部字段仍指向 c1 而 c1 已不持有先触发分支 3 非预期分支 2；第二轮用 3 个消费者失败因 join_group 内 _trigger_rebalance 自动重新分配覆盖刚制造的不一致；第三轮直接篡改内部字段才通过。每轮失败后仅重写测试跑 pytest 没先通过阅读 _do_rebalance 和 _trigger_rebalance 源码理解重平衡完整状态流转再动手，属典型试错式调试模式。应在第一轮失败后就分析分支 2 触发条件与重平衡机制冲突点判断该分支能否通过纯公共 API 构造成可达场景。
-2. 模型在思考记录中虽每次失败给出简短原因总结但从未读 _trigger_rebalance 和 _do_rebalance 完整源码系统分析。_do_rebalance 在每次 join_group 时由 _trigger_rebalance 调用执行完整撤销旧分区、分配新分区、更新记录的流程，这一核心机制在三轮试错中始终未被当作分析对象。模型依赖运行反馈而非源码阅读驱动调试导致前两轮无效修改浪费两张完整编辑测试循环，应先梳理 _do_rebalance 完整执行路径和它对内部字段修改时机再编写测试。
+1. 模型编写该测试经历三轮试错：第一轮用 revoke_partition 失败、第二轮用 3 个消费者失败因 join_group 覆盖制造的不一致、第三轮直接篡改内部字段才通过。每轮失败后仅重写测试没先通过阅读 _do_rebalance 和 _trigger_rebalance 源码理解重平衡完整状态流转。应在第一轮失败后就分析分支 2 触发条件与重平衡机制冲突点。
+2. 模型在思考记录中虽每次失败给出简短原因总结但从未读 _trigger_rebalance 和 _do_rebalance 完整源码系统分析。_do_rebalance 在每次 join_group 时执行完整撤销旧分区、分配新分区、更新记录的流程，这一核心机制在三轮试错中始终未被分析。模型依赖运行反馈而非源码阅读驱动调试，应先梳理 _do_rebalance 完整执行路径再编写测试。

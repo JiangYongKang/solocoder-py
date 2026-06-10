@@ -1,5 +1,4 @@
 产物不满意：
-1. test_concurrency_and_edge.py 中 test_insert_each_has_independent_timestamp 和 test_insert_many_each_has_independent_timestamp 两个测试正确添加了 AdvancingMockClock._call_count 断言，但窗口衰减查询部分存在验证盲区。在 test_insert_each 中 advance(200.0) 后旧数据时间戳在 100 至 290，新数据在 500 至 690，80 秒窗口和 30 秒窗口都无法覆盖旧数据，断言 70 至 110 与 80 至 110 均返回约 100 且区间重叠，无法证明不同窗口产生不同分位数值。test_insert_many 中 advance(50.0) 后旧数据 100 至 120 同样被 30 秒和 20 秒窗口全部排除，断言 60 至 110 和 80 至 110 同样重叠。窗口查询未能提供超出 _call_count 断言的独立验证价值，因为这些断言即便在旧代码行为下也能通过。根因是模型未校准时间推进量与窗口大小的关系以形成可区分的对比结果。正确做法是缩小 advance 值使旧数据落入宽窗口但被窄窗口排除，让不同窗口产生可观测的 p50 差异。
-
+1. test_insert_each_has_independent_timestamp 和 test_insert_many_each_has_independent_timestamp 两个测试正确添加了 call_count 断言，但窗口衰减查询存在验证盲区。advance 后旧数据时间戳被全部排除窄窗口也排除了旧数据，断言返回约相同值且区间重叠无法证明不同窗口产生不同效果。窗口查询未能提供超出 call_count 断言的独立验证价值。根因是时间推进量与窗口大小未匹配形成可区分对比。应缩小 advance 值使旧数据落入宽窗口但被窄窗口排除从而产生可观测的 p50 差异。
 过程不满意：
-1. 模型在刚收到提示词后未经分析就直接调用了 todo_write 创建任务计划，对应 session-cot-3.md 中第一个 toolName: todo_write 调用。此时模型尚未阅读 test_concurrency_and_edge.py 的现有代码，也未分析两个测试的具体缺陷，就制定了 4 项计划。直到第二步 view_files 才打开测试文件理解现有实现，之后又连续执行两次 todo_write 覆盖初始计划。整个会话 13 步工具调用中总计执行 5 次 todo_write，前三次调用集中在没有实质性代码修改的阶段。这属于先计划后分析的任务规划反模式，正确做法是先完整阅读提示词和现有代码，梳理清楚每个测试缺陷和需修改方向后，再制定有针对性的执行计划。
+1. 模型收到提示词后未经分析直接创建了任务计划，之后才阅读现有代码，随后又连续两次覆盖初始计划。整个会话 13 步中总计执行 5 次 todo_write，前三次集中在无实质性代码修改的阶段。应先完整阅读提示词和现有代码梳理清楚每个缺陷和修改方向后再制定有针对性的计划。

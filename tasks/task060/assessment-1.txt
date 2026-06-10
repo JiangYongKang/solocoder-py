@@ -1,8 +1,8 @@
 产物不满意：
-1. coordinator.py 只把分区所有权迁移到新消费者，提交位点仍保存在旧 OrderedPartitionConsumer 本地状态，分区迁到新消费者后默认从 -1 开始已提交消息被重复消费破坏位点连续性要求。根因是缺少消费者组级别的 offset 存储，应由协调器维护分区提交位点并在分配时自动恢复。
-2. consumer.py 的 assign_partition 对已分配分区只加入 set，coordinator.py 又捕获一个实际不会抛出的 PartitionAlreadyAssignedError，重复分配错误因此不可观测，重平衡期间所有权冲突可能被静默吞掉。根因是没有建立分区所有权校验边界，应在协调器分配前做唯一性检查并对冲突抛出明确异常。
-3. test_coordinator.py 的 test_rebalance_preserves_committed_offset 在重平衡后手动调用 seek 才继续消费遮盖了实现不会自动恢复位点的问题；test_force_rebalance_during_rebalance_raises 直接 pass。测试通过不能证明核心需求成立。应改为构造分区迁移后直接 poll 的场景断言不会重复消费已提交 offset。
+1. coordinator.py 迁移分区只转移所有权未转移提交位点，新消费者从 -1 开始导致已提交消息重复消费，破坏位点连续性。根因是缺少消费者组级别的 offset 存储，应由协调器维护分区提交位点并在分配时自动恢复。
+2. consumer.py 的 assign_partition 对已分配分区只加入 set，coordinator.py 捕获了一个不会抛出的 PartitionAlreadyAssignedError，重平衡期间所有权冲突被静默吞掉。根因是未建立分区所有权校验边界，应在协调器分配前做唯一性检查并抛出明确异常。
+3. test_coordinator.py 的 test_rebalance_preserves_committed_offset 重平衡后手动调用 seek 遮盖了不会自动恢复位点的问题，test_force_rebalance_during_rebalance_raises 直接 pass。应改为构造分区迁移后直接 poll 的场景，断言不会重复消费已提交偏移。
 过程不满意：
-1. 模型先调用 todo_write 创建 7 项计划之后才查看目录和项目配置，顺序导致计划建立在未理解代码结构和测试约定之前，后续对重平衡位点存储架构判断不足。应先读提示词和现有包模式再制定实现步骤。
-2. 模型发现 92 通过 1 失败但没有回到提示词核对重平衡事件和位点连续性的业务语义，而是认为测试期望不对并修改测试，使测试向实现妥协保留真实缺陷。应先复现迁移场景并修正生产逻辑而非修改测试。
-3. 模型声称 93 个测试全部通过并总结已实现重平衡后顺序保持，但没有增加覆盖新消费者自动继承提交位点的用例也没识别 PartitionAlreadyAssignedError 不可达和空 pass 测试，验证结论过度乐观。应针对提示词逐条做反例检查并补充失败用例。
+1. 模型先调用 todo_write 创建 7 项计划后才查看目录和项目配置，导致计划建立在未理解代码结构之前，后续对重平衡位点存储架构判断不足。应先读提示词和现有包模式再制定实现步骤。
+2. 模型发现 92 通过 1 失败但未核对重平衡事件和位点连续性的业务语义，错误地认为测试期望不对并修改测试，让测试向实现妥协。应先复现迁移场景并修正生产逻辑而非修改测试。
+3. 模型声称 93 个测试全部通过并总结已实现重平衡后顺序保持，但未增加覆盖新消费者自动继承提交位点的用例，也没识别 PartitionAlreadyAssignedError 不可达和空 pass 测试，验证结论过度乐观。应针对提示词逐条做反例检查并补充失败用例。
