@@ -1,9 +1,6 @@
 产物不满意：
-1. 在 engine.py 的 diff 方法中模型将旧的 VERSION_MISMATCH 枚举值替换为 A_HAS_NEWER 和 B_HAS_NEWER，sync_a_to_b 和 sync_b_to_a 方法也相应改为分别遍历 a_has_newer 和 b_has_newer 字典。但 sync_bidirectional 方法中 a_has_newer 和 b_has_newer 的处理被拆分成了两个独立的 for 循环，中间没有 diff 重新调用的逻辑，如果 only_in_a 或 only_in_b 的同步过程中因为 merge_entry 的版本递增语义更新了已存在条目的版本号，后续 a_has_newer 或 b_has_newer 的循环可能基于已过时的 diff 快照进行判断。不过在当前测试场景下不会触发此问题，因为 only_in 与 version_mismatch 的键集合天然互斥。建议在文档中说明 diff 快照是同步决策的唯一依据，明确快照语义。
-
+1. engine.py 的 diff 方法将 VERSION_MISMATCH 替换为 A_HAS_NEWER 和 B_HAS_NEWER，sync_bidirectional 中 a_has_newer 和 b_has_newer 的处理被拆分成两个独立 for 循环，如果 only_in 的同步触发了版本号变化，后续 mismatch 循环可能基于过时的 diff 快照判断。当前测试场景下不会触发（键集合互斥），但建议文档说明 diff 快照是同步决策的唯一依据。
 过程不满意：
-1. 模型在刚收到提示词后未经分析就直接用 todo_write 创建了 6 项子任务计划，然后才开始通过 view_files 阅读 models.py、engine.py 和 replica.py。提示词已经明确指出了两个具体问题所在的文件和方法，但模型仍在不了解代码现状的情况下提前制定计划，这属于任务规划的时序问题。正确做法是先阅读相关文件理解当前代码结构、确认问题范围，再根据实际分析结果制定执行计划。
-
-2. 模型在修改 models.py、engine.py 和 replica.py 三个核心生产文件时使用了 Write 工具进行全量文件重写，而非通过 edit_file_search_replace 做针对性的最小增量修改。三个文件的改动虽然在语义上是正确的，但全量重写使得 diff 中包含了大量无关的格式调整（如 has_differences 属性中的换行拆分），增加了代码审查的噪音和引入非预期副作用的概率。正确的做法是对需要修改的每个逻辑点使用 search_replace 逐一进行精确替换，保留文件中未变更的部分不变。
-
-3. 模型在写下所有生产代码和测试代码后一次性运行了 pytest 并宣称所有 92 个测试通过，没有采取增量验证的策略。虽然最终测试确实全部通过，但这种"写完所有代码再一把梭测试"的方式违背了工程中的渐进验证原则。正确做法应该是每修复一个模块就立即运行该模块对应的测试子集（例如先改完 merge_entry 就运行 tests/anti_entropy/test_replica.py），以失败结果驱动下一轮修复，而非赌所有改动一次性正确。
+1. 模型在收到提示词后未经分析就创建了 6 项子任务计划，然后才开始阅读代码。提示词已明确指出问题所在的文件和方法，但模型仍在不了解代码现状的情况下提前规划。应先阅读相关文件确认问题范围再制定计划。
+2. 模型修改三个核心文件时用了 Write 工具进行全量重写而非增量 edit_file_search_replace，使得 diff 中包含大量无关格式调整，增加了审查噪音和引入非预期副作用的概率。应对每个逻辑点逐一精确替换，保留未变更部分不变。
+3. 模型写完所有代码后一次性运行 pytest 并声称通过，没有采取增量验证策略。应每修复一个模块就运行对应的测试子集，以失败结果驱动下一轮修复，而非赌所有改动一次性正确。

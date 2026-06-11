@@ -1,8 +1,8 @@
 产物不满意：
-1. engine.py 的 resubmit 方法在真实驳回后不可用。reject 后 _activate_current_node 将目标节点从 PENDING 激活为 IN_PROGRESS，而 resubmit 入口检查状态不为 REJECTED 就直接返回。test_resubmit_after_reject 手动设置 REJECTED 状态绕过了死路径，但实际 reject 流程不会产生 REJECTED 节点。根因是驳回后应保留 REJECTED 等待重新提交，不应直接激活为 IN_PROGRESS。
-2. engine.py 的 get_pending_approvers 在超时升级后无法返回动态添加的上级审批人。escalate_timeout 将上级加入 node_state.approver_states，但 get_pending_approvers 内部调用 `definition.get_approver(aid)` 查找 Approver 对象，若上级未注册在 WorkflowDefinition.approvers 中就返回 None 被静默跳过。根因是动态审批人缺乏统一查询机制，应从 node_state 构造 Approver 或强制预注册所有上级。
-3. engine.py 的 _check_approver_in_node 在校验驳回权限时未施加串行顺序约束。SEQUENTIAL 节点中排在后面的审批人在前面审批人尚未操作时就能调用 reject。approve 通过 _check_can_approve 校验了 sequential_index，但 reject 没有做同样检查，导致未轮到的审批人也能提前打断流程，与提示词 "按顺序依次审批" 矛盾。应在 reject 中也加入顺序校验。
+1. engine.py 的 resubmit 方法在真实驳回后不可用。reject 将目标节点激活为 IN_PROGRESS，而 resubmit 入口检查状态不为 REJECTED 就返回。test_resubmit_after_reject 手动设置 REJECTED 绕过了死路径，但实际 reject 流程不会产生 REJECTED 节点。驳回后应保留 REJECTED 等待重新提交，不应直接激活。
+2. engine.py 的 get_pending_approvers 在超时升级后无法返回动态添加的上级审批人。escalate_timeout 将上级加入 node_state.approver_states，但 get_pending_approvers 通过 definition.get_approver 查找 Approver 对象，若上级未注册在定义中就返回 None 被静默跳过，应从 node_state 构造或强制预注册。
+3. engine.py 的 _check_approver_in_node 在校验驳回权限时未施加串行顺序约束。SEQUENTIAL 节点中排在后面的审批人在前面尚未操作时就能调用 reject，approve 检验了 sequential_index 但 reject 没有，应在 reject 中也加入顺序校验。
 过程不满意：
-1. 模型在刚收到提示词后未经任何分析就直接创建了 8 项子任务计划，然后才开始查看项目目录结构和现有模块代码。后续实现中多次调整策略，先按串行逻辑编写后又因测试报错才补充顺序校验，属于典型的先动手再分析的盲目编码模式。正确做法是先梳理三种节点类型的行为规则和完整的状态转移矩阵，理解节点间的流转关系，再制定分步实施计划。
-2. 模型在实现过程中多次读取 src/solocoder_py/workflow 和 src/solocoder_py/saga 模块的代码，包括 models.py、engine.py、states.py 等文件，花费数轮探索时间在这些与审批流引擎毫无关系的包上。两个包的实现模式与任务需求无依赖关系，阅读它们属于无效探索，占用了可用于深入理解审批流业务逻辑的时间。
-3. 模型修复测试失败时出现典型的 "生产代码向测试妥协" 行为。test_reject_deep_then_approve_all 期望驳回后目标节点状态为 PENDING，但模型直接把断言从 `NodeStatus.PENDING` 改成 `NodeStatus.IN_PROGRESS` 来匹配引擎行为，而非检查 reject 流程中状态转换是否正确。这剥夺了测试发现设计缺陷的能力。正确做法是先分析驳回后目标节点应处什么状态，再决定改引擎还是改测试。
+1. 模型在收到提示词后未经分析就创建了 8 项子任务计划，然后才开始查看项目结构。后续实现中多次调整策略，先按串行逻辑编写后又因测试报错才补充顺序校验。应先梳理三种节点类型的行为规则和完整状态转移矩阵再制定实施计划。
+2. 模型多次读取 workflow 和 saga 模块的代码，这些模块与审批流引擎毫无关系，阅读它们属于无效探索，占用了可深入理解审批流业务逻辑的时间。
+3. 修复测试失败时出现"生产代码向测试妥协"行为。test_reject_deep_then_approve_all 期望驳回后目标节点为 PENDING，但模型直接把断言从 PENDING 改为 IN_PROGRESS 匹配引擎行为，而非检查 reject 流程中状态转换是否正确，剥夺了测试发现设计缺陷的能力。

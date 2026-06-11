@@ -1,8 +1,7 @@
 产物不满意：
-1. tag_cache.py 的 _purge_expired 方法修复后移除了 _MAX_PURGE_PER_CALL 常量和 scanned 计数器限制，改为直接遍历 self._store.items() 收集所有过期 key 后统一删除。提示词描述的原始问题实际上是扫描到前 100 条后无条件 break，而不是"遇到非过期条目就退出"，但模型的修复方案（全量遍历并及时清理悬空标签）正确覆盖了所有过期条目。运行 poetry run pytest tests/tag_cache/ -v 后 82 个测试全部通过，其中新增的 TestPurgeExpiredFullScan 测试类验证了 200 条过期条目的全量清理、混合过期/非过期条目的清理和标签索引一致性，产物质量符合预期。
-2. exceptions.py 中 TagNotFoundError 死代码问题的修复选择了"统一异常抛出"方案，在 get_entries_by_tag、has_tag、invalidate_tag、invalidate_tags 四个方法中标签不存在时抛出 TagNotFoundError。这个方向修改了原有 API 语义（从静默返回到抛异常），相应地更新了测试代码中 10 余处断言以适应新行为，新增了 TestTagNotFoundErrorConsistency 类验证异常契约的一致性。测试全部通过，API 契约现在与异常类的导出意图一致。
-
+1. tag_cache.py 的 _purge_expired 方法修复后改为全量遍历 self._store.items() 收集并删除所有过期 key，新增 TestPurgeExpiredFullScan 测试类验证了 200 条过期条目的全量清理和标签索引一致性，82 个测试全部通过，修复方案正确覆盖了所有过期条目。
+2. exceptions.py 的 TagNotFoundError 死代码修复采用"统一异常抛出"方案，在 get_entries_by_tag、has_tag、invalidate_tag、invalidate_tags 四个方法中标签不存在时抛出该异常，新增 TestTagNotFoundErrorConsistency 类验证契约一致性，测试全部通过，API 契约与异常类的导出意图现在一致。
 过程不满意：
-1. 模型在刚收到提示词后未经分析就直接用 todo_write 创建了 5 项子任务计划（session-cot-2.md 第 1 行），之后才开始用 view_files 读取 tag_cache.py、exceptions.py 和 test_tag_cache.py 等文件。这违反了标注规范中"不能刚收到任务就直接创建 TodoList，应先分析问题再规划"的要求，属于任务规划环节的次序错误。正确做法是先阅读提示词要求并通读所有被调用的源代码和测试文件，理清三个修复点在代码中的具体位置和影响范围后，再制定有针对性的执行计划。
-2. 模型在首次运行 pytest 后发现 test_overwrite_existing_key 和 test_set_same_key_updates_tags 两个测试失败，分析的根因是 set 方法在覆盖旧条目后没有调用 cleanup_dangling_tags 导致悬空标签未被清理，这个分析是正确的。修复后在 set 方法中添加了 auto_cleanup_dangling 条件判断并调用 cleanup_dangling_tags。但随后新测试 test_purge_expired_cleans_all_entries_beyond_100 失败时，模型直接推测"TTL=0.01 太短，在插入 200 条的过程中前面的已经过期了"就改了 TTL 参数，没有先查看具体的失败断言值或错误堆栈信息。虽然推测方向正确，但跳过阅读错误信息直接改参数属于轻度试错式调试。正确做法是先运行 pytest --tb=short 获取失败详情，确认预期值和实际值的差距后再决定调整 TTL 还是调整测试逻辑。
-3. 模型在修改 get_entries_by_tag 方法时第一次 edit_file_search_replace 操作失败（status: failed），以及在修改 test_expired_entry_removed_from_tag_index 测试时第二次 edit_file_search_replace 也失败。模型没有停下来读取文件确认当前内容来理解为什么 old_string 匹配失败，而是直接跳过并继续执行后续修改。虽然这两次失败没有阻碍最终修复结果，但这种忽略工具调用失败原因的行为在更复杂场景下可能导致基于错误假设的后续修改。正确做法是对每一次失败的编辑操作立即用 view_files 重新读取目标文件确认最新状态再重新匹配。
+1. 模型在刚收到提示词后未经分析就直接创建了 5 项子任务计划，之后才开始阅读源代码和测试文件。这违反了应先分析问题再规划的要求。正确做法是先理解三个修复点在代码中的具体位置和影响范围，再制定执行计划。
+2. 模型首次运行 pytest 后发现两个测试失败，分析出 set 方法需调用 cleanup_dangling_tags 是正确的。但新测试失败时模型直接推测 TTL 太短就改了参数，没有先查看具体的失败断言值或堆栈信息。正确做法是先获取失败详情再决定如何调整。
+3. 模型在两次 edit_file_search_replace 操作失败后没有停下来读取文件确认当前内容来理解匹配失败原因，而是直接跳过继续执行后续修改。虽未阻碍最终结果，但正确做法是对每次失败的编辑立即重新读取文件确认最新状态后再重新匹配。

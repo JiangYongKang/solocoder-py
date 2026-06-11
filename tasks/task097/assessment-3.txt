@@ -1,9 +1,6 @@
 产物不满意：
-1. 在 scheduler.py 的 generate_rotation_schedule 方法中将返回值类型从 Dict[date, StaffId] 改为 Dict[date, List[StaffId]]，这是提示词未要求的接口变更。提示词仅指出 result 字典在重复检测之前超前写入 assigned_staff 导致返回值与内部 _schedule 不一致，要求修复这个时序问题。模型在修复时序的同时主动将每个日期的返回值从不带包装的单人员 ID 改为列表形式，导致所有已有测试中共 7 个测试类的断言都需要从 `schedule[d] == staff_ids[N]` 改为 `schedule[d] == [staff_ids[N]]`，这属于不必要的破坏性接口变更。更小范围的修复方案是保持单值返回类型 Dict[date, StaffId]，仅将 result 的写入移到重复检测逻辑之后，从 _schedule 中读取该日期的第一条分配的 staff_id 写入 result 即可，当调用者需要感知冲突场景下的完整多人列表时可通过已有的 get_assignment 方法获取。模型在 COT 中没有讨论任何替代方案就直接判定"最佳修复方案是将返回值改为 Dict[date, List[StaffId]]"，缺乏对最小修改原则的考量。
-
+1. scheduler.py 的 generate_rotation_schedule 方法将返回值从 Dict[date, StaffId] 改为 Dict[date, List[StaffId]]，这是提示词未要求的接口变更。提示词仅要求修复 result 字典时序不一致问题，模型在修复时将返回值改为列表，导致 7 个测试类的断言都需要修改。更小范围的方案是保持单值返回，仅将 result 写入移到重复检测之后从 _schedule 读取该日期的第一条 staff_id。模型未讨论替代方案就判定改返回值是"最佳修复"，缺乏对最小修改原则的考量。
 过程不满意：
-1. 模型在收到提示词后未经分析就立即调用 todo_write 创建了 4 项子任务（修复返回值类型、修正测试断言、新增一致性测试、更新 README），然后才用 view_files 阅读 scheduler.py 的具体代码位置。这违反了标注规范中的任务规划准则——不应在刚收到任务时就直接创建 TodoList，应先充分分析现有代码和提示词描述的问题根因后再规划执行步骤。虽然模型后续执行计划与实际修复方案匹配度尚可，但这种先拍脑袋规划后看代码的顺序偏差说明缺乏对问题细节的前置理解就草率分解了子任务，且规划中直接假定了需要改动返回值类型而未先评估是否有更轻量的方案。
-
-2. 模型在第 5 步使用 search_by_regex 以 `schedule\[` 为模式搜索测试文件，试图找出所有需要从单值断言改为列表断言的代码位置。但该正则只匹配了 schedule[d] 形式的直接索引访问，遗漏了 test_single_staff_everyday_same_person 测试中通过 `for d, assigned in schedule.items()` 遍历后对 assigned 做值比较的模式，导致初次运行 pytest 时该用例失败报错，模型随后才通过 view_files 定位到遗漏处并手动修复。正则搜索对于语义级别的接口变更是不充分的，应先在收到类型变更要求后通读整个测试文件，完整列出所有对 schedule 返回值的断言点再统一修改，而不是依赖字符串匹配碰运气。
-
-3. 模型在新增 TestReturnValueConsistency 测试类时（步骤 9-10）经历了先编写错误断言再返工修正的试错过程，在 COT 中明确写道"我注意到新测试中有些断言有误，修正一下"。从行为序列看，test_return_value_after_preexisting_duplicate_detection 和 test_return_value_contains_multiple_staff_when_conflict 两个用例在置信度验证阶段都没有先确认预期结果就写出了断言。这体现了试错式开发——靠 pytest 的失败反馈来驱动断言纠正，而不是在编码前先在头脑中理清每个测试场景的输入输出期望。正确做法是先推演各场景下返回值与 get_assignment 的对应关系，写出正确的断言后再一次性运行验证，避免产生两次无意义的修复提交。
+1. 模型收到提示词后未经分析就创建了 4 项子任务然后才阅读源码。虽后续执行与修复方案匹配度尚可，但这种先规划后看代码的顺序说明缺乏对问题细节的前置理解，且规划中直接假定需要改返回值类型而未评估更轻量的方案。应先分析代码和问题根因再规划。
+2. 模型使用正则 `schedule\[` 搜索测试文件试图找出需要修改断言的代码，但该正则遗漏了对 schedule.items() 遍历后做值比较的模式，导致初次运行 pytest 时该用例失败。正则搜索对语义级别的接口变更不充分，应通读整个测试文件完整列出所有断言点再统一修改。
+3. 模型在新增 TestReturnValueConsistency 测试类时经历了先写错误断言再返工修正的试错过程。两个用例在编写前都没有先确认预期结果就写出了断言，靠 pytest 失败反馈驱动修正，应先推演各场景的输入输出期望再一次性编写正确断言。

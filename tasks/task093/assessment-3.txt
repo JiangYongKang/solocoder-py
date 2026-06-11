@@ -1,7 +1,6 @@
 产物不满意：
-1. 模型在 resume_rollback_from_checkpoint 中误删了将 checkpoint 之后批次设为 ROLLED_BACK 的循环。_restore_migration_state 只处理 0 到 checkpoint，后续批次保持 PENDING，回滚中断恢复后已回滚批次状态错误，实测批次 2 为 PENDING 而非 ROLLED_BACK。根因是混淆状态恢复循环与数据写入两个独立职责。正确做法是保留该循环，仅传 write_data=False。
-2. 新增测试仅覆盖 resume_from_checkpoint 失败路径的写计数器，未验证 resume_rollback_from_checkpoint 路径。同时现有回滚中断恢复测试只校验整体状态与目标数据量，不检查每个批次的 status 字段，使得 ROLLED_BACK 循环被删除的缺陷未被捕获。应补充 resume_rollback_from_checkpoint 的写计数器测试，并在回滚恢复测试中添加各批次 status 断言。
-
+1. 模型在 resume_rollback_from_checkpoint 中误删了将 checkpoint 之后批次设为 ROLLED_BACK 的循环，_restore_migration_state 只处理 0 到 checkpoint，后续批次保持 PENDING，回滚中断恢复后已回滚批次状态错误。根因是混淆了状态恢复循环与数据写入两个独立职责。应保留该循环只传 write_data=False。
+2. 新增测试仅覆盖 resume_from_checkpoint 失败路径的写计数器，未覆盖 resume_rollback_from_checkpoint 路径，且回滚中断恢复测试只校验整体状态不检查各批次 status 字段，使 ROLLED_BACK 循环被删的缺陷未被捕获。应补充 resume_rollback_from_checkpoint 的写计数器测试和各批次 status 断言。
 过程不满意：
-1. 模型在第 107 步声称"只需要恢复状态标记"，但实际修改却删除了承担状态标记恢复的循环，行为与陈述自相矛盾。说明模型未逐行分析原代码职责，未区分状态恢复循环与数据写入是两个独立关注点，误以为改参数能替代循环功能。正确做法是先分析 resume_rollback_from_checkpoint 中每行代码的独立职责，确认循环与 write_data 无关后再只修改调用参数。
-2. 模型在第 171 步跑完 57 个测试全部通过后，于第 223 步声称"全部修复完成"，未对 resume_rollback_from_checkpoint 恢复后的批次级状态做验证。测试通过不等于语义正确，现存测试不检查各批次 status 字段。验证脚本确认批次 2 为 PENDING 而非 ROLLED_BACK，属典型幻觉式完成：将测试通过等同于功能正确，跳过状态一致性验证。正确做法是跑完测试后对被修改路径做人工状态检查。
+1. 模型在第 107 步声称"只需要恢复状态标记"，但实际修改却删除了承担状态标记恢复的循环，行为与陈述自相矛盾。说明模型未逐行分析原代码职责，误以为改参数能替代循环功能。应先确认每行代码的独立职责后再修改调用参数。
+2. 模型跑完 57 个测试全部通过后声称"全部修复完成"，未对 resume_rollback_from_checkpoint 恢复后的批次级状态做验证。测试通过不等于语义正确，现存测试不检查各批次 status 字段，批次 2 为 PENDING 而非 ROLLED_BACK。这属典型幻觉式完成，将测试通过等同于功能正确。

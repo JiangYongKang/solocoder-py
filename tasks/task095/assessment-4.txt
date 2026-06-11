@@ -1,8 +1,7 @@
 产物不满意：
-1. tests/rule_engine/test_rule_engine.py 中新增了 test_modify_fact_on_missing_key_adds_fact 测试用例，验证 MODIFY_FACT 动作在目标键不存在时能够新增事实。提示词要求的是消除 add_fact 与 _upsert_fact 的代码重复并重新运行已有测试，未要求补充新的测试用例。本次重构只改变了代码的实现方式（从内联逻辑改为委托调用），并未改变行为语义，新增测试验证的是 MODIFY_FACT 的既有行为而非修复带来的行为变化，属于范围外扩展。
-2. test_external_callback_removes_fact_detected_as_change 测试方法的参数从 engine_with_overwrite fixture 改为 engine fixture，方法体内三处 engine_with_overwrite 引用全部替换为 engine。提示词未要求修改任何已有测试用例，且该测试在 engine_with_overwrite 下原本通过无误。虽然改用 engine（allow_fact_overwrite=False）并不影响该测试的断言结果（该测试不需要覆盖写能力），但这一改动与消除 add_fact 重复代码的目标毫无关联，增加了审查范围。模型应当在只修改 engine.py 后直接运行已有测试验证通过即可。
-3. engine.py 中 _execute_single_action 方法原有的 ADD_FACT 和 MODIFY_FACT 两个 if 分支各自拥有完整的内联冲突保护逻辑（共约 24 行），本次修改将两个分支合并为一个条件判断并委托给 _upsert_fact，同时从 add_fact 中也消除了重复，整体方向正确。但 README.md 中新增的"冲突保护策略的测试覆盖矩阵"表格占据了 13 行，将 8 个已有测试用例归类为 ADD_FACT 和 MODIFY_FACT 的行为矩阵，这种文档化工作是归纳性的而非修复必须的，读起来像是把已有的测试列表转换成了表格格式而非提供新的技术信息。
-
+1. 新增的 test_modify_fact_on_missing_key_adds_fact 测试验证 MODIFY_FACT 在目标键不存在时新增事实。提示词要求消除 add_fact 与 _upsert_fact 的代码重复并重新运行已有测试，未要求补充新测试。本次重构只改变实现方式未改变行为语义，新增测试属于范围外扩展。
+2. test_external_callback_removes_fact_detected_as_change 的参数从 engine_with_overwrite fixture 改为 engine fixture。提示词未要求修改任何已有测试，且该测试原本通过无误，这一改动与消除重复代码目标无关，增加了审查范围。
+3. engine.py 中 ADD_FACT 和 MODIFY_FACT 分支合并委托给 _upsert_fact 的方向正确，且也消除了 add_fact 中的重复。但 README.md 新增的"冲突保护策略测试覆盖矩阵"表格将已有测试归类为行为矩阵，这种文档化工作读起来是把测试列表转为表格格式而非提供新技术信息。
 过程不满意：
-1. 模型在本次会话中没有使用 todo_write 制定计划（对简单任务是合理的），但也缺少前置分析环节：直接用 view_files 打开 engine.py 的完整文件后立即执行 edit_file_search_replace 修改。模型未先用 grep 或语义搜索确认 add_fact 的重复代码具体分布、也未检查 _upsert_fact 是否已存在于代码库中（从 diff 看是本次新增的），就直接在 engine.py 尾部追加了 _upsert_fact 方法体。虽然最终结果正确，但跳过了定位验证步骤，如果 _upsert_fact 已存在则可能造成重名冲突。
-2. 模型在修改 engine.py 之外还修改了 test_rule_engine.py 中的已有测试 fixture 和新增测试，但没有在会话过程的任何步骤中说明这些改动的原因或必要性。特别是将 engine_with_overwrite 替换为 engine 的修改缺少注释或日志记录佐证其动机，审查者只能从测试逻辑反推它不影响断言结果，这种无声的入侵式修改在缺陷修复场景中是不恰当的，修复任务应当保持最小变更集。
+1. 模型缺少前置分析环节，直接用 view_files 打开 engine.py 后立即执行 edit_file_search_replace 修改，未先用 grep 确认 add_fact 的重复代码分布、也未检查 _upsert_fact 是否已存在，如果方法名已存在可能造成重名冲突。虽然结果正确但跳过了定位验证步骤。
+2. 模型在修改 engine.py 之外还修改了已有测试 fixture 和新增测试，但在会话过程中没有说明这些改动的原因。将 engine_with_overwrite 替换为 engine 的修改缺少动机说明，修复任务应保持最小变更集。
