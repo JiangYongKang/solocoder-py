@@ -1,5 +1,5 @@
 产物不满意：
-1. deque.py 的 _steal_slow_path 方法存在与 size 方法完全相同的手动双锁 acquire/release 模式。该方法在 try 块前连续调用 `self._bottom_lock.acquire()` 和 `self._steal_lock.acquire()`，如果第二把锁的获取因异常情况失败，finally 块执行 `self._steal_lock.release()` 时因未持有该锁而抛出 RuntimeError，导致 `self._bottom_lock.release()` 永远无法执行，底端锁永久泄露。提示词第二条缺陷中明确描述了手动双锁 acquire/release 的通用风险模式，应扫描全文件找出所有同类锁获取方式，将 size 和 _steal_slow_path 两处一并改为嵌套 with 上下文管理器。
+1. deque.py 的 _steal_slow_path 方法存在与 size 方法完全相同的手动双锁 acquire/release 模式。该方法在 try 块前连续调用两把锁的 acquire，如果第二把锁获取异常失败，finally 块执行 release 时因未持有锁抛出 RuntimeError，导致 bottom_lock 永久泄露。提示词第二条缺陷已描述了手动双锁的通用风险模式，应扫描全文件找出所有同类锁获取方式，将 size 和 _steal_slow_path 两处一并改为嵌套 with 上下文管理器。
 
 过程不满意：
 1. 模型在收到提示词后未经分析就直接创建了 TodoList 将任务拆分为 3 项，然后才开始读取 models.py 和 deque.py 源码文件。这违反了标注规范中不能在刚收到任务时就直接创建 TodoList 应先分析问题再规划的要求。虽然提示词已经明确给出了两个缺陷的文件位置和修复方向，模型仍应先完成代码阅读、理解现有实现细节后再制定执行计划。

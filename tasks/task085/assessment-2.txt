@@ -1,11 +1,11 @@
 产物不满意：
-1. models.py 的 mark_failed 方法在设置 TaskStatus.FAILED 的同时调用了 datetime.now() 填充 completed_at 字段。completed_at 在语义上代表任务成功完成的时间点，但 mark_failed 被调用时任务是执行失败而非成功完成。这导致调用方通过 `task.completed_at is not None` 判断任务是否完成时会错误地将失败任务也识别为已完成，与提示词"任务执行失败与执行成功在状态上无法区分"的修复目标背道而驰——模型确实在状态枚举中区分了 FAILED 和 COMPLETED，但在时间戳字段上又把两种终态混在了一起。根本原因是模型只关注了状态值的字面区分而忽略了 completed_at 字段本身的语义约束，应当将 completed_at 的赋值限定在 mark_completed 方法内，在 mark_failed 中使用独立的 failed_at 字段记录失败时间。
+1. models.py 的 mark_failed 方法设置 FAILED 状态的同时调用了 datetime.now() 填充 completed_at 字段。completed_at 语义上代表任务成功完成的时间点，但 mark_failed 调用时任务是执行失败。导致调用方通过 `task.completed_at is not None` 判断时会错误将失败任务识别为已完成，与修复目标背道而驰。根因是模型只关注了状态值的字面区分而忽略了 completed_at 字段本身的语义约束，应将 completed_at 赋值限定在 mark_completed 内，在 mark_failed 中用独立的 failed_at 记录失败时间。
 
-2. deque.py 新增的 size 方法采用手动 acquire 和 release 模式获取 bottom_lock 与 steal_lock 两把锁，而 Python 推荐的惯用法是使用 with 上下文管理器。当前实现中如果第二次锁获取 self._steal_lock.acquire() 因线程被外部中断等异常情况而失败，finally 块尝试 release 一把并未持有的锁会抛出 RuntimeError，从而导致 finally 块中止执行、self._bottom_lock 永久泄露。虽然 threading.Lock 的阻塞获取在正常运行时几乎不会失败，但这仍然是一种不安全的编码模式。根本原因是模型照搬了原本 _pop_bottom_slow_path 和 _steal_slow_path 中的手动加锁写法，而未在新的查询方法中使用更安全的 with 语句，应改为嵌套上下文管理器确保锁释放的可靠性。
+2. deque.py 新增的 size 方法采用手动 acquire 和 release 模式获取 bottom_lock 和 steal_lock 两把锁，而 Python 推荐的惯用法是使用 with 上下文管理器。如果第二次锁获取因异常失败，finally 块尝试 release 未持有的锁会抛出 RuntimeError 导致 finally 中止、bottom_lock 永久泄露。根因是模型照搬了 _pop_bottom_slow_path 和 _steal_slow_path 中的手动加锁写法，未在查询方法中使用更安全的 with 语句，应改为嵌套上下文管理器确保锁释放的可靠性。
 
 过程不满意：
 1. 模型在收到第2轮提示词后未经任何代码阅读与分析，直接在第一步用 todo_write 创建了包含 5 项子任务的工作计划，然后才开始逐文件读取源代码。这种行为模式与第1轮 assessment-1.txt 中已明确指出的"模型在刚收到提示词后未经分析就直接用 todo_write 创建了子任务计划"完全一致，说明模型没有从上一轮的过程反馈中吸取教训。虽然第2轮的缺陷列表已经明确指出了需要修改的文件和方法名，但模型仍应在动手规划前先完整阅读各文件以确认当前代码状态与提示词描述是否一致，而非假设现有代码完全匹配提示词描述就直接开工。
 
-2. 模型在修复 worker_pool.py 的两个缺陷时对该文件执行了 4 次独立的编辑调用：第一次修改构造函数中的计数变量声明、第二次添加 failed_count 属性、第三次修改 submit 方法的轮询变量、第四次修改 _execute_task 方法的异常处理。从最终 git diff 来看，这四处改动集中在 __init__ 方法以及 _execute_task 和 submit 两个方法上，完全可以合并为 1-2 次编辑完成。将同文件修改拆分为多次零散编辑的后果是降低了修改的原子性——如果中途某次编辑失败而前面的编辑已生效，worker_pool.py 会处于部分修复、部分未修复的不一致状态。
+2. 模型修复 worker_pool.py 的两个缺陷时对该文件执行了 4 次独立编辑：修改构造函数变量声明、添加 failed_count、修改 submit 轮询变量、修改 _execute_task 异常处理。这四处改动集中在 __init__ 以及 _execute_task 和 submit 两个方法，完全可以合并为 1-2 次编辑。将同文件修改拆分为多次零散编辑降低了修改原子性——如果中途某次编辑失败而前面的已生效，文件会处于部分修复的不一致状态。
 
-3. 模型完成四项缺陷修复后直接运行 poetry run pytest 并因 58 个测试全部通过而声称修复完成，但未为任何一项修复新增对应的单元测试。提示词要求新增的 FAILED 状态、mark_failed 方法、error_message 字段、failed_count 属性和 _round_robin_index 分离均为全新的代码执行路径，而已有的 58 个测试无一覆盖这些新行为：只验证了 PENDING 到 RUNNING 到 COMPLETED 的正常流程，完全不涉及 FAILED 分支；只验证了纯自动分配场景下的轮询均匀性，不包含提示词中描述的"交替调用指定和不指定 worker_id 的 submit"这一核心修复场景。运行已通过的全部测试只能证明没有引入回归，不能证明四项修复确实生效，模型将"无回归"等同于"修复正确"是一种验证不充分的虚假完成。正确的做法是为每项修复编写至少一个验证用例，确认新代码逻辑被测试覆盖后再声称完成。
+3. 模型完成四项缺陷修复后直接运行 pytest 并因 58 个测试全部通过而声称修复完成，但未为任何修复新增对应单元测试。新增的 FAILED 状态、mark_failed 方法、error_message 字段、failed_count 属性和 _round_robin_index 分离均为全新代码路径，而 58 个已有测试无一覆盖这些新行为：只验证了正常流程不涉及 FAILED 分支，只验证了纯自动分配场景不包含交替调用指定和不指定 worker_id 的核心修复场景。运行已通过测试只能证明无回归，不能证明修复生效，模型将"无回归"等同于"修复正确"是验证不充分的虚假完成。应为每项修复编写至少一个验证用例后再声称完成。

@@ -2,4 +2,4 @@
 本轮修复产物无缺陷。模型在 scheduler.py 中创建了 ControlFlowSignal(BaseException) 作为调度器域控制流信号的中间层基类，Parked 改为继承 ControlFlowSignal 而非直接继承 BaseException，与 SystemExit、KeyboardInterrupt、GeneratorExit 三个解释器级信号在继承层次上清晰分离。__init__.py 同步导出了 ControlFlowSignal，31 个测试全部通过。修复方案准确满足了提示词要求：Parked 不再直接并列在解释器级异常层级，同时保持了 except Exception 不捕获的穿透特性。
 
 过程不满意：
-1. 模型在收到提示词后第一步就调用 todo_write 创建了 3 项子任务计划，然后才开始用 view_files 读取 scheduler.py 和 __init__.py 源码文件。这违反了标注规范中"不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划"的要求，且与第三轮 assessment-3.txt 中对同一行为模式的过程批评完全一致。模型未从上一轮的过程反馈中汲取教训，在"先规划后分析"的习惯上原地踏步。正确做法是先阅读 scheduler.py 中 Parked 的当前继承声明、__init__.py 的导出列表以及 lock.py 中对 Parked 的处理方式，理解完整上下文后再制定修改计划。
+1. 模型收到提示词后第一步就 todo_write 创建了 3 项子任务，然后才用 view_files 读取 scheduler.py 和 __init__.py 源码。这违反标注规范中"不能刚收到任务时就创建 TodoList，应先分析问题再规划"的要求，且与第三轮 assessment-3.txt 中对同一行为模式的批评完全一致。模型未从上一轮过程反馈中汲取教训，在"先规划后分析"的习惯上原地踏步。正确做法是先阅读 scheduler.py 中 Parked 的当前继承声明、__init__.py 的导出列表以及 lock.py 中的处理方式，理解完整上下文后再制定修改计划。

@@ -2,7 +2,7 @@
 1. countdown_latch.py 的 wait 方法中通过 Clock 抽象接口支持了时间注入，但 `_event.wait(timeout=remaining)` 内部始终使用真实系统单调时钟来计算超时，ManualClock 只控制了 deadline 的计算而无法控制实际阻塞时长。用户在测试中推进 ManualClock 后仍需等待真实时间流逝才能观察到超时返回，Clock 抽象只完成了一半，超时行为的可预测性受限于操作系统调度。根因是未将 Clock 注入贯穿到阻塞等待原语内部，应改用 Condition 配合分步轮询或周期性唤醒来让注入时钟真正决定等待行为的终止时机。
 2. exceptions.py 中定义了 LatchTimeoutError 异常类并在 __init__.py 中导出，但 wait 方法在超时时返回布尔值 False 而非抛出此异常。提示词要求"返回超时失败结果"，布尔返回值可以接受，但定义了一个从未使用的异常类会导致 API 用户困惑——用户在文档和导出列表中看到 LatchTimeoutError 后会预期它在超时场景下被抛出，实际却永不会被触发。根因是设计阶段未明确超时的错误表示策略，应要么删除未使用的异常类，要么统一为抛出 LatchTimeoutError 的异常风格。
 3. countdown_latch.py 的 wait 方法中，先获取锁检查 OPENED 状态再释放锁，随后再次获取锁递增 _waiting_threads 计数器，两次加锁之间存在无锁窗口。若此时 count_down 刚好将计数归零并设置了 _event，该等待线程会先递增 _waiting_threads，随后 `_event.wait` 立即返回再递减计数器和检查状态，导致 _waiting_threads 经历一次无意义的增删波动，get_stats 查询瞬间可能观察到计数虚高。根因是状态快照与线程注册未原子化，应将两次加锁合并为一次临界区操作。
-4. tests/countdown_latch/test_countdown_latch.py 中 test_all_waiters_wake_up_simultaneously 用例断言所有 5 个等待线程的唤醒时间差 `max_diff < 0.1` 秒，该断言依赖于操作系统线程调度的实时性。在 CI 环境或负载较高的机器上，Python GIL 和线程调度抖动可能导致唤醒时间差超出 100 毫秒，该断言并非对代码功能正确性的验证而更像对系统性能的假设，构成了潜在的 flaky test。根因是将性能期望混入了功能正确性断言，应放宽时间阈值或仅验证所有等待者均已唤醒而非时间精度。
+4. tests/countdown_latch/test_countdown_latch.py 中 test_all_waiters_wake_up_simultaneously 用例断言所有 5 个等待线程的唤醒时间差 `max_diff < 0.1` 秒，该断言依赖操作系统线程调度的实时性。在 CI 或高负载环境下，Python GIL 和调度抖动可能导致时间差超出 100 毫秒，构成潜在 flaky test。根因是将性能期望混入功能正确性断言，应放宽时间阈值或仅验证所有等待者均已唤醒。
 
 过程不满意：
 1. 模型在刚收到提示词后没有任何分析步骤就直接创建了 7 项子任务的 TodoList，然后才去探索项目结构和代码风格。这违反了标注规范中"不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划"的要求，导致后续 TodoList 从 7 项被调整为 9 项，说明初始规划并不基于对需求的充分理解。正确做法是先阅读提示词、理解栅栏的核心功能需求（初始化、倒计数、等待汇合、超时、一次性语义），查看项目目录结构和构建配置，确认包路径约定后再制定任务计划。

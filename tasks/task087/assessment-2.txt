@@ -1,8 +1,8 @@
 产物不满意：
-1. 本轮修改未发现明显的产物缺陷。batcher.py 中 submit 和 submit_many 方法均已从"仅在 current_size >= max_size 时条件触发 flush_if_needed"改为"每次追加数据后无条件调用 flush_if_needed(force=False)"。由于 flush_if_needed 内部已同步检查缓冲数量和时间两个触发条件，且空缓冲会直接返回 False，修改后即使用户未调用 start 启动调度线程，时间触发条件也能在 submit 时正常生效。同时 _scheduler_loop 方法中原有的 except Exception: pass 静默吞异常已被替换为 logger.exception("Error in MicroBatchBatcher scheduler loop")，异常发生时会在日志中输出完整堆栈信息，便于排查 Writer 端编程错误导致的缓冲区堆积问题。两处代码变更严格对齐提示词要求，42 个测试用例全部通过，变更范围精准且未引入回归问题。
+1. 本轮修改未发现明显产物缺陷。batcher.py 中 submit 和 submit_many 方法均已改为"每次追加数据后无条件调用 flush_if_needed(force=False)"。由于 flush_if_needed 内部已同步检查缓冲数量和时间两个触发条件且空缓冲直接返回 False，即使用户未启动调度线程时间触发也能在 submit 时正常生效。_scheduler_loop 中原有的 except Exception: pass 已被替换为 logger.exception 输出完整堆栈，便于排查 Writer 端编程错误。两处变更严格对齐提示词要求，42 个测试全部通过，变更范围精准未引入回归。
 
 过程不满意：
-1. 模型在收到提示词后未进行任何任务规划或前置分析，直接读取 batcher.py 全文后立即执行了三处 edit_file_search_replace 操作，整个过程从文件读取到编辑完成仅跨越 4 个步骤。提示词明确列出了两项待修复缺陷和一项验证要求共三个独立子任务，但模型完全跳过了"分析问题现状→确认提示词描述与代码一致→创建 TodoList 分解步骤→逐一修改→逐一验证"的标准工程流程。合理做法是先用简短的 TodoList 将三个子任务显式化（修复 submit/submit_many 无条件刷写、修复调度线程异常日志、运行测试验证），即使任务规模小也能体现规划纪律而非直奔代码编辑。
+1. 模型收到提示词后未进行任何任务规划或前置分析，直接读取 batcher.py 全文后立即执行了三处编辑操作，从文件读取到编辑完成仅跨越 4 个步骤。提示词明确列出两项待修复缺陷和一项验证要求共三个子任务，但模型完全跳过了"分析问题现状→确认代码一致→创建 TodoList→逐一修改→逐一验证"的标准工程流程。合理做法是先用简短的 TodoList 将三个子任务显式化（修复无条件刷写、修复异常日志、运行测试），即使任务规模小也能体现规划纪律而非直奔代码编辑。
 
 2. 模型的三次 edit_file_search_replace 操作的 changes 字段均显示为 undefined，思考日志中无法追溯每次替换具体修改了哪些代码行。标注人员无法从 session-cot 中直接判断每次替换是否恰好覆盖了提示词要求的两处修复点，只能事后通过 git diff 反推完整的代码变更内容。这种不透明的编辑记录降低了过程审计的可追溯性和准确性，应使用能展示具体替换前后内容的编辑方式，确保每一步变更在思考日志中有明确的对比记录。
 
