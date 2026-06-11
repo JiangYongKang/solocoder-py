@@ -1,0 +1,5 @@
+你实现的数据迁移执行模块仍存在一个问题，需要修复：
+1. resume_rollback_from_checkpoint 方法在上轮修复时误删了将 checkpoint 之后批次状态设为 ROLLED_BACK 的循环。_restore_migration_state 只负责恢复 0 到 checkpoint 之间批次的 COMPLETED 状态，不处理 checkpoint 之后的批次，导致回滚中断恢复后后续批次的 status 字段仍为 PENDING 而非 ROLLED_BACK。需要恢复这个批次状态标记逻辑，同时确保不在该路径上写回数据到目标存储。
+2. 在 tests/data_migration/ 中为 resume_rollback_from_checkpoint 路径补充测试，验证回滚中断恢复后各批次的 status 字段均为 ROLLED_BACK 且目标存储中无残留数据。
+3. 修复完成后重新运行 poetry run pytest tests/data_migration/ -v，确保所有测试通过。
+4. 更新 README.md，说明回滚中断恢复路径上的批次状态恢复策略与正常续传路径的区别。

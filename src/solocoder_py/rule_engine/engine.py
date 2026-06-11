@@ -68,15 +68,7 @@ class RuleEngine:
         return list(self._rules.values())
 
     def add_fact(self, fact: Fact) -> None:
-        if fact.key in self._facts:
-            existing = self._facts[fact.key]
-            if existing != fact.value:
-                if self._allow_fact_overwrite:
-                    self._facts[fact.key] = fact.value
-                else:
-                    raise FactConflictError(fact.key, existing, fact.value)
-        else:
-            self._facts[fact.key] = fact.value
+        self._upsert_fact(fact.key, fact.value)
 
     def add_facts(self, facts: list[Fact]) -> None:
         for fact in facts:

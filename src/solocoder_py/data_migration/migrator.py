@@ -374,6 +374,9 @@ class DataMigrator:
 
             self._restore_migration_state(checkpoint, write_data=False)
 
+            for i in range(checkpoint + 1, self._state.total_batches):
+                self._state.batches[i].status = BatchStatus.ROLLED_BACK
+
             return self.rollback()
 
     def reset(self) -> None:

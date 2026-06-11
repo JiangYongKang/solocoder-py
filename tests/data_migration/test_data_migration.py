@@ -841,3 +841,118 @@ class TestFailureRecoveryNoWriteBeforeRollback:
         assert state.status == MigrationStatus.ROLLED_BACK
         assert len(target_store) == 0
         assert write_count[0] == writes_before_resume
+
+
+class TestResumeRollbackBatchStatus:
+    def test_resume_rollback_all_batches_status_is_rolled_back(self):
+        source = make_source_data(30)
+        target_store = {}
+        rollback_fail_count = [0]
+        checkpoint_store = InMemoryCheckpointStore()
+
+        def failing_rollbacker(records):
+            if records and records[0]["id"] == 10 and rollback_fail_count[0] == 0:
+                rollback_fail_count[0] += 1
+                raise RuntimeError("Rollback failure at batch 1")
+            for record in records:
+                if record["id"] in target_store:
+                    del target_store[record["id"]]
+
+        migrator1 = DataMigrator(
+            source_data=source,
+            target_store=target_store,
+            batch_size=10,
+            checkpoint_store=checkpoint_store,
+            id_extractor=lambda r: r["id"],
+            batch_rollbacker=failing_rollbacker,
+        )
+
+        migrator1.migrate()
+        assert len(target_store) == 30
+
+        with pytest.raises(RollbackError):
+            migrator1.rollback()
+
+        state1 = migrator1.state
+        assert state1.checkpoint == 1
+        assert state1.batches[2].status == BatchStatus.ROLLED_BACK
+        assert state1.batches[1].status == BatchStatus.COMPLETED
+        assert state1.batches[0].status == BatchStatus.COMPLETED
+
+        migrator2 = DataMigrator(
+            source_data=source,
+            target_store=target_store,
+            batch_size=10,
+            checkpoint_store=checkpoint_store,
+            id_extractor=lambda r: r["id"],
+            batch_rollbacker=failing_rollbacker,
+        )
+
+        state2 = migrator2.resume_rollback_from_checkpoint()
+
+        assert state2.status == MigrationStatus.ROLLED_BACK
+        assert state2.checkpoint == -1
+        assert len(target_store) == 0
+        for batch in state2.batches:
+            assert batch.status == BatchStatus.ROLLED_BACK
+
+    def test_resume_rollback_does_not_write_data(self):
+        source = make_source_data(30)
+        target_store = {}
+        write_count = [0]
+        rollback_fail_count = [0]
+        checkpoint_store = InMemoryCheckpointStore()
+
+        def tracking_migrator(records):
+            for record in records:
+                write_count[0] += 1
+                target_store[record["id"]] = record
+
+        def failing_rollbacker(records):
+            if records and records[0]["id"] == 10 and rollback_fail_count[0] == 0:
+                rollback_fail_count[0] += 1
+                raise RuntimeError("Rollback failure at batch 1")
+            for record in records:
+                if record["id"] in target_store:
+                    del target_store[record["id"]]
+
+        migrator1 = DataMigrator(
+            source_data=source,
+            target_store=target_store,
+            batch_size=10,
+            checkpoint_store=checkpoint_store,
+            id_extractor=lambda r: r["id"],
+            batch_migrator=tracking_migrator,
+            batch_rollbacker=failing_rollbacker,
+        )
+
+        migrator1.migrate()
+        writes_before_rollback = write_count[0]
+
+        with pytest.raises(RollbackError):
+            migrator1.rollback()
+
+        migrator2 = DataMigrator(
+            source_data=source,
+            target_store=target_store,
+            batch_size=10,
+            checkpoint_store=checkpoint_store,
+            id_extractor=lambda r: r["id"],
+            batch_migrator=tracking_migrator,
+            batch_rollbacker=failing_rollbacker,
+        )
+
+        migrator2.resume_rollback_from_checkpoint()
+
+        assert write_count[0] == writes_before_rollback
+
+    def test_resume_rollback_empty_checkpoint(self):
+        source = make_source_data(20)
+        checkpoint_store = InMemoryCheckpointStore()
+        migrator = make_migrator(source, batch_size=10, checkpoint_store=checkpoint_store)
+
+        state = migrator.resume_rollback_from_checkpoint()
+
+        assert state.status == MigrationStatus.ROLLED_BACK
+        for batch in state.batches:
+            assert batch.status == BatchStatus.ROLLED_BACK

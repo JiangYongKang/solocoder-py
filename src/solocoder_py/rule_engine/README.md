@@ -154,15 +154,19 @@
 
 #### 冲突保护策略的代码实现方式
 
-`ADD_FACT` 和 `MODIFY_FACT` 共用同一套冲突保护逻辑，通过提取私有辅助方法 `_upsert_fact(key, value)` 来消除代码重复：
+`ADD_FACT`、`MODIFY_FACT` 和公共方法 `add_fact` 共用同一套冲突保护逻辑，通过提取私有辅助方法 `_upsert_fact(key, value)` 来消除代码重复：
 
-- 在 `_execute_single_action` 中，`ADD_FACT` 和 `MODIFY_FACT` 两个分支合并为一个条件判断，统一调用 `_upsert_fact(action.fact_key, action.fact_value)`。
-- `_upsert_fact` 方法封装了完整的三分支逻辑：键不存在 → 写入；键存在且值相同 → 无操作；键存在且值不同 → 根据 `allow_fact_overwrite` 决定覆盖或抛出 `FactConflictError`。
-- 后续若需调整冲突保护策略，只需修改 `_upsert_fact` 一个位置，两处调用自然同步更新，避免遗漏。
+- **`add_fact(fact)`**：公共 API，接收 `Fact` 对象，委托调用 `_upsert_fact(fact.key, fact.value)`。
+- **`_execute_single_action(action)`**：规则动作执行时，`ADD_FACT` 和 `MODIFY_FACT` 两个分支合并为一个条件判断，统一调用 `_upsert_fact(action.fact_key, action.fact_value)`。
+- **`_upsert_fact(key, value)`**：唯一封装冲突保护逻辑的位置，包含完整的三分支逻辑：键不存在 → 写入；键存在且值相同 → 无操作；键存在且值不同 → 根据 `allow_fact_overwrite` 决定覆盖或抛出 `FactConflictError`。
+- 后续若需调整冲突保护策略，只需修改 `_upsert_fact` 一个位置，所有调用方自然同步更新，避免遗漏。
 
 核心代码结构如下：
 
 ```python
+def add_fact(self, fact: Fact) -> None:
+    self._upsert_fact(fact.key, fact.value)
+
 def _execute_single_action(self, action: Action) -> bool:
     if action.action_type in (ActionType.ADD_FACT, ActionType.MODIFY_FACT):
         return self._upsert_fact(action.fact_key, action.fact_value)
@@ -180,6 +184,8 @@ def _upsert_fact(self, key: str, value: Any) -> bool:
         self._facts[key] = value
         return True
 ```
+
+**`add_fact` 与 `_upsert_fact` 的关系**：`add_fact` 是面向外部使用者的公共接口，接收强类型的 `Fact` 对象；`_upsert_fact` 是内部统一的冲突保护实现，接收原始的 `key`/`value` 参数并返回 `bool` 表示事实是否变更。`add_fact` 忽略 `_upsert_fact` 的返回值（因为公共 API 不需要区分新增与覆盖），而 `_execute_single_action` 使用返回值来跟踪事实变更状态以驱动前向链推理。
 
 #### 冲突保护策略的测试覆盖矩阵
 

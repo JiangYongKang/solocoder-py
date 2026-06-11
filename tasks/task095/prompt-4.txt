@@ -1,0 +1,4 @@
+你实现的规则引擎模块仍存在一个问题，需要修复：
+1. RuleEngine.add_fact 公共方法中的冲突保护逻辑（键存在性检查、值相等性比较、allow_fact_overwrite 分支和 FactConflictError 抛出）与 _upsert_fact 私有方法的实现完全重复。上轮提取 _upsert_fact 消除了 _execute_single_action 内 ADD_FACT 和 MODIFY_FACT 的重复，但忽略了 add_fact 这一处同类代码，导致冲突保护策略的修改仍需在两处同步更新。需要消除这处遗留的重复代码。
+2. 修复完成后重新运行 poetry run pytest tests/rule_engine/ -v，确保所有测试通过。
+3. 更新 README.md，补充 add_fact 与 _upsert_fact 的关系说明。
