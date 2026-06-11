@@ -1,0 +1,7 @@
+你实现的 SLA 截止时间模块在第4轮重构后还存在一些遗留问题：
+
+1. sla_timer.py 中新增的 `_iter_running_segments` 生成器方法缺少返回类型注解。该方法产出 `(segment_start, segment_end)` 元组供调用方解包使用，没有类型标注会使 IDE 和类型检查工具无法验证解包的正确性，也不利于后续维护者理解生成器的产出结构。需要为该生成器方法补充完整的返回类型注解。
+
+2. `_iter_running_segments` 生成器在 `end_time` 参数为 `None` 时不产出最后一段运行时段——即最后一个 pause 或 resume 事件之后的无限长运行区间不会被 yield 出去。这导致 `_calculate_actual_deadline` 必须依赖生成器外部的独立 fallback 逻辑（当前第205-207行）来单独处理最后一段。这种设计在生成器与其调用方之间建立了一个隐式约定：不带 `end_time` 的调用方需要自己理解并补上生成器未闭合的最后一段。如果未来该模块新增其他不带 `end_time` 的调用方，开发者很容易遗漏这一约定而引入缺陷。需要调整生成器逻辑，使其在 `end_time` 为 `None` 时同样产出最后一段运行时段，让生成器对两种调用模式的行为保持一致。`_calculate_actual_deadline` 中当前的 fallback 应简化为防御性兜底，不应承担计算职责。
+
+3. 修复上述问题后运行 poetry run pytest tests/sla_deadline/ -v，确保所有测试通过。
