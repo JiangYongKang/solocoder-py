@@ -1,0 +1,3 @@
+你实现的公平读写锁模块在第二轮修复中仍存在一个设计问题，需要修复：
+1. lock.py 的 acquire_read 和 acquire_write 方法中通过 `except Parked: raise` 和 `except Exception:` 两层异常捕获来做控制流区分。Parked 是调度器的控制流信号，但因为它继承自 Exception，导致锁代码不得不显式特判才能避免它被 `except Exception` 误吞。这种靠异常继承顺序来区分控制流和错误的设计是脆弱的。应从根本上解决：修改 scheduler.py 让 Parked 不再继承 Exception（例如使用独立基类），使 `except Exception` 天然排除控制流信号，锁代码无需感知调度器的抛异常机制。
+2. 修复完成后重新运行 poetry run pytest tests/rwlock/ -q，确保所有测试通过。

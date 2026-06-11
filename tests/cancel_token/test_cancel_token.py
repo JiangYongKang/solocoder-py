@@ -235,14 +235,21 @@ class TestConstructorParentRegistration:
         for child in [child1, child2, child3]:
             assert child.parent is root
 
-    def test_constructor_with_cancelled_parent_propagates_cancelled_state(self):
+    def test_constructor_with_cancelled_parent_does_not_override_initially_cancelled(self):
         root = CancelToken(token_id="root")
         root.cancel()
-        child = CancelToken(token_id="child", parent=root)
-        assert child.is_cancelled is True
-        assert child.is_active is False
+        child_active = CancelToken(token_id="child-active", parent=root, initially_cancelled=False)
+        assert child_active.is_cancelled is False
+        assert child_active.is_active is True
         assert root.children_count == 1
-        assert root.children[0] is child
+        assert root.children[0] is child_active
+
+    def test_constructor_with_cancelled_parent_and_initially_cancelled_true(self):
+        root = CancelToken(token_id="root")
+        root.cancel()
+        child_cancelled = CancelToken(token_id="child-cancelled", parent=root, initially_cancelled=True)
+        assert child_cancelled.is_cancelled is True
+        assert child_cancelled.is_active is False
 
     def test_constructor_with_initially_cancelled_flag(self):
         token = CancelToken(token_id="pre-cancelled", initially_cancelled=True)

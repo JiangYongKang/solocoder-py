@@ -1,0 +1,4 @@
+你实现的工作窃取队列模块在第二轮修复中仍存在一些缺陷，需要修复：
+1. models.py 的 mark_failed 方法在设置 FAILED 状态时同时填充了 completed_at 字段。completed_at 在语义上代表任务成功完成的时间点，失败任务不应填充此字段，否则调用方通过 `completed_at is not None` 判断任务完成时会将失败任务也误判为已完成。需要将 completed_at 的赋值限定在 mark_completed 方法内，在 mark_failed 中使用独立的 failed_at 字段记录失败时间。
+2. deque.py 的 size 方法使用手动 acquire/release 获取双锁，而非 Python 推荐的 with 上下文管理器。如果第二把锁的获取因异常情况失败，finally 块尝试释放未持有的锁会引发 RuntimeError 并中止执行，导致第一把锁永久泄露。应改用嵌套上下文管理器确保锁释放的可靠性。
+3. 修复完成后重新运行 poetry run pytest tests/work_stealing_queue/ -q，确保所有测试通过，并验证 mark_failed 后的状态字段语义正确。

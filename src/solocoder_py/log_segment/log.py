@@ -109,7 +109,17 @@ class SegmentedLog:
             return None
 
         if segment_id == -1:
-            return None
+            for seg_id, seg in self.segments.items():
+                if seg.is_recycled:
+                    continue
+                if (
+                    seg.first_logical_offset() <= resolved_offset
+                    <= seg.last_logical_offset()
+                ):
+                    segment_id = seg_id
+                    break
+            if segment_id == -1:
+                return None
 
         if segment_id not in self.segments:
             return None
@@ -152,6 +162,7 @@ class SegmentedLog:
                 )
                 if original_offset != logical:
                     self.compactor.pending_offset_map[original_offset] = logical
+                self.next_logical_offset = max(self.next_logical_offset, logical + 1)
 
         return result
 

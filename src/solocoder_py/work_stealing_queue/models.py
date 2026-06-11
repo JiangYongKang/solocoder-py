@@ -24,6 +24,7 @@ class Task:
     created_at: datetime = field(default_factory=datetime.now)
     stolen_by: str | None = None
     completed_at: datetime | None = None
+    failed_at: datetime | None = None
     error_message: str | None = None
 
     def __post_init__(self) -> None:
@@ -45,5 +46,5 @@ class Task:
 
     def mark_failed(self, error_message: str | None = None) -> None:
         self.status = TaskStatus.FAILED
-        self.completed_at = datetime.now()
+        self.failed_at = datetime.now()
         self.error_message = error_message

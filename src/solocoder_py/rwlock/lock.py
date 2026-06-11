@@ -9,7 +9,7 @@ from .exceptions import (
     RWLockUpgradeError,
 )
 from .models import LockMode, RWLockState, Waiter, WaiterType
-from .scheduler import Scheduler, Parked
+from .scheduler import Scheduler
 
 
 class RWLock:
@@ -49,8 +49,6 @@ class RWLock:
 
             try:
                 self._scheduler.park(tid)
-            except Parked:
-                raise
             except Exception:
                 self._remove_waiter_from_queue(self._state.waiting_readers, ticket)
                 raise
@@ -80,8 +78,6 @@ class RWLock:
 
             try:
                 self._scheduler.park(tid)
-            except Parked:
-                raise
             except Exception:
                 self._remove_waiter_from_queue(self._state.waiting_writers, ticket)
                 raise

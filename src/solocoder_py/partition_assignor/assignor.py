@@ -131,7 +131,7 @@ class PartitionAssignor:
         return newly_orphaned
 
     def rebalance(self) -> RebalanceResult:
-        newly_orphaned = self._process_leaving_consumers()
+        self._process_leaving_consumers()
 
         if not self.consumers:
             raise EmptyConsumerGroupError(

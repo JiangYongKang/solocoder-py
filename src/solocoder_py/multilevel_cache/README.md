@@ -6,7 +6,7 @@
 
 - **两级缓存架构**：L1（小容量、高速）+ L2（大容量、低速）的层次化缓存设计
 - **读穿透回填**：L1 未命中时自动查询 L2，两级都未命中时从数据源加载并依次回填
-- **写失效传播**：写入/更新时同步失效 L1 和 L2 中的对应条目，避免脏读
+- **写直接写入**：写入操作将新值同时写入 L1 和 L2 两级缓存；失效操作通过 `invalidate`/`delete` 执行
 - **独立淘汰策略**：L1 和 L2 各自维护独立的容量限制和 LRU 淘汰策略，互不影响
 - **线程安全**：内置锁机制，支持多线程并发安全访问
 - **统计监控**：提供命中次数、未命中次数、数据源加载次数、淘汰次数等统计信息
@@ -30,7 +30,7 @@
 | 方法 | 说明 |
 |------|------|
 | `get(key: K) -> V` | 读取数据，执行 L1 → L2 → 数据源的穿透查询 |
-| `set(key: K, value: V) -> None` | 写入数据，触发 L1 和 L2 的失效操作 |
+| `set(key: K, value: V) -> None` | 将 value 同时写入 L1 和 L2 两级缓存 |
 | `delete(key: K) -> bool` | 删除指定 key，返回是否删除成功 |
 | `invalidate(key: K) -> None` | 失效指定 key（等同于 delete） |
 | `clear() -> None` | 清空所有缓存并重置统计 |
@@ -55,7 +55,7 @@
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `capacity` | `int` | 缓存容量，0 表示不限制 |
+| `capacity` | `int` | 缓存容量，必须为正整数 |
 
 ### CacheStats
 
@@ -100,16 +100,25 @@ get(key)
          └─ 失败 → 抛出 DataSourceError，不写入任何缓存
 ```
 
-### 写失效传播（Write Invalidation）
+### 写直接写入（Write-Through）
 
 ```
-set(key, value) / invalidate(key)
+set(key, value)
+    │
+    ├─→ 将 value 写入 L2 缓存（更新或新增）
+    └─→ 将 value 写入 L1 缓存（更新或新增）
+```
+
+### 失效传播（Invalidation）
+
+```
+invalidate(key) / delete(key)
     │
     ├─→ 从 L1 缓存删除 key
     └─→ 从 L2 缓存删除 key
 ```
 
-**设计说明**：采用失效策略而非更新策略，确保后续读取必须从数据源加载最新值，避免缓存不一致。
+**设计说明**：`set()` 采用写透（Write-Through）策略，同时更新两级缓存，确保后续直接读取命中。当需要强制从数据源重新加载时，使用 `invalidate()` 或 `delete()` 执行失效操作。
 
 ### 独立容量淘汰
 
@@ -156,10 +165,14 @@ print(cache.get("user:1"))  # Loading user:1 from database... → Alice
 # 第二次读取：L1 命中
 print(cache.get("user:1"))  # Alice（无数据库查询）
 
-# 写入更新
+# 写入更新：直接写入两级缓存，立即生效
 cache.set("user:1", "Alicia")
 
-# 读取新值
+# 读取新值：L1 直接命中，不穿透数据源
+print(cache.get("user:1"))  # Alicia（无数据库查询）
+
+# 若需强制从数据源重新加载，使用 invalidate 而非 set
+cache.invalidate("user:1")
 print(cache.get("user:1"))  # Loading user:1 from database... → Alicia
 ```
 

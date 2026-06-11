@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional
 
 
-class Parked(Exception):
+class Parked(BaseException):
     pass
 
 

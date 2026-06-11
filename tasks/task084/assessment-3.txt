@@ -1,0 +1,5 @@
+产物不满意：
+本轮代码变更本身无产品缺陷。on_original_complete 回调中 set_result 和 set_error 分支、on_timeout 回调中 set_error 分支共三处不可达的 `except FutureAlreadyCompletedError: pass` 死代码已正确删除，FutureAlreadyCompletedError 的 import 也已清理。67 个测试全部通过，无回归问题。改动范围精确匹配提示词要求，未涉及不该修改的代码区域。
+
+过程不满意：
+模型读取 timeout.py 后使用 Write 工具将整个文件（70 行）全量重写，仅为了删除三行 `except FutureAlreadyCompletedError: pass` 和一行 import 语句，这是典型的"重写替代精确编辑"反模式。在真实多人协作的工程环境中，如果 timeout.py 已被其他开发者添加了新代码，Write 全文件覆盖会静默丢失这些并发变更而不触发任何冲突提示或合并警告。本场景只需要删除四处死代码，正确做法是使用字符串替换工具对每处待删除代码做逐一精确删除，只修改需要改变的行，保留文件其余部分不变。对于这种简单删除场景，全文件重写引入了不必要的覆盖风险，也反映出模型缺乏"最小变更原则"的工程意识。

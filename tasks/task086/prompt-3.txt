@@ -1,0 +1,4 @@
+你实现的优先级线程池模块在第二轮修复中仍存在一些遗留问题，需要修复：
+1. README.md 中对 get_task_result 方法的描述仍然不准确。文档写道"若任务尚未完成，started_at 和 completed_at 为 None"，但实际代码对 RUNNING 状态的任务会通过 running_task.started_at 返回有效的开始时间戳，只有 completed_at 为 None。需要将文档描述修正为区分 PENDING 和 RUNNING 两种状态，明确指出 RUNNING 状态下 started_at 有效、completed_at 为 None。
+2. models.py 的 TaskStatus 枚举中 REJECTED 值仍然没有被任何代码路径使用。第二轮模型删除了 CANCELLED 但保留了 REJECTED 声称"预留"，然而 threadpool.py 关闭后拒绝新任务时直接抛出 ThreadPoolShutdownError 异常，从未创建 status=REJECTED 的 TaskResult。需要统一处理方式：要么在 submit 方法中在线程池关闭时不抛异常而是创建 REJECTED 状态的 TaskResult，要么彻底删除 REJECTED 枚举值。
+3. 修复完成后重新运行 poetry run pytest tests/priority_threadpool/ -q，确保所有测试通过。

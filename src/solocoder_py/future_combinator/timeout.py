@@ -4,7 +4,7 @@ import logging
 import threading
 from typing import Optional
 
-from .exceptions import FutureAlreadyCompletedError, FutureTimeoutError
+from .exceptions import FutureTimeoutError
 from .future import Future
 from .models import FutureState
 
@@ -33,15 +33,11 @@ def with_timeout(future: Future, timeout: float) -> Future:
         if f.state == FutureState.COMPLETED:
             try:
                 result_future.set_result(f.result)
-            except FutureAlreadyCompletedError:
-                pass
             except Exception:
                 logger.exception("Unexpected error in with_timeout on_original_complete")
         else:
             try:
                 result_future.set_error(f.error)
-            except FutureAlreadyCompletedError:
-                pass
             except Exception:
                 logger.exception("Unexpected error in with_timeout on_original_complete")
 
@@ -57,8 +53,6 @@ def with_timeout(future: Future, timeout: float) -> Future:
             result_future.set_error(
                 FutureTimeoutError(f"Future timed out after {timeout} seconds")
             )
-        except FutureAlreadyCompletedError:
-            pass
         except Exception:
             logger.exception("Unexpected error in with_timeout on_timeout")
 

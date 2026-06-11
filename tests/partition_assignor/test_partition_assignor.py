@@ -352,6 +352,13 @@ class TestOrphanPartitionRecovery:
 
 
 class TestHeartbeatTimeout:
+    def test_heartbeat_updates_timestamp(self, make_empty_assignor):
+        assignor = make_empty_assignor()
+        assignor.register_consumer("consumer-0")
+        assignor.heartbeat("consumer-0", 100.0)
+        consumer = assignor.get_consumer("consumer-0")
+        assert consumer.last_heartbeat == 100.0
+
     def test_check_heartbeat_timeout_marks_leaving(self, make_balanced_assignor):
         assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
         assignor.heartbeat("consumer-0", 100.0)

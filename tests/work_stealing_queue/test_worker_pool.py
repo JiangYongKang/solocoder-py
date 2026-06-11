@@ -277,6 +277,26 @@ class TestTaskStatusLifecycle:
         assert task.status == TaskStatus.COMPLETED
         assert task.completed_at is not None
 
+    def test_task_failed_status(self):
+        task = Task(id="t2", body="test", owner_worker_id="worker-0")
+        assert task.failed_at is None
+        assert task.error_message is None
+        assert task.completed_at is None
+
+        task.mark_failed("something went wrong")
+        assert task.status == TaskStatus.FAILED
+        assert task.failed_at is not None
+        assert task.error_message == "something went wrong"
+        assert task.completed_at is None
+
+    def test_failed_task_not_marked_completed(self):
+        task = Task(id="t-fail", body="test", owner_worker_id="w")
+        task.mark_failed("error")
+
+        assert task.status != TaskStatus.COMPLETED
+        assert task.completed_at is None
+        assert task.failed_at is not None
+
     def test_task_stolen_status(self):
         task = Task(id="t2", body="test", owner_worker_id="worker-0")
         task.mark_stolen("worker-1")
@@ -308,6 +328,84 @@ class TestPoolStop:
         worker_pool.start(lambda t: None)
         assert worker_pool.is_running
         worker_pool.stop()
+
+
+class TestTaskFailureExecution:
+    def test_failed_tasks_marked_failed(self, single_worker_pool: WorkerPool):
+        def failing_handler(task: Task):
+            raise ValueError("boom")
+
+        single_worker_pool.submit("bad-task")
+        single_worker_pool.start(failing_handler)
+
+        timeout = 2.0
+        start = time.time()
+        while single_worker_pool.failed_count < 1:
+            if time.time() - start > timeout:
+                break
+            time.sleep(0.01)
+
+        single_worker_pool.stop()
+
+        assert single_worker_pool.failed_count == 1
+        assert single_worker_pool.completed_count == 0
+        assert single_worker_pool.submitted_count == 1
+
+    def test_failed_task_has_failed_at_no_completed_at(self, single_worker_pool: WorkerPool):
+        failed_task_ref = []
+
+        def failing_handler(task: Task):
+            failed_task_ref.append(task)
+            raise RuntimeError("test error")
+
+        single_worker_pool.submit("fail-me")
+        single_worker_pool.start(failing_handler)
+
+        timeout = 2.0
+        start = time.time()
+        while single_worker_pool.failed_count < 1:
+            if time.time() - start > timeout:
+                break
+            time.sleep(0.01)
+
+        single_worker_pool.stop()
+
+        assert len(failed_task_ref) == 1
+        task = failed_task_ref[0]
+        assert task.status == TaskStatus.FAILED
+        assert task.failed_at is not None
+        assert task.completed_at is None
+        assert task.error_message == "test error"
+
+    def test_mixed_success_and_failure(self, single_worker_pool: WorkerPool):
+        success_count = 0
+        fail_count = 0
+
+        def mixed_handler(task: Task):
+            nonlocal success_count, fail_count
+            if "fail" in str(task.body):
+                raise Exception(f"failed: {task.body}")
+            success_count += 1
+
+        for i in range(5):
+            single_worker_pool.submit(f"success-{i}")
+        for i in range(3):
+            single_worker_pool.submit(f"fail-{i}")
+
+        single_worker_pool.start(mixed_handler)
+
+        timeout = 2.0
+        start = time.time()
+        while single_worker_pool.completed_count + single_worker_pool.failed_count < 8:
+            if time.time() - start > timeout:
+                break
+            time.sleep(0.01)
+
+        single_worker_pool.stop()
+
+        assert single_worker_pool.completed_count == 5
+        assert single_worker_pool.failed_count == 3
+        assert single_worker_pool.submitted_count == 8
 
 
 class TestErrorCases:

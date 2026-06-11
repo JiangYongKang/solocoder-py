@@ -16,12 +16,7 @@ class CancelToken:
         self._token_id = token_id or str(uuid.uuid4())
         self._parent = parent
         self._children: List["CancelToken"] = []
-        if initially_cancelled:
-            self._is_cancelled = True
-        elif parent is not None and parent.is_cancelled:
-            self._is_cancelled = True
-        else:
-            self._is_cancelled = False
+        self._is_cancelled = initially_cancelled
         if parent is not None:
             parent._children.append(self)
 

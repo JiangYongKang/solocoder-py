@@ -1,0 +1,4 @@
+你实现的多级缓存模块在第二轮修复后需要更新文档与代码保持一致，需要修复：
+1. README.md 中 LRUCache 构造参数说明表格仍标注"0 表示不限制"，但代码已将校验条件从 capacity < 0 改为 capacity <= 0，构造 LRUCache(capacity=0) 会直接抛 InvalidCapacityError。需要将参数表格中对应行的描述修正为"必须为正整数"或直接删除旧描述。
+2. README.md 中 set 方法的描述仍写"触发 L1 和 L2 的失效操作"，写失效传播流程图仍展示旧有的删除行为，但代码已将 set 改为直接写入两级缓存。需要将 set 方法描述、参数说明和写传播流程图全部更新为直接写入语义，与代码行为保持一致。
+3. 修复完成后重新运行 poetry run pytest tests/multilevel_cache/ -q，确保所有测试通过。

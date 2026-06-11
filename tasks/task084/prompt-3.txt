@@ -1,0 +1,3 @@
+你实现的 Future 组合器模块在第二轮修复中引入了一个新问题，需要修复：
+1. timeout.py 的 with_timeout 函数中，on_original_complete 和 on_timeout 两个回调在调用 result_future.set_result 和 result_future.set_error 时添加了 `except FutureAlreadyCompletedError: pass` 的捕获分支。由于两个回调在 Lock 加 settled_flag 的原子性保护下互斥执行，只有第一个通过检查的回调才能进入结算逻辑，此时 result_future 状态一定是 PENDING，FutureAlreadyCompletedError 的捕获分支在所有执行路径下都不可能被触发，属于不可达的死代码。如果未来代码变更确实导致 result_future 被重复结算，静默吞噬异常会掩盖问题根因而非暴露错误。需要删除这两个回调中不可达的 FutureAlreadyCompletedError 捕获分支。
+2. 修复完成后重新运行 poetry run pytest tests/future_combinator/ -q，确保所有测试通过。

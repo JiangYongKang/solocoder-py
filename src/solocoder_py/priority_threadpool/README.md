@@ -29,7 +29,6 @@
 - `RUNNING`：正在执行
 - `SUCCESS`：执行成功
 - `FAILED`：执行过程中抛出业务异常
-- `REJECTED`：线程池已关闭，任务被拒绝
 
 ### ThreadPoolState
 线程池状态枚举。
@@ -90,7 +89,7 @@
 - `run_until_complete()`：运行直到所有已提交任务完成
 - `shutdown(wait: bool = True)`：优雅关闭线程池。`wait=True` 时阻塞直到所有任务完成；`wait=False` 时仅触发关闭流程，需后续调度
 - `wait_for_task(task_id: str, timeout: Optional[float] = None) -> TaskResult`：等待指定任务完成
-- `get_task_result(task_id: str) -> TaskResult`：获取任务结果。若 task_id 不存在则抛出 `TaskNotFoundError`；若任务尚未完成，返回包含当前状态（PENDING 或 RUNNING）的 `TaskResult`，其中 `started_at` 和 `completed_at` 为 `None`
+- `get_task_result(task_id: str) -> TaskResult`：获取任务结果。若 task_id 不存在则抛出 `TaskNotFoundError`；若任务尚未完成，返回包含当前状态的 `TaskResult`：PENDING 状态下 `started_at` 和 `completed_at` 均为 `None`；RUNNING 状态下 `started_at` 为有效时间戳，`completed_at` 为 `None`
 - `get_stats() -> ThreadPoolStats`：获取线程池统计快照
 
 ### 异常类

@@ -19,7 +19,6 @@ class TaskStatus(str, Enum):
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
-    REJECTED = "REJECTED"
 
 
 class ThreadPoolState(str, Enum):

@@ -1,0 +1,4 @@
+你实现的分区分配协调模块在第二轮修复中仍存在一些遗留问题，需要修复：
+1. assignor.py 的 rebalance 方法中，`newly_orphaned = self._process_leaving_consumers()` 捕获了返回值但后续代码中从未使用该变量。_process_leaving_consumers 内部收集了 LEAVING 消费者的分区 ID 并构建列表返回，但调用方完全丢弃了这一计算结果，造成计算资源浪费和代码阅读困惑。需要将返回值真正利用起来（如在 RebalanceResult 中标记哪些是本轮心跳超时回收的孤儿分区），或者改为不赋值直接调用 self._process_leaving_consumers()。
+2. 第二轮修复中模型用全文重写的方式更新了 test_partition_assignor.py，导致原 TestHeartbeat 类中的 `test_heartbeat_updates_timestamp` 测试用例被意外删除。该用例验证 heartbeat 方法能正确更新 last_heartbeat 时间戳，是超时检测功能的前提保障。需要恢复该测试用例，确保对 heartbeat 基本功能的覆盖不退化。
+3. 修复完成后重新运行 poetry run pytest tests/partition_assignor/ -q，确保所有测试通过。

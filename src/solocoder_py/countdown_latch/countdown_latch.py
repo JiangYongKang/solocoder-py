@@ -60,25 +60,20 @@ class CountdownLatch:
                 return
             self._waiting_threads += 1
 
-        try:
-            while True:
-                with self._cond:
+            try:
+                while True:
                     if self._state == LatchState.OPENED:
                         return
 
-                remaining: Optional[float] = None
-                if deadline is not None:
-                    remaining = deadline - self.clock.now()
-                    if remaining <= 0:
-                        raise LatchTimeoutError("Timed out waiting for latch to open")
+                    remaining: Optional[float] = None
+                    if deadline is not None:
+                        remaining = deadline - self.clock.now()
+                        if remaining <= 0:
+                            raise LatchTimeoutError("Timed out waiting for latch to open")
 
-                sleep_time = _POLL_INTERVAL if remaining is None else min(_POLL_INTERVAL, remaining)
-                with self._cond:
-                    if self._state == LatchState.OPENED:
-                        return
+                    sleep_time = _POLL_INTERVAL if remaining is None else min(_POLL_INTERVAL, remaining)
                     self._cond.wait(timeout=sleep_time)
-        finally:
-            with self._cond:
+            finally:
                 self._waiting_threads -= 1
 
     def get_stats(self) -> LatchStats:

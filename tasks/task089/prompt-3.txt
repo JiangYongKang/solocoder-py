@@ -1,0 +1,4 @@
+你实现的日志段保留与压缩模块在第二轮修复中仍存在一些缺陷，需要修复：
+1. log.py 的 compact 方法在 flush 阶段调用 target_seg.append(entry) 写入暂存条目后，未同步更新 SegmentedLog 自身的 next_logical_offset 计数器。正常 append 路径每次都会更新 Self.next_logical_offset，但 flush 路径只更新段级别计数器。当 flush 写入后活动段达到容量上限时，下一次非压缩 append 创建的 new segment 会使用滞后的 next_logical_offset 作为 base_logical_offset，导致新旧段逻辑偏移范围重叠。需要在 flush 循环末尾同步更新 SegmentedLog 级别的 next_logical_offset。
+2. log.py 的 read 方法在消除冗余双重偏移解析时，一并删除了 segment_id == -1 时的线性扫描回退逻辑。当全局映射中残留条目而段级映射因回收操作被移除时，resolve_logical 会返回 -1，旧的回退逻辑可以通过遍历所有未回收段找回段归属来恢复数据，删除后该场景直接返回 None 丢失可恢复数据。需要保留或恢复该防御性回退逻辑，作为映射不一致时的兜底恢复。
+3. 修复完成后重新运行 poetry run pytest tests/log_segment/ -q，确保所有测试通过。
