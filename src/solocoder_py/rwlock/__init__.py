@@ -5,7 +5,7 @@ from .exceptions import (
     RWLockUpgradeError,
 )
 from .models import LockMode, Waiter, WaiterType, RWLockState
-from .scheduler import Scheduler, ManualScheduler, Parked
+from .scheduler import Scheduler, ManualScheduler, ControlFlowSignal, Parked
 from .lock import RWLock
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "RWLockState",
     "Scheduler",
     "ManualScheduler",
+    "ControlFlowSignal",
     "Parked",
     "RWLock",
 ]

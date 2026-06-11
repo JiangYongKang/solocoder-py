@@ -350,6 +350,33 @@ class TestOrphanPartitionRecovery:
             all_assigned.update(partitions)
         assert all_assigned == {0, 1, 2, 3, 4, 5, 6, 7}
 
+    def test_unregister_orphans_not_in_heartbeat_timeout_field(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
+        consumer_0_partitions = set(assignor.get_assignment("consumer-0"))
+        assignor.unregister_consumer("consumer-0")
+        result = assignor.rebalance()
+        assert set(result.orphan_partitions_recovered) == consumer_0_partitions
+        assert len(result.heartbeat_timeout_orphans_recovered) == 0
+
+    def test_mixed_orphans_unregister_and_timeout_distinguished(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=4, num_partitions=8)
+        consumer_0_partitions = set(assignor.get_assignment("consumer-0"))
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 50.0)
+        assignor.heartbeat("consumer-2", 100.0)
+        assignor.heartbeat("consumer-3", 100.0)
+        consumer_1_partitions = set(assignor.get_assignment("consumer-1"))
+        assignor.unregister_consumer("consumer-0")
+        assignor.check_heartbeat_timeout(current_time=130.0, timeout_seconds=30.0)
+        result = assignor.rebalance()
+        all_orphans = consumer_0_partitions | consumer_1_partitions
+        assert set(result.orphan_partitions_recovered) == all_orphans
+        assert set(result.heartbeat_timeout_orphans_recovered) == consumer_1_partitions
+        for pid in consumer_0_partitions:
+            assert pid not in result.heartbeat_timeout_orphans_recovered
+        total = sum(len(p) for p in result.assignments.values())
+        assert total == 8
+
 
 class TestHeartbeatTimeout:
     def test_heartbeat_updates_timestamp(self, make_empty_assignor):
@@ -436,6 +463,40 @@ class TestHeartbeatTimeout:
         assignor.check_heartbeat_timeout(current_time=100.0, timeout_seconds=30.0)
         with pytest.raises(EmptyConsumerGroupError):
             assignor.rebalance()
+
+    def test_heartbeat_timeout_orphans_recorded_in_result(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 100.0)
+        assignor.heartbeat("consumer-2", 50.0)
+        consumer_2_partitions = set(assignor.get_assignment("consumer-2"))
+        assignor.check_heartbeat_timeout(current_time=130.0, timeout_seconds=30.0)
+        result = assignor.rebalance()
+        assert set(result.heartbeat_timeout_orphans_recovered) == consumer_2_partitions
+        assert set(result.orphan_partitions_recovered) == consumer_2_partitions
+
+    def test_no_timeout_heartbeat_orphans_empty(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 100.0)
+        assignor.heartbeat("consumer-2", 100.0)
+        assignor.check_heartbeat_timeout(current_time=120.0, timeout_seconds=30.0)
+        result = assignor.rebalance()
+        assert len(result.heartbeat_timeout_orphans_recovered) == 0
+
+    def test_multiple_heartbeat_timeout_orphans_recorded(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=4, num_partitions=8)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 50.0)
+        assignor.heartbeat("consumer-2", 50.0)
+        assignor.heartbeat("consumer-3", 100.0)
+        consumer_1_partitions = set(assignor.get_assignment("consumer-1"))
+        consumer_2_partitions = set(assignor.get_assignment("consumer-2"))
+        all_timeout_partitions = consumer_1_partitions | consumer_2_partitions
+        assignor.check_heartbeat_timeout(current_time=130.0, timeout_seconds=30.0)
+        result = assignor.rebalance()
+        assert set(result.heartbeat_timeout_orphans_recovered) == all_timeout_partitions
+        assert len(result.heartbeat_timeout_orphans_recovered) == 4
 
 
 class TestBoundaryConditions:

@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional
 
 
-class Parked(BaseException):
+class ControlFlowSignal(BaseException):
+    pass
+
+
+class Parked(ControlFlowSignal):
     pass
 
 

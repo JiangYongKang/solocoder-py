@@ -136,12 +136,8 @@ class WorkStealingDeque(Generic[T]):
 
         按 bottom -> steal 顺序获取锁，与 pop_bottom 慢路径一致，避免死锁。
         """
-        self._bottom_lock.acquire()
-        self._steal_lock.acquire()
-        try:
-            if not self._deque:
-                return None
-            return self._deque.popleft()
-        finally:
-            self._steal_lock.release()
-            self._bottom_lock.release()
+        with self._bottom_lock:
+            with self._steal_lock:
+                if not self._deque:
+                    return None
+                return self._deque.popleft()

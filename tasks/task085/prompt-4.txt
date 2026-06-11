@@ -1,0 +1,3 @@
+你实现的工作窃取队列模块在第三轮修复中遗漏了一处同类缺陷，需要修复：
+1. deque.py 的 _steal_slow_path 方法中存在与 size 方法修复前完全相同的手动双锁 acquire/release 模式。该方法通过连续调用 self._bottom_lock.acquire() 和 self._steal_lock.acquire() 获取双锁，若第二把锁获取时因异常失败，finally 块中对 self._steal_lock.release() 的调用因未持有该锁而抛出 RuntimeError，导致 self._bottom_lock.release() 永远无法执行，底端锁永久泄露。上次修复已将 size 方法改为嵌套 with 上下文管理器，但遗漏了 _steal_slow_path 中的同类模式，需要一并修复。
+2. 修复完成后重新运行 poetry run pytest tests/work_stealing_queue/ -q，确保所有测试通过。

@@ -38,7 +38,7 @@
 - `Consumer`：消费者实体，包含消费者 ID、状态、已分配分区集合和心跳时间
 - `ConsumerStatus`：消费者状态枚举（ACTIVE / LEAVING）
 - `AssignmentChange`：分配变更记录，包含消费者 ID、新分配分区列表、被回收分区列表
-- `RebalanceResult`：再平衡结果，包含世代 ID、完整分配结果、所有变更记录、回收的孤儿分区列表
+- `RebalanceResult`：再平衡结果，包含世代 ID、完整分配结果、所有变更记录、回收的孤儿分区列表，以及心跳超时产生的孤儿分区列表（`heartbeat_timeout_orphans_recovered`）
 
 ### 异常类
 
@@ -135,6 +135,12 @@ ACTIVE -----------> ACTIVE -----------> ACTIVE
 1. 孤儿分区优先被纳入分配流程（在未分配分区之前）
 2. 再平衡完成后，孤儿分区集合和未分配分区集合都被清空
 3. `RebalanceResult` 中记录本次回收的所有孤儿分区
+
+孤儿分区按来源区分，可通过以下字段识别：
+- `orphan_partitions_recovered`：本次再平衡回收的全部孤儿分区（包含所有来源）
+- `heartbeat_timeout_orphans_recovered`：本次再平衡中因**心跳超时**而回收的孤儿分区（unregister_consumer 注销产生的不包含在内）
+
+两个字段的关系为：`heartbeat_timeout_orphans_recovered ⊆ orphan_partitions_recovered`，调用方可通过差集计算出哪些孤儿分区是通过手动注销产生的。
 
 ## 使用示例
 

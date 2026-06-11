@@ -1,0 +1,3 @@
+你实现的公平读写锁模块在第三轮修复中仍存在隐患，需要修复：
+1. scheduler.py 中 Parked 当前直接继承 BaseException。但 BaseException 的直接子类在 Python 异常体系中仅保留给 SystemExit、KeyboardInterrupt、GeneratorExit 和 Exception，前三者均由解释器层直接触发。裸 except: 不带异常类型会静默吞噬 BaseException 的所有子类，包括 Parked，这比之前 except Exception 误捕获控制流信号的问题更隐蔽。Parked 是调度器域内的控制流信号，不应直接并列在解释器级异常层级。需要为调度器域的控制流信号设计独立的中间层基类，使 Parked 与系统级信号在继承层次上分离，同时保持 except Exception 不捕获的穿透特性。
+2. 修复完成后重新运行 poetry run pytest tests/rwlock/ -q，确保所有测试通过。

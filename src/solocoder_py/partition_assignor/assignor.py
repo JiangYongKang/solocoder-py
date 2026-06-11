@@ -131,7 +131,7 @@ class PartitionAssignor:
         return newly_orphaned
 
     def rebalance(self) -> RebalanceResult:
-        self._process_leaving_consumers()
+        heartbeat_timeout_orphans = sorted(self._process_leaving_consumers())
 
         if not self.consumers:
             raise EmptyConsumerGroupError(
@@ -243,4 +243,5 @@ class PartitionAssignor:
             assignments=assignments_result,
             changes=changes,
             orphan_partitions_recovered=orphan_recovered,
+            heartbeat_timeout_orphans_recovered=heartbeat_timeout_orphans,
         )

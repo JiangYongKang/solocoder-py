@@ -1,0 +1,6 @@
+产物不满意：
+本轮修复产物无缺陷。模型在 models.py 的 RebalanceResult 中新增了 heartbeat_timeout_orphans_recovered: list[int] 字段，在 assignor.py 的 rebalance 方法中将 _process_leaving_consumers 的返回值赋给 heartbeat_timeout_orphans 变量并传入 RebalanceResult 构造，使调用方能够区分心跳超时回收的孤儿分区与 unregister 注销产生的孤儿分区。新增了 5 个测试用例覆盖三种场景：心跳超时孤儿分区正确记录、无超时时字段为空、unregister 孤儿不出现在 heartbeat_timeout 字段中、混合来源能被区分、多消费者超时全部记录。65 个测试全部通过，修复方案准确满足了提示词要求。
+
+过程不满意：
+1. 模型在收到提示词后未经文件阅读就直接调用 todo_write 创建了 5 项子任务计划，然后才开始用 view_files 分别读取 models.py 和 assignor.py。这违反了"不能刚收到任务就创建 TodoList，应先分析问题再规划"的标注规范，与第三轮 assessment-3.txt 中对该模式的批评一脉相承。正确做法是先阅读 models.py 中 RebalanceResult 的当前字段定义和 assignor.py 中 _process_leaving_consumers 的返回逻辑与 rebalance 的调用方式，理清现有数据结构后再规划修改范围。
+2. 模型在 TestHeartbeatTimeout 类中新增了 test_heartbeat_updates_timestamp 测试用例，该测试验证心跳调用能正确更新时间戳，属于对已有心跳功能的覆盖，与提示词要求"让 _process_leaving_consumers 返回值纳入 RebalanceResult 区分孤儿分区来源"的目标无关。在缺陷修复会话中编写无关功能的测试属于范围蔓延，会增加标注人员审查负担并混淆本轮变更的真正意图。正确做法是严格聚焦提示词要求的功能点，只编写验证 heartbeat_timeout_orphans_recovered 字段正确性的测试。

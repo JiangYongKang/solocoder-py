@@ -44,3 +44,4 @@ class RebalanceResult:
     assignments: dict[str, list[int]]
     changes: list[AssignmentChange]
     orphan_partitions_recovered: list[int] = field(default_factory=list)
+    heartbeat_timeout_orphans_recovered: list[int] = field(default_factory=list)
