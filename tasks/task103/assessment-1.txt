@@ -1,0 +1,13 @@
+产物不满意：
+1. pool.py 的 `_eviction_loop` 方法中用 `except Exception: pass` 静默吞噬了驱逐过程中的所有异常。当 `_evict_idle_connections` 内部因意外原因抛出异常（如 AttributeError 或并发修改导致的数据结构异常）时，驱逐线程不会终止但也不会继续正常工作，空闲连接永远不会被后续扫描清理，造成"静默连接泄漏"。根因是在编写后台驱逐循环时只考虑了正常路径，未区分预期异常（如连接关闭时的竞态）和程序错误，采用全量捕获加静默忽略的方式牺牲了异常的可观测性。正确做法是至少记录错误日志，或让 `_evict_idle_connections` 内部处理其自身可预见的异常，而非在循环外层兜底吞掉一切。
+
+2. models.py 中 `PoolConfig` 定义了 `health_check_timeout: float = 1.0` 配置字段，但整个 connpool 包中没有任何地方引用或使用该字段。pool.py 的 `_try_borrow_idle` 方法在执行健康检查时直接调用 `conn.health_check()` 而未加任何超时控制，意味着用户即使配置了健康检查超时时间也不会生效。如果后续 `health_check` 的实现变复杂（如真实网络探测），缺少超时机制可能导致借用操作长时间阻塞。根因是定义配置模型时规划了该字段但在实现健康检查逻辑时遗漏了对应的超时控制逻辑。正确做法是要么在 health_check 调用处增加基于该配置的超时机制，要么从 PoolConfig 中移除此未使用的字段以保持配置模型的准确性。
+
+3. 提示词第 5 条明确要求测试"连接数达到零时的借用失败"边界条件，但 tests/connpool/test_connpool.py 中所有 41 个测试用例最小 max_size 为 1，完全没有覆盖 max_size 设为 0 的场景。虽然当前代码在 max_size=0 时 borrow 会因 `len(self._all_conns)` 等于 0 且 `max_size` 为 0 而不满足创建新连接的条件，进而进入等待策略分支（FAIL 时抛 `PoolExhaustedError`），但这个行为路径未经测试验证。根因是编写测试时未逐条对照提示词列出的边界条件清单进行覆盖检查。应增加 `test_borrow_with_max_size_zero` 测试用例，验证 max_size=0 时 borrow 按配置策略正确拒绝请求。
+
+过程不满意：
+1. 模型在收到提示词后的第 1 步（COT 第 1-4 行）未经任何项目文件阅读或需求分析就直接调用 `todo_write` 创建了包含 7 项子任务的执行计划，此时它尚未查看项目目录结构、未理解代码风格、也未阅读任何现有模块代码。这违反了"应先分析问题再规划"的准则，导致初始计划粗粒度划分与实际模块边界脱节，后续在实现过程中需要反复调整计划。正确做法是在创建 TodoList 之前先阅读 pyproject.toml 了解项目配置、查看已有模块理解包结构约定、分析提示词中的需求模块划分后再制定执行计划。
+
+2. 模型在开始 connpool 开发前花了大量步骤阅读 rwlock 模块的全部源码文件（COT 第 41-100 行，包括 __init__.py、lock.py、models.py、exceptions.py、conftest.py 和 README.md），该模块的读写锁功能与当前要实现的 TCP 连接池任务完全无关。虽然了解项目代码风格是有价值的，但深入阅读整个无关模块的代码属于低效的工具使用，消耗了推理资源且对当前任务无直接帮助。正确做法是快速浏览一两个文件确认风格后即开始当前任务，不应在不相关的模块上花费过多时间。
+
+3. 模型在运行测试阶段遇到了 Python 环境问题，从 COT 第 293 行到第 1068 行先后尝试了 5 种以上不同的 Python 解释器路径（pyenv Python、系统 Python、uv Python、cd 到不同目录运行等），甚至在第 659 行创建了绕过 pytest 框架的临时测试脚本 `test_connpool_quick.py` 并随后在第 1868 行将其删除。整个过程暴露出模型未先阅读 pyproject.toml 了解项目构建环境和 pytest 配置的前置分析缺失。正确做法是在首次运行测试前先读取 pyproject.toml 确认正确的测试运行方式（如 `poetry run pytest`），找到正确的 Python 虚拟环境后再运行，而非反复尝试不同的解释器路径。

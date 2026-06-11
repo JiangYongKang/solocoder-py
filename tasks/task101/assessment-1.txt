@@ -1,0 +1,17 @@
+产物不满意：
+1. test_proxy.py 中 `test_whitelist_header_filter` 和 `test_blacklist_header_filter` 两个用例对请求头过滤的验证存在断言错误。被测模型在 `proxy.py` 的 `forward` 方法中先调用 `filter_request_headers` 创建过滤后的请求副本再转发到上游，原始 `request` 对象的 `headers` 字典并未被修改。但两个测试在调用 `proxy.forward(request)` 后仍断言 `"X-Secret" not in [h.lower() for h in request.headers]`，即检查原始请求对象的头列表。由于 `request.headers` 保留了所有未过滤的头，该列表包含 `"x-secret"`，而断言比较的是大小写不一致的字符串 `"X-Secret"`（大写S）与全小写列表，`"X-Secret" != "x-secret"` 恒为 True，两个断言通过纯属巧合。这导致请求头过滤功能在集成测试层面从未被真正验证过，即使 `HeaderFilter.filter_request_headers` 的实现存在严重错误也不会被这两个用例发现。正确做法是在断言中检查返回的 response 对象或通过 mock 服务器的请求记录来验证实际转发到上游的请求头是否已经过滤。
+
+2. `proxy.py` 的 `forward` 方法在第 172 行调用 `self._rewriter_chain.rewrite_response(response, original_request)` 时将重写前的原始请求传给响应改写器，而非第 163 行经过请求改写链处理后的 `modified_request`。`_execute_with_retry(modified_request)` 实际转发到上游的是修改后的请求，但响应改写器中的 `ResponseBodyRewriter.transformer` 接收到的 `request` 参数是未修改的原始请求。如果请求改写器修改了 URL 路径（如 `UrlRewriter` 将 `/api/v1/` 改为 `/api/v2/`），响应改写器仍看到旧路径，依赖 URL 做判断的响应改写逻辑将基于过期上下文做出错误决策。当前测试中所有响应改写器的测试均在 `RewriterChain` 上直接在测试中构造请求对象调用，未覆盖通过 `HttpForwardProxy.forward` 完整流程下响应改写器接收到的请求参数正确性。应改为 `self._rewriter_chain.rewrite_response(response, modified_request)` 并补充对应的集成测试用例。
+
+3. `rewriter.py` 中 `UrlRewriteRule.matches` 方法在第 33 行使用 `self.pattern.search(request.url)` 在整个 URL 字符串上做正则匹配，未限定到 URL 的路径部分。当请求 URL 为 `http://example.com/products?filter=api` 时，改写规则 `api` 也会命中，因为 "api" 出现在查询参数中。虽然当前测试用例的 URL 和 pattern 都相对简单不会触发此问题，但在真实场景下可能导致误改写。原因是未使用 `urllib.parse.urlparse` 对 URL 做结构化解析，将 pattern 仅应用于 path 组件。应改为 `self.pattern.search(urllib.parse.urlparse(request.url).path)` 从而限定匹配范围。
+
+4. `connection_pool.py` 的 `acquire` 方法在第 104 行检查 `len(pool) >= self._config.max_pool_size` 时，若池满且没有空闲连接则会在第 110-113 行抛出 `ConnectionPoolError`。但该方法在第 101 行无条件递增 `self._connection_counter`，即使后续 `conn.acquire()` 在第 125 行抛出异常（如连接状态异常），`connection_counter` 已被计入，导致统计数值与实际获取次数不一致。应改用 `try/finally` 或在成功获取后才递增计数，保证统计准确性。
+
+过程不满意：
+1. 模型在收到提示词后第一步就用 `todo_write` 创建了 10 项子任务计划，然后才开始用 `view_folder`、`view_files`、`file_search` 探索项目结构、现有代码风格和 pyproject.toml 配置。提示词规范明确要求不能一收到任务就直接创建 TodoList，应先分析需求再规划。先规划后探索导致初始计划基于对项目的错误假设制定，后续实施中虽然没有明显推翻已规划的任务结构，但规划的粒度是在读代码之前定的，存在与实际模块边界不匹配的风险。
+
+2. 模型在首次运行测试发现 7 个失败用例后进入了 4 轮试错式调试循环。第一轮修改了 `_execute_with_retry` 和 `forward` 方法；第二轮修改了 `UpstreamServer.mark_failed` 的状态设置逻辑；第三轮又修改了 `_execute_with_retry` 的重试逻辑和 `failover.py` 的 `get_upstream` 方法；第四轮才定位到 `MockUpstreamServer._check_available` 中 `duration=0` 时的 bug。每次修改后直接运行全量测试看结果，未先阅读失败用例的堆栈信息来准确定位问题根因。`proxy.py` 中的重试逻辑被反复修改了三次方向，说明模型对故障转移与连接重试的交互理解不清晰。正确做法是每次测试失败后先分析堆栈追溯到具体出错行，评估是哪个模块的责任，再做最小范围修正。
+
+3. 模型在调试过程中重复读取了 `proxy.py`（至少 3 次）、`mock_server.py`（至少 2 次）、`failover.py`（至少 2 次）和 `models.py`（至少 2 次）。同一文件被多次查看但每次查看后只做了一处修改就又重新运行测试，而不是在一次性完整理解文件逻辑后再做系统性的修正。这种零散读取和修改的模式降低了调试效率，应在一轮阅读中整理所有关联的修改点然后一次性改完，再用一次测试运行验证。
+
+4. 模型在写完所有代码和测试后进行了 4 轮修复才让全部 33 个测试通过，但在最终总结中称"所有 33 个测试全部通过"并展示了代码文件列表和文档内容，未提及中间经历了多轮失败和修复过程。虽然模型确实在每一轮之间运行了测试，但对最终结果的呈现掩盖了开发过程中的问题，没有如实反映迭代修复的真实情况。
