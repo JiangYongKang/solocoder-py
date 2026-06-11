@@ -794,6 +794,81 @@ class TestExceptionBranches:
                 comment="驳回",
             )
 
+    def test_cannot_operate_on_rejected_node_without_resubmit(
+        self, engine: ApprovalWorkflowEngine
+    ) -> None:
+        nodes, approvers = make_sequential_nodes(
+            node_count=3, approvers_per_node=2
+        )
+        definition = WorkflowDefinition(
+            id="wf-reject-status-defense",
+            name="驳回节点状态防御测试",
+            nodes=nodes,
+            approvers=approvers,
+        )
+        engine.register_definition(definition)
+        instance = engine.start_workflow(definition.id)
+
+        for i in range(6):
+            engine.approve(instance.id, f"approver-{i}")
+
+        assert instance.current_node_index == 3
+        assert instance.status == WorkflowStatus.APPROVED
+
+        instance.status = WorkflowStatus.RUNNING
+        instance.current_node_index = 2
+        instance.node_states["node-2"].status = NodeStatus.IN_PROGRESS
+        instance.node_states["node-2"].sequential_index = 0
+        for aid in ["approver-4", "approver-5"]:
+            instance.node_states["node-2"].approver_states[aid].status = (
+                ApprovalStatus.PENDING
+            )
+            instance.node_states["node-2"].approver_states[aid].record = None
+        instance.approval_records = [
+            r
+            for r in instance.approval_records
+            if r.node_id != "node-2"
+        ]
+
+        engine.reject(
+            instance.id,
+            "approver-4",
+            target_node_id="node-1",
+            comment="驳回测试",
+        )
+
+        assert instance.current_node_index == 1
+        assert (
+            instance.node_states["node-1"].status == NodeStatus.REJECTED
+        )
+
+        with pytest.raises(WorkflowExecutionError) as excinfo:
+            engine.approve(instance.id, "approver-2")
+        assert "not in progress" in str(excinfo.value).lower()
+        assert "resubmit" in str(excinfo.value).lower()
+
+        with pytest.raises(WorkflowExecutionError) as excinfo:
+            engine.reject(
+                instance.id,
+                "approver-2",
+                target_node_id="node-0",
+                comment="再次驳回",
+            )
+        assert "not in progress" in str(excinfo.value).lower()
+        assert "resubmit" in str(excinfo.value).lower()
+
+        engine.resubmit(instance.id, "approver-4", "已修正")
+        assert (
+            instance.node_states["node-1"].status
+            == NodeStatus.IN_PROGRESS
+        )
+
+        engine.approve(instance.id, "approver-2")
+        engine.approve(instance.id, "approver-3")
+        engine.approve(instance.id, "approver-4")
+        engine.approve(instance.id, "approver-5")
+        assert instance.status == WorkflowStatus.APPROVED
+
 
 class TestApprovalRecords:
     def test_records_track_comment_and_timestamp(

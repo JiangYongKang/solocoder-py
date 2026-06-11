@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import abc
 import copy
 import threading
 from typing import Any, Callable, Dict, List, Optional
@@ -19,18 +20,22 @@ from .models import (
 )
 
 
-class CheckpointStore:
+class CheckpointStore(abc.ABC):
+    @abc.abstractmethod
     def save(self, checkpoint: int, state: MigrationState) -> None:
-        raise NotImplementedError
+        ...
 
+    @abc.abstractmethod
     def load(self) -> Optional[int]:
-        raise NotImplementedError
+        ...
 
+    @abc.abstractmethod
     def load_state(self) -> Optional[MigrationState]:
-        raise NotImplementedError
+        ...
 
+    @abc.abstractmethod
     def clear(self) -> None:
-        raise NotImplementedError
+        ...
 
 
 class InMemoryCheckpointStore(CheckpointStore):
@@ -305,7 +310,7 @@ class DataMigrator:
                 self._save_checkpoint()
                 raise
 
-    def _restore_migration_state(self, checkpoint: int) -> None:
+    def _restore_migration_state(self, checkpoint: int, write_data: bool = True) -> None:
         if checkpoint < 0:
             return
 
@@ -317,13 +322,14 @@ class DataMigrator:
             batch_info = self._state.batches[i]
             batch_info.status = BatchStatus.COMPLETED
 
-            records = self._source_data[batch_info.start_index : batch_info.end_index]
-            if self._custom_batch_migrator:
-                self._custom_batch_migrator(records)
-            else:
-                for record in records:
-                    record_id = self._id_extractor(record)
-                    self._target_store[record_id] = record
+            if write_data:
+                records = self._source_data[batch_info.start_index : batch_info.end_index]
+                if self._custom_batch_migrator:
+                    self._custom_batch_migrator(records)
+                else:
+                    for record in records:
+                        record_id = self._id_extractor(record)
+                        self._target_store[record_id] = record
 
         self._state.checkpoint = effective_checkpoint
         self._state.completed_batches = effective_checkpoint + 1
@@ -334,17 +340,13 @@ class DataMigrator:
             if checkpoint < 0:
                 return self.migrate()
 
-            stored_state = None
-            try:
-                stored_state = self._checkpoint_store.load_state()
-            except NotImplementedError:
-                stored_state = None
+            stored_state = self._checkpoint_store.load_state()
 
             if stored_state and stored_state.status in (
                 MigrationStatus.FAILED,
                 MigrationStatus.ROLLING_BACK,
             ):
-                self._restore_migration_state(checkpoint)
+                self._restore_migration_state(checkpoint, write_data=False)
                 if stored_state.failed_batch_index is not None:
                     failed_idx = stored_state.failed_batch_index
                     if 0 <= failed_idx < len(self._state.batches):
@@ -352,7 +354,7 @@ class DataMigrator:
                         self._state.batches[failed_idx].error_message = stored_state.batches[failed_idx].error_message
                 return self.rollback()
 
-            self._restore_migration_state(checkpoint)
+            self._restore_migration_state(checkpoint, write_data=True)
 
             if checkpoint >= self._state.total_batches - 1:
                 self._state.status = MigrationStatus.COMPLETED
@@ -370,10 +372,7 @@ class DataMigrator:
                     batch.status = BatchStatus.ROLLED_BACK
                 return self.state
 
-            self._restore_migration_state(checkpoint)
-
-            for i in range(checkpoint + 1, self._state.total_batches):
-                self._state.batches[i].status = BatchStatus.ROLLED_BACK
+            self._restore_migration_state(checkpoint, write_data=False)
 
             return self.rollback()
 

@@ -1,0 +1,4 @@
+你实现的撤销重做栈模块仍存在一个问题，需要修复：
+1. test_transaction_rollback_middle_failure_preserves_state 测试用例只断定了回滚失败后 counter 的值为 600，没有检查 has_active_transaction 是否为 False、undo_count 和 redo_count 是否正确。这与上轮提示词批评的"原有测试只验证栈计数而未断言业务数据"是同类覆盖盲区——修复了别人的问题后自己新增的测试犯了相同的模式。rollback_transaction 方法将 self._state.active_transaction 置空放在 try 块之前，回滚失败后活动事务已丢失，但测试完全没有感知到这一状态变化。需要补充对这三个维度的全量状态断言，确保回滚失败后业务数据、活动事务标志和栈计数三个维度都处于一致状态。
+2. 修复完成后重新运行 poetry run pytest tests/undo_redo/ -v，确保所有测试通过。
+3. 更新 README.md，说明事务组回滚失败后的状态完整性约定。

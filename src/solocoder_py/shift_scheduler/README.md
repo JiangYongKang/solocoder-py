@@ -79,6 +79,24 @@
 
 > **提示**：建议每次生成排班表前先调用 `clear_schedule()` 清空旧数据，或者确保使用相同的起始对齐点和人员顺序，以获得最可预测的排班结果。
 
+### 返回值与内部状态一致性约定
+
+`generate_rotation_schedule` 的返回值类型为 `Dict[date, List[StaffId]]`，具有以下一致性保证：
+
+1. **始终同步内部状态**：返回值是在每次对 `_schedule` 完成写入（或跳过写入）之后，直接从 `_schedule` 中读取当天的完整值班人员列表生成的。因此对于日期范围内的任意一天，`result[date]` 恒等于 `scheduler.get_assignment(date)`，调用者无需额外查询即可获取最新的排班状态。
+
+2. **反映完整历史分配**：如果某一天在本次调用前已存在分配（例如通过 `set_shift` 手动添加，或上次 `generate_rotation_schedule` 时不同顺序的分配），本次返回值也会完整包含这些历史分配，而不仅仅是本次轮转的理想人员。这意味着：
+   - 当不同顺序的轮转产生冲突时，返回值中该日期的列表会包含多位值班人员，调用者可以据此感知冲突。
+   - 当同一人员被幂等跳过时，返回值仍然正确显示该人员（因为他本来就已在排班表中）。
+
+3. **无超前写入**：与旧实现不同，`result` 的写入时机在重复检测和实际写入完成之后，确保不会出现"返回值声称分配了某人员，但实际排班表中不存在"的不一致情况。
+
+4. **单一信任源**：调用者如需判断排班表实际内容，可以任选以下一种方式：
+   - 直接使用返回值（适用于仅关心本次日期范围）
+   - 调用 `scheduler.get_assignment(date)` 或 `scheduler.get_schedule_range()` 查询（适用于任意日期范围）
+   
+   两种方式返回的结果完全一致。
+
 ### 示例
 
 假设值班人员顺序为 [Alice, Bob, Charlie, Dave]，排班日期范围为 2026-06-28 至 2026-07-04：
@@ -208,9 +226,16 @@ schedule = scheduler.generate_rotation_schedule(
     end_date=date(2026, 6, 30),
 )
 
-# 查看某天的值班人员
-jun_15_assignment = scheduler.get_assignment(date(2026, 6, 15))
-print(f"6 月 15 日值班: {jun_15_assignment}")
+# schedule 的类型为 Dict[date, List[StaffId]]，与内部状态完全一致
+# 对于任意一天 d: schedule[d] == scheduler.get_assignment(d)
+assert schedule[date(2026, 6, 1)] == scheduler.get_assignment(date(2026, 6, 1))
+
+# 查看某天的值班人员（列表形式，可能为多人）
+jun_15_assignment = schedule[date(2026, 6, 15)]
+print(f"6 月 15 日值班人员数: {len(jun_15_assignment)}")
+for sid in jun_15_assignment:
+    staff = scheduler.get_staff(sid)
+    print(f"  - {staff.name}")
 
 # 验证排班表是否有空档或重复
 result = scheduler.validate_schedule()

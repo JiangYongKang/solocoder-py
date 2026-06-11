@@ -548,6 +548,8 @@ class TestTransactionUndoFailure:
 
         assert counter["value"] == 600
         assert stack.state.has_active_transaction is True
+        assert stack.undo_count == 0
+        assert stack.redo_count == 0
 
         fail_at["cmd2"] = True
 
@@ -555,6 +557,9 @@ class TestTransactionUndoFailure:
             stack.rollback_transaction()
 
         assert counter["value"] == 600
+        assert stack.state.has_active_transaction is True
+        assert stack.undo_count == 0
+        assert stack.redo_count == 0
 
 
 class TestSameTransactionContinuousBoundary:

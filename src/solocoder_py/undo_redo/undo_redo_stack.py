@@ -161,7 +161,6 @@ class UndoRedoStack:
             )
 
         transaction = self._state.active_transaction
-        self._state.active_transaction = None
 
         undone_commands: List[Command] = []
         try:
@@ -172,6 +171,8 @@ class UndoRedoStack:
             for cmd in undone_commands:
                 self._execute_command(cmd)
             raise
+
+        self._state.active_transaction = None
 
     def _clear_redo_stack(self) -> None:
         self._state.redo_stack.clear()

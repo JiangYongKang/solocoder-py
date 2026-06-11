@@ -68,7 +68,7 @@ class ShiftScheduler:
         staff_order: List[StaffId],
         start_date: date,
         end_date: date,
-    ) -> Dict[date, StaffId]:
+    ) -> Dict[date, List[StaffId]]:
         if start_date is None or end_date is None:
             raise ValueError("start_date and end_date cannot be None")
         if start_date > end_date:
@@ -81,7 +81,7 @@ class ShiftScheduler:
                 if sid not in self._staff:
                     raise StaffNotFoundError(f"Staff {sid} not found")
 
-            result: Dict[date, StaffId] = {}
+            result: Dict[date, List[StaffId]] = {}
             staff_count = len(staff_order)
             current_date = start_date
             day_index = 0
@@ -89,7 +89,6 @@ class ShiftScheduler:
             while current_date <= end_date:
                 staff_idx = day_index % staff_count
                 assigned_staff = staff_order[staff_idx]
-                result[current_date] = assigned_staff
 
                 if current_date in self._schedule:
                     already_assigned = any(
@@ -104,6 +103,8 @@ class ShiftScheduler:
                     self._schedule[current_date] = [
                         ShiftAssignment(shift_date=current_date, staff_id=assigned_staff)
                     ]
+
+                result[current_date] = [a.staff_id for a in self._schedule[current_date]]
 
                 current_date += timedelta(days=1)
                 day_index += 1

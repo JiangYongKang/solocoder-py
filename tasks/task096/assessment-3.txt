@@ -1,0 +1,7 @@
+产物不满意：
+1. 新增的 test_cannot_operate_on_rejected_node_without_resubmit 测试在 setUp 阶段通过直接修改 instance.status、current_node_index、node_states 内部字段和 approval_records 列表的方式构造驳回场景，手动状态操作达到 13 行，涉及 5 个不同字段的硬编码赋值。这种绕过公共 API 的测试构造方式与引擎内部实现细节高度耦合，当引擎的内部状态管理逻辑发生重构（如审批记录存储从列表改为字典）时，测试将因非业务性原因失败。正确做法是通过调用 start_workflow 启动实例、通过 approve 推进到目标节点、通过 reject 产生驳回状态，用公共 API 构造测试前置条件后再验证 REJECTED 状态下的防御行为。
+过程不满意：
+1. 模型在刚收到提示词后未经任何代码分析就直接连续创建了两次 todo_write，第一次与第二次的内容完全一致，属于重复操作。随后才开始读取 engine.py 查看现有代码结构。这违反了"先分析需求文档和现有代码、理清改动范围后再制定执行计划"的标注规范要求，应先读代码理解 _check_can_approve 和 _check_can_reject 的当前实现差异，明确需要合并的维度，再规划子任务。
+2. 模型在整个修复过程中对 engine.py 进行了至少三次反复读取（查看方法开头、确认 _check_approver_in_node 存在、重构前再次查看），但三次读取的目标区域高度重叠，第二次和第三次读取未带来新的信息增量。属于无意义的重复读取，应先一次性完整读取文件，整理出所有需要改动的方法及其行号范围，再集中执行编辑操作，而非读一段改一段。
+3. 模型的执行顺序是先完成所有代码修改（合并方法、删除死代码、更新调用方），运行测试确认 30 个通过后，再用 search_by_regex 和 view_files 去探索现有测试覆盖情况并补充新测试。这意味着新测试是在代码改动完成后才被纳入考量的，如果_test_can_operate_合并过程中引入了逻辑漏洞，首轮测试因为缺少针对性用例而未能发现，后续补充测试时才暴露出问题就需要回退代码修改。正确做法是在规划阶段就分析提示词中隐含的测试需求（驳回后 REJECTED 状态节点既不能 approve 也不能 reject），在修改代码前先编写会失败的测试用例，再用代码改动使其通过。
+4. 模型在最终总结（session-cot-3.md 末尾）中声称"新增 6 个测试用例（总数从 25 到 31）"并列表了包括 test_reject_sequential_order_constraint、test_reject_after_approve_not_allowed、test_get_pending_approvers_includes_dynamic_escalated 等测试，同时声称完成了"驳回后节点状态流转规则修正""reject 操作增加串行顺序约束""get_pending_approvers 支持动态审批人"等改动。但这些测试和功能改动实际是在上一轮（session-2）中完成的，本轮仅新增了 test_cannot_operate_on_rejected_node_without_resubmit 这一条测试以及 _check_can_operate 方法合并、死代码删除和文档修复。模型将之前轮次的工作成果归入本轮修复的总结，属于典型的过程幻觉，夸大了本轮的交付范围，会误导后续标注人员对每轮实际产出的判断。

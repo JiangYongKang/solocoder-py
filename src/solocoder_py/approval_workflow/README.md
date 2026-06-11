@@ -72,9 +72,10 @@
 ### 串行节点 (SEQUENTIAL)
 
 - 节点关联的审批人必须按列表顺序依次审批
+- **操作顺序约束**：`approve` 和 `reject` 操作均严格执行顺序检查，非当前轮到的审批人尝试操作会抛出异常
 - 前一个审批人通过后，自动流转到下一个审批人，并发送通知
 - 所有原始审批人全部通过，或升级后的上级审批人通过，节点即通过
-- 非当前轮到的审批人尝试审批会抛出异常
+- 已审批过的审批人无法再次驳回（状态已为 APPROVED，不是 PENDING）
 
 #### 操作顺序约束
 
@@ -301,6 +302,9 @@ cs_node = ApprovalNode(
 ### 3. 驳回回退示例
 
 ```python
+# 先让审批流进入总监节点
+engine.approve(instance.id, "mgr-1", comment="同意")
+
 # 在总监节点驳回至主管节点
 engine.reject(
     instance_id=instance.id,
@@ -309,8 +313,17 @@ engine.reject(
     comment="资料不全，请补充后重新提交",
 )
 
-# 主管重新审批
+# 此时节点状态为 REJECTED，无法直接审批
+# engine.approve(instance.id, "mgr-1")  # 会抛出异常: Node not in progress
+
+# 必须先调用 resubmit 激活节点
+engine.resubmit(instance.id, "dir-1", comment="已补充资料，重新提交")
+
+# 激活后节点状态变为 IN_PROGRESS，主管可以重新审批
 engine.approve(instance.id, "mgr-1", comment="已补充资料")
+
+# 继续后续审批
+engine.approve(instance.id, "dir-1", comment="批准")
 ```
 
 ### 4. 超时升级示例

@@ -556,6 +556,22 @@ class TestActionTypes:
         res = engine_with_overwrite.run()
         assert res.final_facts["x"] == 100
 
+    def test_modify_fact_on_missing_key_adds_fact(self, engine):
+        r = Rule(
+            rule_id="modify_new",
+            name="modify on missing key creates fact",
+            conditions=[FactCondition(key="trigger", operator=FactOperator.EQ, expected_value=True)],
+            actions=[
+                Action(action_type=ActionType.MODIFY_FACT, fact_key="new_fact", fact_value="created"),
+            ],
+        )
+        engine.add_rule(r)
+        engine.add_fact(Fact(key="trigger", value=True))
+        res = engine.run()
+        assert res.converged is True
+        assert res.final_facts.get("trigger") is True
+        assert res.final_facts.get("new_fact") == "created"
+
     def test_remove_fact_action(self, engine):
         r = Rule(
             rule_id="remove",
@@ -621,7 +637,7 @@ class TestActionTypes:
         assert result.final_facts.get("final") == "done"
         assert any(rec.rule_id == "chained" for rec in result.execution_history)
 
-    def test_external_callback_removes_fact_detected_as_change(self, engine_with_overwrite):
+    def test_external_callback_removes_fact_detected_as_change(self, engine):
         initial_facts_holder = {}
 
         def remove_fact_via_callback(eng, facts):
@@ -648,13 +664,13 @@ class TestActionTypes:
                 Action(action_type=ActionType.ADD_FACT, fact_key="removal_confirmed", fact_value=True),
             ],
         )
-        engine_with_overwrite.add_rule(r_ext)
-        engine_with_overwrite.add_rule(r_check)
-        engine_with_overwrite.add_facts([
+        engine.add_rule(r_ext)
+        engine.add_rule(r_check)
+        engine.add_facts([
             Fact(key="trigger", value=True),
             Fact(key="to_remove", value="hello"),
         ])
-        result = engine_with_overwrite.run()
+        result = engine.run()
 
         assert result.converged is True
         assert "to_remove" not in result.final_facts

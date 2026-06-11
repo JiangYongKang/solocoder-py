@@ -1,0 +1,5 @@
+你实现的数据迁移执行模块仍存在一些问题，需要修复：
+1. resume_from_checkpoint 方法在去除 isinstance 类型判断后，改用 try/except NotImplementedError 捕获 load_state 的未实现情况，将异常吞掉后把 stored_state 设为 None。当开发者实现自定义 CheckpointStore 子类但忘记实现 load_state 方法时，失败状态恢复自动触发回滚的机制被静默绕过，目标端残留已迁移但应回滚的数据。需要在基类层面强制契约约束，让未实现必需抽象方法的子类在实例化阶段就报错，而不是等到运行时静默跳过。
+2. _restore_migration_state 方法在 resume_from_checkpoint 的失败恢复路径上（第 347 行）先将已完成批次数据逐批写入目标存储，紧接着第 353 行调用 rollback 又将同一批数据逐批删除，产生了无效的写删循环。在失败恢复路径上只需要恢复批次状态标记和设置失败批次信息，不需要实际写回数据到目标存储。需要让 _restore_migration_state 能区分正常续传和失败恢复两种场景。
+3. 修复完成后重新运行 poetry run pytest tests/data_migration/ -v，确保所有测试通过。
+4. 更新 README.md，说明 CheckpointStore 的接口契约设计（抽象方法强制约定）和断点续传时正常续传与失败恢复的差异化数据恢复策略。

@@ -1,0 +1,7 @@
+你实现的审批流引擎仍存在一些问题，需要修复：
+1. _check_can_reject 方法缺少对节点状态的校验入口。_check_can_approve 在入口第一行验证了 node_state.status 必须为 IN_PROGRESS，拒绝处理 REJECTED 状态的节点。但 _check_can_reject 没有做同等检查，当工作流被驳回后目标节点处于 REJECTED 状态并成为当前节点时，处于正确 sequential_index 的审批人可以绕过节点状态防御直接调用 reject，导致 approve 和 reject 两道操作对节点状态的保护层次不对称。
+2. engine.py 中 _check_approver_in_node 方法在本次修复后被 _check_can_approve 和 _check_can_reject 替代，不再被任何代码调用，属于废弃死代码。保留它会混淆后续维护者的判断。
+3. README.md 的"驳回回退示例"展示 engine.reject 后直接调用 engine.approve，中间缺少 engine.resubmit 步骤。而文档新增的"节点状态流转规则"明确要求 reject 后节点状态为 REJECTED 必须通过 resubmit 激活为 IN_PROGRESS 才能审批，文档内部示例与规则相矛盾。
+4. _check_can_approve 和 _check_can_reject 两个方法在审批人存在性校验、审批人自身状态校验和串行顺序约束检查三个维度上逻辑完全重复，仅错误消息文案不同。需要消除这处重复代码。
+5. 修复完成后重新运行 poetry run pytest tests/approval_workflow/ -v，确保所有测试通过。
+6. 更新 README.md，确保驳回回退的使用示例与实际状态流转规则一致，清除内部矛盾。

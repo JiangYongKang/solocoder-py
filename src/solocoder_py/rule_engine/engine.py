@@ -277,33 +277,8 @@ class RuleEngine:
         return facts_changed
 
     def _execute_single_action(self, action: Action) -> bool:
-        if action.action_type == ActionType.ADD_FACT:
-            key = action.fact_key
-            value = action.fact_value
-            if key in self._facts:
-                if self._facts[key] != value:
-                    if self._allow_fact_overwrite:
-                        self._facts[key] = value
-                        return True
-                    raise FactConflictError(key, self._facts[key], value)
-                return False
-            else:
-                self._facts[key] = value
-                return True
-
-        if action.action_type == ActionType.MODIFY_FACT:
-            key = action.fact_key
-            value = action.fact_value
-            if key in self._facts:
-                if self._facts[key] != value:
-                    if self._allow_fact_overwrite:
-                        self._facts[key] = value
-                        return True
-                    raise FactConflictError(key, self._facts[key], value)
-                return False
-            else:
-                self._facts[key] = value
-                return True
+        if action.action_type in (ActionType.ADD_FACT, ActionType.MODIFY_FACT):
+            return self._upsert_fact(action.fact_key, action.fact_value)
 
         if action.action_type == ActionType.REMOVE_FACT:
             key = action.fact_key
@@ -319,3 +294,15 @@ class RuleEngine:
             return snapshot_before != snapshot_after
 
         raise InvalidRuleError(f"Unknown action type: {action.action_type}")
+
+    def _upsert_fact(self, key: str, value: Any) -> bool:
+        if key in self._facts:
+            if self._facts[key] != value:
+                if self._allow_fact_overwrite:
+                    self._facts[key] = value
+                    return True
+                raise FactConflictError(key, self._facts[key], value)
+            return False
+        else:
+            self._facts[key] = value
+            return True

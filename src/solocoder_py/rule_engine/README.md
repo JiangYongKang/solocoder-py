@@ -152,6 +152,55 @@
 
 `REMOVE_FACT` 动作不受此标志影响，若键存在则直接删除并返回 `True`，不存在则返回 `False`。
 
+#### 冲突保护策略的代码实现方式
+
+`ADD_FACT` 和 `MODIFY_FACT` 共用同一套冲突保护逻辑，通过提取私有辅助方法 `_upsert_fact(key, value)` 来消除代码重复：
+
+- 在 `_execute_single_action` 中，`ADD_FACT` 和 `MODIFY_FACT` 两个分支合并为一个条件判断，统一调用 `_upsert_fact(action.fact_key, action.fact_value)`。
+- `_upsert_fact` 方法封装了完整的三分支逻辑：键不存在 → 写入；键存在且值相同 → 无操作；键存在且值不同 → 根据 `allow_fact_overwrite` 决定覆盖或抛出 `FactConflictError`。
+- 后续若需调整冲突保护策略，只需修改 `_upsert_fact` 一个位置，两处调用自然同步更新，避免遗漏。
+
+核心代码结构如下：
+
+```python
+def _execute_single_action(self, action: Action) -> bool:
+    if action.action_type in (ActionType.ADD_FACT, ActionType.MODIFY_FACT):
+        return self._upsert_fact(action.fact_key, action.fact_value)
+    # ... 其他动作类型 ...
+
+def _upsert_fact(self, key: str, value: Any) -> bool:
+    if key in self._facts:
+        if self._facts[key] != value:
+            if self._allow_fact_overwrite:
+                self._facts[key] = value
+                return True
+            raise FactConflictError(key, self._facts[key], value)
+        return False
+    else:
+        self._facts[key] = value
+        return True
+```
+
+#### 冲突保护策略的测试覆盖矩阵
+
+以下矩阵列出了所有针对 `ADD_FACT` / `MODIFY_FACT` 冲突保护策略的测试用例及其覆盖的场景：
+
+| 动作类型     | 键存在性 | 旧值 vs 新值 | allow_fact_overwrite | 期望行为                              | 测试用例                                                                  |
+|--------------|----------|--------------|----------------------|---------------------------------------|---------------------------------------------------------------------------|
+| `ADD_FACT`   | 不存在   | —            | False                | 新增事实，返回 True                   | `test_add_fact_action`                                                   |
+| `ADD_FACT`   | 存在     | 值相同       | False                | 无操作，返回 False，不抛异常          | `test_add_duplicate_fact_same_value_no_conflict` (FactManagement)        |
+| `ADD_FACT`   | 存在     | 值不同       | False                | 抛出 `FactConflictError`              | `test_add_fact_conflict_during_rule_execution`                           |
+| `ADD_FACT`   | 存在     | 值不同       | True                 | 覆盖旧值，返回 True                   | `test_modify_fact_during_execution_with_overwrite` (动作类型 ADD_FACT)    |
+| `MODIFY_FACT`| 不存在   | —            | False                | 新增事实，返回 True                   | `test_modify_fact_on_missing_key_adds_fact`                              |
+| `MODIFY_FACT`| 存在     | 值相同       | False                | 无操作，返回 False，不抛异常          | `test_modify_fact_same_value_no_conflict`                                |
+| `MODIFY_FACT`| 存在     | 值不同       | False                | 抛出 `FactConflictError`              | `test_modify_fact_conflict_during_rule_execution`                        |
+| `MODIFY_FACT`| 存在     | 值不同       | True                 | 覆盖旧值，返回 True                   | `test_modify_fact_action`                                                |
+| `MODIFY_FACT`| 存在     | 值不同       | True                 | 覆盖旧值，返回 True（独立验证）       | `test_modify_fact_with_overwrite_allowed`                                |
+
+**补充说明**：
+- `FactConflictError` 在规则执行期间被上层 `run()` 捕获，包装为 `RuleExecutionError`（携带 `rule_id` 和原始异常 `cause`）抛出 —— 由 `test_add_fact_conflict_during_rule_execution` 和 `test_modify_fact_conflict_during_rule_execution` 验证。
+- `add_fact()` API（非规则动作）层面的冲突保护由 `FactManagement` 类的测试独立验证。
+
 ## 使用示例
 
 ### 示例 1：单条规则匹配触发

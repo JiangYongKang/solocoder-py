@@ -115,8 +115,8 @@ class ApprovalWorkflowEngine:
             current_node = self._get_current_node(instance, definition)
             node_state = instance.node_states[current_node.id]
 
-            self._check_can_approve(
-                instance, current_node, node_state, approver_id, definition
+            self._check_can_operate(
+                instance, current_node, node_state, approver_id, definition, "approve"
             )
 
             self._apply_approval(
@@ -141,8 +141,8 @@ class ApprovalWorkflowEngine:
             current_node = self._get_current_node(instance, definition)
             node_state = instance.node_states[current_node.id]
 
-            self._check_can_reject(
-                instance, current_node, node_state, approver_id, definition
+            self._check_can_operate(
+                instance, current_node, node_state, approver_id, definition, "reject"
             )
 
             target_node = definition.get_node(target_node_id)
@@ -468,18 +468,19 @@ class ApprovalWorkflowEngine:
                     )
         return result
 
-    def _check_can_approve(
+    def _check_can_operate(
         self,
         instance: WorkflowInstance,
         node: ApprovalNode,
         node_state: NodeInstanceState,
         approver_id: str,
         definition: WorkflowDefinition,
+        operation: str,
     ) -> None:
         if node_state.status != NodeStatus.IN_PROGRESS:
             raise WorkflowExecutionError(
                 f"Node '{node.id}' is not in progress (status: {node_state.status.value}), "
-                f"cannot approve. Call resubmit first if node was rejected."
+                f"cannot {operation}. Call resubmit first if node was rejected."
             )
 
         if approver_id not in node_state.approver_states:
@@ -493,7 +494,7 @@ class ApprovalWorkflowEngine:
         astate = node_state.approver_states[approver_id]
         if astate.status != ApprovalStatus.PENDING:
             raise WorkflowExecutionError(
-                f"Approver '{approver_id}' cannot approve: current status is {astate.status.value}"
+                f"Approver '{approver_id}' cannot {operation}: current status is {astate.status.value}"
             )
 
         if node.node_type == NodeType.SEQUENTIAL:
@@ -501,42 +502,7 @@ class ApprovalWorkflowEngine:
                 expected_index = node.approver_ids.index(approver_id)
                 if expected_index != node_state.sequential_index:
                     raise WorkflowExecutionError(
-                        f"Approver '{approver_id}' cannot approve now: "
-                        f"expected approver is '{node.approver_ids[node_state.sequential_index]}'"
-                    )
-            elif node_state.escalated_to != approver_id:
-                raise WorkflowExecutionError(
-                    f"Approver '{approver_id}' is not the current escalation target"
-                )
-
-    def _check_can_reject(
-        self,
-        instance: WorkflowInstance,
-        node: ApprovalNode,
-        node_state: NodeInstanceState,
-        approver_id: str,
-        definition: WorkflowDefinition,
-    ) -> None:
-        if approver_id not in node_state.approver_states:
-            approver = definition.get_approver(approver_id)
-            if approver is None:
-                raise ApproverNotFoundError(approver_id)
-            raise WorkflowExecutionError(
-                f"Approver '{approver_id}' is not a valid approver for node '{node.id}'"
-            )
-
-        astate = node_state.approver_states[approver_id]
-        if astate.status != ApprovalStatus.PENDING:
-            raise WorkflowExecutionError(
-                f"Approver '{approver_id}' cannot reject: current status is {astate.status.value}"
-            )
-
-        if node.node_type == NodeType.SEQUENTIAL:
-            if approver_id in node.approver_ids:
-                expected_index = node.approver_ids.index(approver_id)
-                if expected_index != node_state.sequential_index:
-                    raise WorkflowExecutionError(
-                        f"Approver '{approver_id}' cannot reject now: "
+                        f"Approver '{approver_id}' cannot {operation} now: "
                         f"expected approver is '{node.approver_ids[node_state.sequential_index]}'"
                     )
             elif node_state.escalated_to != approver_id:
@@ -713,23 +679,6 @@ class ApprovalWorkflowEngine:
     def _check_workflow_ended(self, instance: WorkflowInstance) -> None:
         if instance.is_ended():
             raise WorkflowAlreadyEndedError(instance.id, instance.status.value)
-
-    def _check_approver_in_node(
-        self,
-        instance: WorkflowInstance,
-        node: ApprovalNode,
-        approver_id: str,
-        definition: WorkflowDefinition,
-    ) -> None:
-        node_state = instance.node_states[node.id]
-        if approver_id in node_state.approver_states:
-            return
-        approver = definition.get_approver(approver_id)
-        if approver is None:
-            raise ApproverNotFoundError(approver_id)
-        raise WorkflowExecutionError(
-            f"Approver '{approver_id}' is not a valid approver for node '{node.id}'"
-        )
 
     def _get_effective_approver_state(
         self,

@@ -1,0 +1,6 @@
+你实现的规则引擎模块仍存在一些问题，需要修复：
+1. _execute_single_action 方法中 ADD_FACT 和 MODIFY_FACT 两个分支包含完全相同的业务逻辑（键存在性检查、值相等性检查、allow_fact_overwrite 分支和 FactConflictError 抛出逻辑），仅 action_type 不同。两段一模一样的代码各自维护，后续修改冲突保护逻辑时需要同步更新两个位置，容易遗漏。需要消除这处重复代码。
+2. 原 test_modify_fact_action 测试用例在上轮修复时被改为使用 engine_with_overwrite fixture，导致 TestActionTypes 测试类中缺少在默认引擎（allow_fact_overwrite=False）下验证 MODIFY_FACT 基本行为的用例。需要补充一个不依赖 engine_with_overwrite 的测试，覆盖"在不允许覆盖的默认引擎下对不存在的键执行 MODIFY_FACT 新增事实"的基本路径。
+3. test_external_callback_removes_fact_detected_as_change 测试用例使用了 engine_with_overwrite fixture，但回调函数只调用了 remove_fact 操作，该操作不受 allow_fact_overwrite 标志影响，使用了与该测试场景无关的参数配置，降低了测试意图的清晰度。
+4. 修复完成后重新运行 poetry run pytest tests/rule_engine/ -v，确保所有测试通过。
+5. 更新 README.md，说明冲突保护策略的代码实现方式和测试覆盖矩阵。

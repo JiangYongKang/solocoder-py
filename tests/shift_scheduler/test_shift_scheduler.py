@@ -263,13 +263,13 @@ class TestNormalFlowRotationGeneration:
         schedule = scheduler.generate_rotation_schedule(staff_ids, start, end)
 
         assert len(schedule) == 7
-        assert schedule[date(2026, 6, 15)] == staff_ids[0]
-        assert schedule[date(2026, 6, 16)] == staff_ids[1]
-        assert schedule[date(2026, 6, 17)] == staff_ids[2]
-        assert schedule[date(2026, 6, 18)] == staff_ids[3]
-        assert schedule[date(2026, 6, 19)] == staff_ids[4]
-        assert schedule[date(2026, 6, 20)] == staff_ids[0]
-        assert schedule[date(2026, 6, 21)] == staff_ids[1]
+        assert schedule[date(2026, 6, 15)] == [staff_ids[0]]
+        assert schedule[date(2026, 6, 16)] == [staff_ids[1]]
+        assert schedule[date(2026, 6, 17)] == [staff_ids[2]]
+        assert schedule[date(2026, 6, 18)] == [staff_ids[3]]
+        assert schedule[date(2026, 6, 19)] == [staff_ids[4]]
+        assert schedule[date(2026, 6, 20)] == [staff_ids[0]]
+        assert schedule[date(2026, 6, 21)] == [staff_ids[1]]
 
         result = scheduler.validate_schedule(start, end)
         assert result.is_valid is True
@@ -336,7 +336,7 @@ class TestBoundarySinglePersonRotation:
 
         assert len(schedule) == 31
         for d, assigned in schedule.items():
-            assert assigned == only_staff
+            assert assigned == [only_staff]
         for i in range(31):
             current = start + timedelta(days=i)
             assert scheduler.get_assignment(current) == [only_staff]
@@ -354,16 +354,16 @@ class TestBoundaryTwoPersonAlternation:
 
         schedule = scheduler.generate_rotation_schedule(staff_ids, start, end)
 
-        assert schedule[date(2026, 4, 1)] == s1
-        assert schedule[date(2026, 4, 2)] == s2
-        assert schedule[date(2026, 4, 3)] == s1
-        assert schedule[date(2026, 4, 4)] == s2
-        assert schedule[date(2026, 4, 5)] == s1
-        assert schedule[date(2026, 4, 6)] == s2
-        assert schedule[date(2026, 4, 7)] == s1
-        assert schedule[date(2026, 4, 8)] == s2
-        assert schedule[date(2026, 4, 9)] == s1
-        assert schedule[date(2026, 4, 10)] == s2
+        assert schedule[date(2026, 4, 1)] == [s1]
+        assert schedule[date(2026, 4, 2)] == [s2]
+        assert schedule[date(2026, 4, 3)] == [s1]
+        assert schedule[date(2026, 4, 4)] == [s2]
+        assert schedule[date(2026, 4, 5)] == [s1]
+        assert schedule[date(2026, 4, 6)] == [s2]
+        assert schedule[date(2026, 4, 7)] == [s1]
+        assert schedule[date(2026, 4, 8)] == [s2]
+        assert schedule[date(2026, 4, 9)] == [s1]
+        assert schedule[date(2026, 4, 10)] == [s2]
 
         result = scheduler.validate_schedule(start, end)
         assert result.is_valid is True
@@ -389,7 +389,7 @@ class TestBoundaryCrossCycleRotation:
             (date(2026, 7, 4), s1),
         ]
         for d, expected_staff in expected:
-            assert schedule[d] == expected_staff
+            assert schedule[d] == [expected_staff]
             assert scheduler.get_assignment(d) == [expected_staff]
 
         end_of_june = date(2026, 6, 30)
@@ -409,12 +409,12 @@ class TestBoundaryCrossCycleRotation:
 
         schedule = scheduler.generate_rotation_schedule(staff_ids, start, end)
 
-        assert schedule[date(2026, 12, 29)] == s1
-        assert schedule[date(2026, 12, 30)] == s2
-        assert schedule[date(2026, 12, 31)] == s3
-        assert schedule[date(2027, 1, 1)] == s4
-        assert schedule[date(2027, 1, 2)] == s1
-        assert schedule[date(2027, 1, 3)] == s2
+        assert schedule[date(2026, 12, 29)] == [s1]
+        assert schedule[date(2026, 12, 30)] == [s2]
+        assert schedule[date(2026, 12, 31)] == [s3]
+        assert schedule[date(2027, 1, 1)] == [s4]
+        assert schedule[date(2027, 1, 2)] == [s1]
+        assert schedule[date(2027, 1, 3)] == [s2]
 
         result = scheduler.validate_schedule(start, end)
         assert result.is_valid is True
@@ -789,6 +789,76 @@ class TestRotationIdempotency:
         for i in range(28):
             d = start + timedelta(days=i)
             assert len(scheduler.get_assignment(d)) == 1
+
+
+class TestReturnValueConsistency:
+    def test_return_value_matches_internal_state_schedule(self):
+        scheduler, staff_ids = make_scheduler_with_staff(5)
+        s1, s2, s3, s4, s5 = staff_ids
+        start = date(2026, 6, 15)
+        end = date(2026, 6, 21)
+
+        schedule = scheduler.generate_rotation_schedule(staff_ids, start, end)
+
+        for d, staff_list in schedule.items():
+            assert staff_list == scheduler.get_assignment(d)
+            assert len(staff_list) == 1
+        assert schedule[date(2026, 6, 15)] == [s1]
+        assert schedule[date(2026, 6, 16)] == [s2]
+        assert schedule[date(2026, 6, 17)] == [s3]
+
+    def test_return_value_after_second_call_skip_repeated(self):
+        scheduler, staff_ids = make_scheduler_with_staff(3)
+        s1, s2, s3 = staff_ids
+        start = date(2026, 5, 1)
+        end = date(2026, 5, 5)
+
+        schedule1 = scheduler.generate_rotation_schedule(staff_ids, start, end)
+        schedule2 = scheduler.generate_rotation_schedule(staff_ids, start, end)
+
+        for d in schedule1:
+            assert schedule1[d] == schedule2[d]
+            assert schedule2[d] == scheduler.get_assignment(d)
+
+        result = scheduler.validate_schedule(start, end)
+        assert result.is_valid is True
+
+    def test_return_value_after_preexisting_duplicate_detection(self):
+        scheduler, staff_ids = make_scheduler_with_staff(3)
+        s1, s2, s3 = staff_ids
+        reversed_order = [s3, s2, s1]
+        start = date(2026, 3, 1)
+        end = date(2026, 3, 7)
+
+        scheduler.generate_rotation_schedule(staff_ids, start, end)
+
+        schedule = scheduler.generate_rotation_schedule(reversed_order, start, end)
+
+        for d, staff_list in schedule.items():
+            assert staff_list == scheduler.get_assignment(d)
+
+        result = scheduler.validate_schedule(start, end)
+        assert result.is_valid is False
+        assert result.duplicate_count > 0
+        for g in result.gaps:
+            if g.is_duplicate:
+                assert schedule[g.shift_date] == g.staff_ids
+                assert len(schedule[g.shift_date]) > 1
+
+    def test_return_value_contains_multiple_staff_when_conflict(self):
+        scheduler, staff_ids = make_scheduler_with_staff(2)
+        s1, s2 = staff_ids
+        reversed_order = [s2, s1]
+        start = date(2026, 8, 1)
+        end = date(2026, 8, 3)
+
+        scheduler.generate_rotation_schedule(staff_ids, start, end)
+        schedule = scheduler.generate_rotation_schedule(reversed_order, start, end)
+
+        for i in range(3):
+            d = start + timedelta(days=i)
+            assert s1 in schedule[d] or s2 in schedule[d]
+            assert schedule[d] == scheduler.get_assignment(d)
 
 
 class TestSwapBoundaryHandling:

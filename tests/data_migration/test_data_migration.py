@@ -1,9 +1,12 @@
+import abc
+
 import pytest
 
 from solocoder_py.data_migration import (
     BatchMigrationError,
     BatchInfo,
     BatchStatus,
+    CheckpointStore,
     DataMigrationError,
     DataMigrator,
     InMemoryCheckpointStore,
@@ -749,3 +752,92 @@ class TestInMemoryCheckpointStore:
 
         reloaded = store.load_state()
         assert reloaded.total_records == 10
+
+
+class TestCheckpointStoreABCEnforcement:
+    def test_incomplete_subclass_cannot_instantiate(self):
+        class IncompleteStore(CheckpointStore):
+            pass
+
+        with pytest.raises(TypeError, match="Can't instantiate abstract class"):
+            IncompleteStore()
+
+    def test_partial_subclass_cannot_instantiate(self):
+        class PartialStore(CheckpointStore):
+            def save(self, checkpoint, state):
+                pass
+
+        with pytest.raises(TypeError, match="Can't instantiate abstract class"):
+            PartialStore()
+
+    def test_complete_subclass_can_instantiate(self):
+        class CompleteStore(CheckpointStore):
+            def __init__(self):
+                self._data = {}
+
+            def save(self, checkpoint, state):
+                self._data["checkpoint"] = checkpoint
+                self._data["state"] = state
+
+            def load(self):
+                return self._data.get("checkpoint", -1)
+
+            def load_state(self):
+                return self._data.get("state")
+
+            def clear(self):
+                self._data.clear()
+
+        store = CompleteStore()
+        assert store is not None
+
+    def test_inmemory_store_is_subclass_of_abc(self):
+        assert issubclass(InMemoryCheckpointStore, CheckpointStore)
+        assert issubclass(CheckpointStore, abc.ABC)
+
+
+class TestFailureRecoveryNoWriteBeforeRollback:
+    def test_resume_from_failed_state_does_not_write_before_rollback(self):
+        source = make_source_data(30)
+        target_store = {}
+        checkpoint_store = InMemoryCheckpointStore()
+        fail_count = [0]
+        write_count = [0]
+
+        def tracking_migrator(records):
+            for record in records:
+                write_count[0] += 1
+                if record["id"] == 10 and fail_count[0] == 0:
+                    fail_count[0] += 1
+                    raise RuntimeError("Simulated failure")
+                target_store[record["id"]] = record
+
+        migrator1 = DataMigrator(
+            source_data=source,
+            target_store=target_store,
+            batch_size=10,
+            checkpoint_store=checkpoint_store,
+            id_extractor=lambda r: r["id"],
+            batch_migrator=tracking_migrator,
+        )
+
+        with pytest.raises(BatchMigrationError):
+            migrator1.migrate()
+
+        writes_before_resume = write_count[0]
+        assert len(target_store) == 10
+
+        migrator2 = DataMigrator(
+            source_data=source,
+            target_store=target_store,
+            batch_size=10,
+            checkpoint_store=checkpoint_store,
+            id_extractor=lambda r: r["id"],
+            batch_migrator=tracking_migrator,
+        )
+
+        state = migrator2.resume_from_checkpoint()
+
+        assert state.status == MigrationStatus.ROLLED_BACK
+        assert len(target_store) == 0
+        assert write_count[0] == writes_before_resume
