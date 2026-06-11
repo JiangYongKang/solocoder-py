@@ -1,0 +1,8 @@
+在当前 Python 项目中实现 Future 组合器域，所有相关代码放在 src/solocoder_py/future_combinator/ 包下，使用内存数据结构模拟异步任务执行与结果。
+1. 实现 Future 抽象：Future 表示一个尚未完成的异步计算结果，支持三种状态：未完成、已完成有结果、已完成有异常。调用者可以通过回调或阻塞等待的方式获取最终结果。
+2. 实现 all 组合器：接收一组 Future，返回一个新的 Future，该新 Future 在所有输入 Future 全部成功完成时完成，结果按输入顺序包含所有结果；如果任一输入 Future 失败，all 组合 Future 立即失败并携带第一个遇到的异常信息。
+3. 实现 any 组合器：接收一组 Future，返回一个新的 Future，该新 Future 在任意一个输入 Future 成功完成时立即完成，返回最快成功的那个结果；只有当所有输入 Future 全部失败时 any 组合 Future 才失败，并聚合所有异常信息。
+4. 实现 race 组合器：接收一组 Future，返回一个新的 Future，该新 Future 在任意一个输入 Future 最先完成时（无论成功还是失败）立即以该结果完成，忽略其余 Future 的后续结果。
+5. 实现超时熔断：支持为任意 Future 设置超时时间，如果在超时时间内 Future 未完成，该 Future 自动以超时异常完成，不再等待原始结果。
+6. 为该模块编写完整的单元测试，覆盖正常流程（all 全部成功、any 首个成功、race 首个完成）、边界条件（空 Future 列表的 all 和 any、单个 Future 的 all 和 any、超时还未到已有结果的 Future）和异常分支（all 中有失败、any 全部失败时的异常聚合、超时熔断触发、race 第一个完成的是失败结果）。测试代码放在 tests/future_combinator/ 下。
+7. 在该模块包内编写 README.md，说明模块功能、核心类的职责、各组合器（all/any/race）的行为规则差异以及使用示例。

@@ -1,0 +1,12 @@
+产物不满意：
+1. multilevel_cache.py 的 get 方法中，L1 和 L2 缓存命中判断均使用 `if value is not None` 作为命中条件。LRUCache.get 返回 `Optional[V]`，None 同时承担"key 不存在"和"缓存值为 None"两种语义。当缓存中存储的正常业务值恰好为 None 时会被误判为未命中，触发不必要的穿透查询。根因是缺少专用哨兵值来区分"未找到"与"值为 None"两种状态，正确做法应使用 Result 封装或额外的布尔标志区分命中状态。
+2. multilevel_cache.py 的 set 方法签名 `set(key, value)` 接受 value 参数，但方法体内仅执行 `delete(key)` 将 L1 和 L2 中的条目删除，传入的 value 被完全丢弃。提示词要求"删除或更新为最新值"，模型选择删除方案本身合理，但 set 的方法名和参数签名暗示数据会被写入，实际行为却是纯失效操作，调用者必须另外手动更新数据源才能保证后续读取到新值，API 语义与实际行为存在不一致。
+3. multilevel_cache.py 的 get 方法中，L1 命中、L1 未命中、L2 命中、L2 未命中、数据源加载这五个状态变更路径各创建了一个完整 `CacheStats(l1_hits=..., l2_hits=..., l1_misses=..., l2_misses=..., data_source_loads=...)` 新实例，同一构造模板重复出现 5 次。大量字段值未变化却需要逐字段拷贝传递，不仅代码冗余还造成对象分配开销，且存在字段拷贝遗漏导致统计数据丢失的风险。应使用可变统计对象内部累加，仅在 stats 属性返回时构建不可变快照。
+4. lru_cache.py 的 `_evict_if_needed` 方法中，当 `self._capacity <= 0` 时直接 return 跳过淘汰逻辑，而构造器中仅拦截 `capacity < 0` 允许 capacity=0。这导致 capacity=0 时淘汰被短路，缓存可无限增长，与"容量限制"的核心语义矛盾。README 声称"0 表示不限制"是事后自洽的解释，但逻辑实现上未提供合理的"零容量即无限"设计说明，这对上层 MultiLevelCache 的构造校验（要求容量为正数）不构成直接影响但暴露了 LRU 组件自身的不一致性。
+过程不满意：
+1. 模型在收到 prompt 后的第一个操作是 todo_write 创建 8 项子任务，随后才执行 view_folder 浏览项目根目录和 src 目录。规划阶段对项目目录约定、现有依赖结构完全无知，属于先规划后分析的典型问题。虽然后续实际交付与规划基本吻合，但前期规划缺乏信息基础，存在任务划分与实际模块边界不匹配的固有风险，正确的做法是先浏览项目结构和相关文件再做执行计划。
+2. 模型在探索阶段用 view_files 查看了 `src/solocoder_py/cache/lru_cache.py`、`src/solocoder_py/work_calendar/exceptions.py` 和 `tests/cache/test_lru_cache.py` 等文件。cache 包和 work_calendar 包与当前 multilevel_cache 任务完全无关，这些浏览消耗了不必要的上下文字段，表明模型的探索缺少目标导向性，未根据任务包名精准聚焦到 multilevel_cache 相关文件。
+3. 首次运行 pytest 后出现两个测试失败，模型没有优先审视 multilevel_cache.py 中 get 方法的读穿透逻辑和统计更新是否正确，而是直接在测试文件上执行了三次 edit_file_search_replace 修改测试代码以凑通用例。这是典型的"生产代码向测试妥协"模式，正确做法是先分析失败用例的断言与实际行为的差距，定位到源代码中的具体逻辑偏差再做最小修正，而非通过弱化测试断言来回避问题。
+4. 模型对 test_repeated_eviction_and_backfill_consistency 失败原因的诊断存在事实错误：COT 中写道"With L2 capacity 3 and 5 keys, not all keys fit in L2"，但当前测试代码中 l2_capacity 为 5 且 keys 数量也是 5。推断模型将原测试中的 L2 capacity 从 3 修改为 5，使测试绕过了"反复淘汰后回填仍能读到正确值"这一核心验证场景，通过降低测试难度来达到通过目的。
+5. 模型在最终总结中声称"无 lint/类型错误"，但 COT 中未见 ruff、mypy 或 pyright 等 lint 工具的实际运行记录，仅有一次 GetDiagnostics 工具调用作为 IDE 层面的静态检查。未运行项目级 lint 工具就声称无错误，属于幻觉与虚假完成。正确做法是执行 `poetry run ruff check` 或 `poetry run mypy` 等命令获得实际校验结果。
+6. 两次运行测试均使用 `python -m pytest` 而非项目约定的 `poetry run pytest`，COT 中两处 run_command 均为此用法。虽然当前环境下两个命令结果一致，但绕过 poetry 直接调用系统 Python 可能导致依赖项无法正确解析，在 CI 环境或不同开发者机器上行为可能不一致。模型在前期探索中曾浏览过 pyproject.toml 但并未从中提取出正确的测试运行约定。

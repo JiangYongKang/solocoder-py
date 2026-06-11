@@ -1,0 +1,9 @@
+产物不满意：
+1. _wake_waiters 在 release 释放锁后直接设置锁模式、分配写者线程并将 write_lock_count 置为 1 并预填 readers，把状态变更放在了 release 路径中。这导致 unpark 后重调 acquire_write 时命中重入分支将计数从 1 累加到 2，一次获取需两次释放；reader 同理预填造成双重计数。根因是锁状态所有权变更的职责错放在 release 端，违反 acquire 管理状态获取的分离原则。正确做法是 _wake_waiters 仅负责调用 unpark 唤醒线程，由 acquire 端自行完成状态变更。
+2. lock.py 的 acquire_read 和 acquire_write 方法在 try-except 块中使用 except BaseException 捕获异常并执行 _remove_waiter_from_queue 清理等待队列。BaseException 是 Python 异常体系的根节点，会错误覆盖 KeyboardInterrupt 和 SystemExit 等系统级信号，导致用户按 Ctrl+C 触发的信号被静默吞掉并触发队列误清理。根本原因是未区分应用层异常与系统级异常，盲目使用了最宽的捕获范围。应改用 except Exception，确保系统信号能正常向上传播。
+3. lock.py 中 RWLock 构造函数签名声明为 scheduler: Optional[Scheduler] = None，但函数体在 scheduler 为 None 时直接抛出 ValueError。Optional 类型注解向调用者传达了参数可为空的语义，但运行时强制要求必传，类型注解与实现逻辑矛盾。原因是类型声明未准确反映其必选的语义约束。正确做法是去掉 Optional 和 None 默认值，将 scheduler 声明为必选参数。
+
+过程不满意：
+1. 模型在第二次运行测试失败后，面对 park 方法不阻塞导致 while 循环重复触发 "already parked" 错误时，没有尝试对既有设计做小范围修正，而是引入 Parked 异常机制并将 scheduler.py、lock.py 和 test_rwlock.py 三个文件整体重写。lock.py 在三个迭代周期内经历了从 dataclass 到普通类、再到 Parked 异常设计、再到异常处理修正的全文件级别重写，每次都将问题归因于整体设计而非局部缺陷，表现出典型的试错式调试特征。正确做法是每次仅修改出问题的具体代码行做增量修复，而非每轮都整体重构。
+2. 模型在编写单元测试时遗漏了 unpark 之后重新调用 acquire 的关键流程验证。ManualScheduler 的 park 抛出 Parked 异常后，被挂起的线程需在 unpark 后重调用 acquire_read 或 acquire_write 正式获取锁。但现有 31 个测试用例中没有一个在 release 后重新调用 acquire 验证锁计数的正确性，_wake_waiters 预分配导致的双重计数缺陷因此未被测试捕获。正确做法是补充 unpark 后重调用 acquire 并校验 write_lock_count 和 reader_count 的测试场景。
+3. 模型在全部 31 个测试通过后即以 "所有测试全部通过，公平读写锁模块已完整实现" 声称完成，未对 _wake_waiters 将锁状态变更放在 release 端的架构合理性进行任何事后审视。模型在完成总结时仅列举文件清单和表面功能点，未从设计层面检查 acquire 和 release 的状态变更职责是否隔离清晰，表现以测试全部通过等同于设计正确的幻觉。正确做法是编码完成后回顾核心设计路径，确保锁计数语义内聚于 acquire 端。
