@@ -1,0 +1,7 @@
+产物不满意：
+1. engine.py 的 diff 方法在处理双方都存在的键时，elif entry_a.version > entry_b.version 分支和 else 分支内部创建了完全相同的 DiffEntry 对象且都使用 EntryStatus.VERSION_MISMATCH 状态，两个分支的代码和产出完全一致，形成了无意义的冗余分支。同时 VERSION_MISMATCH 状态无法体现哪一方版本更高，同步方法 sync_a_to_b 和 sync_b_to_a 必须再次比对版本号才能决定传输方向，diff 结果缺乏自描述性。应该用不同状态区分方向或在 DiffEntry 中增加 direction 字段。
+2. replica.py 的 merge_entry 方法在 entry.version 等于 current.version 且值不同时，未做任何冲突保护就直接覆盖了当前数据并返回 True，test_merge_same_version_different_value_updates 测试用例也确认了这种静默覆盖行为。而 engine.py 的 diff 方法将同版本异值归类为 EntryStatus.CONFLICT 并阻止自动同步，需要人工裁决。merge_entry 作为 Replica 的公开 API 没有与引擎层保持一致的冲突语义，直接在 Replica 上调用 merge_entry 可能导致数据在未检测到冲突的情况下被覆盖，暴露了低层接口和高层引擎之间的语义断层。
+过程不满意：
+1. 模型在收到提示词后，第一轮对话中尚未阅读任何文件就先用 todo_write 创建了 7 项子任务计划，然后才开始执行 view_folder 和 file_search 查看项目结构。这违反了标注规范中"不能刚收到任务就直接创建 TodoList，应先分析问题再规划"的要求。正确的做法是先阅读 docs 目录下的需求文档和项目骨架，理清模块职责边界后再制定执行计划，而不是凭空划分任务粒度。
+2. 模型在编写 replica.py 后发现存在缩进错误，随后选择了将整个文件完全重写一遍来修复，而非仅定位出错的行做最小范围的修改，再通过 view_files 确认修复结果。这属于"重写整个文件"的粗粒度修复方式，增大了引入新错误的概率。正确做法是先精确定位错误行，做针对性修改后再验证。
+3. 模型在全部代码编写完成后使用 `python -m pytest tests/anti_entropy/ -v` 运行测试，而不是项目约定的 `poetry run pytest tests/anti_entropy/ -v`。虽然测试结果正确（83 个用例全部通过），但未遵循项目的构建工具链约定，在某些虚拟环境配置下可能导致包导入路径解析不一致。应始终使用 poetry run pytest 确保测试环境与项目构建配置对齐。

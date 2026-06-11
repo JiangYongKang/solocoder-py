@@ -1,0 +1,9 @@
+产物不满意：
+1. conftest.py 中 make_engine 和 make_matcher 两个工厂函数缺少 @pytest.fixture 装饰器。首次运行 pytest 时全部 64 个测试用例均报 ERROR 状态，测试框架无法将这两个函数识别为 fixture 注入目标，导致依赖它们的测试类完全无法执行。根本原因是模型在编写 conftest.py 时只参照了其他模块的函数签名模式，但遗漏了 Pytest 框架要求 fixture 函数必须显式添加 @pytest.fixture 装饰器的语法规则。正确做法是在每个工厂函数上方添加 @pytest.fixture 装饰器，使 Pytest 能正确解析和注入。
+2. engine.py 的 settle_match 方法在第 92 行调用 _get_actual_scores 获取 score_a 和 score_b，该函数对 FORFEIT_WIN 和 FORFEIT_LOSS 分别返回 (1.0, 0.0) 和 (0.0, 1.0)，但在第 94-100 行的退赛分支中这两个返回值完全未被使用。退赛获胜方的评分增量改为直接用 player_a.k_factor * (1.0 - self.expected_score(...)) 内联计算，绕过了 calculate_delta 静态方法。如果未来 calculate_delta 的公式需要统一修改（例如增加时间衰减或调整精度），退赛分支将不会随之更新，存在两个评分计算路径不一致的隐蔽风险。应在退赛分支中也复用 calculate_delta 方法并传入 _get_actual_scores 返回的实际得分。
+3. engine.py 的 settle_match 方法中 FORFEIT_LOSS 分支（第 100 行）对获胜方 player_b 的 delta 计算使用了 self.expected_score(old_rating_b, old_rating_a)，将 B 的评分作为第一个参数传给 expected_score。虽然 expected_score 的实现不依赖于参数顺序的语义约束，但这一写法与模块中其他调用 expected_score 的约定（第一个参数为被评估方评分）不一致，降低了代码可读性和审查效率。
+
+过程不满意：
+1. 模型在第 151 步读完所有源文件后直接宣称「核心实现包括 ELO 评分计算引擎、匹配器、玩家/对局数据模型和异常类，均已满足需求」，但未执行任何测试或静态分析来验证这一结论。后续首次运行 pytest 就暴露出 matcher.py 的 __init__ 方法缺少对负分差的参数校验（只有 setter 做了校验），导致三个正常流测试失败后才被迫修复。正确做法是先快速运行一轮冒烟测试或用一个小范围的集成测试验证核心行为，再下结论。
+2. 模型在第 211-268 步连续编写了 test_normal_flows.py、test_edge_cases.py 和 test_error_cases.py 三个测试文件共计 64 个用例，中间未做任何一次增量测试验证。全部写完后才在第 298 步运行 pytest，结果因 conftest 的 fixture 装饰器缺失导致 64 个用例全部 ERROR，之后又经历了修复 conftest → 发现 3 个失败 → 修复 matcher 和测试逻辑 → 再跑发现 1 个失败 → 修复函数名共四轮试错才全部通过。正确做法是写完一个测试类就立即运行验证，形成增量反馈闭环，避免把问题堆积到最后集中爆发。
+3. 模型在第 162 步用 todo_write 创建了 6 项子任务计划，但此时已在第 151 步宣布分析完成。正确的任务规划顺序应该先完成分析再制定计划，而非在分析过程中就匆忙创建 todo 列表。此外模型在第 298 步首次运行测试时直接用 pytest 而非项目约定的 poetry run pytest，虽未导致实际错误，但反映出对项目构建约定（pyproject.toml 中的配置）关注不足。
