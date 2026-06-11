@@ -1,6 +1,5 @@
 from .exceptions import (
     InvalidInputError,
-    MergeTimeoutError,
     ThreeWayMergeError,
 )
 from .lcs import backtrack_lcs, diff_hunks, lcs_table
@@ -16,7 +15,6 @@ from .models import (
 
 __all__ = [
     "InvalidInputError",
-    "MergeTimeoutError",
     "ThreeWayMergeError",
     "backtrack_lcs",
     "diff_hunks",

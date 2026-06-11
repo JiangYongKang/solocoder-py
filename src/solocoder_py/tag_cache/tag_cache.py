@@ -14,9 +14,6 @@ from .exceptions import (
 from .models import CacheEntry, TagCacheStats
 
 
-_MAX_PURGE_PER_CALL = 100
-
-
 class TagCache:
     def __init__(
         self,
@@ -100,6 +97,9 @@ class TagCache:
             if expire_at is not None:
                 self._expirable_count += 1
 
+            if self._auto_cleanup_dangling:
+                self.cleanup_dangling_tags()
+
     def get(self, key: Any) -> Optional[Any]:
         with self._lock:
             self._purge_expired()
@@ -173,6 +173,10 @@ class TagCache:
 
     def remove_tags(self, key: Any, tags: Iterable[Any]) -> int:
         tag_list = list(tags)
+        for tag in tag_list:
+            if tag is None:
+                raise InvalidTagError("Tag cannot be None")
+
         with self._lock:
             self._purge_expired()
             entry = self._store.get(key)
@@ -212,7 +216,7 @@ class TagCache:
         with self._lock:
             self._purge_expired()
             if tag not in self._tag_index:
-                return []
+                raise TagNotFoundError(f"Tag {tag!r} not found")
 
             keys = self._tag_index[tag].copy()
             valid_keys: List[Any] = []
@@ -230,7 +234,7 @@ class TagCache:
         with self._lock:
             self._purge_expired()
             if tag not in self._tag_index:
-                return False
+                raise TagNotFoundError(f"Tag {tag!r} not found")
             keys = self._tag_index[tag]
             for key in keys:
                 entry = self._store.get(key)
@@ -246,7 +250,7 @@ class TagCache:
             self._purge_expired()
 
             if tag not in self._tag_index:
-                return 0
+                raise TagNotFoundError(f"Tag {tag!r} not found")
 
             keys_to_delete = list(self._tag_index[tag])
             if not keys_to_delete:
@@ -294,6 +298,10 @@ class TagCache:
 
         with self._lock:
             self._purge_expired()
+
+            for tag in tag_list:
+                if tag not in self._tag_index:
+                    raise TagNotFoundError(f"Tag {tag!r} not found")
 
             all_keys: Set[Any] = set()
             for tag in tag_list:
@@ -384,12 +392,8 @@ class TagCache:
 
         now = time.monotonic()
         expired_keys: List[Any] = []
-        scanned = 0
 
         for key, entry in self._store.items():
-            if scanned >= _MAX_PURGE_PER_CALL:
-                break
-            scanned += 1
             if entry.is_expired(now):
                 expired_keys.append(key)
 

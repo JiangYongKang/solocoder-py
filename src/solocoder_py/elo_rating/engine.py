@@ -93,11 +93,11 @@ class EloEngine:
 
         if result in (MatchResult.FORFEIT_WIN, MatchResult.FORFEIT_LOSS):
             if result == MatchResult.FORFEIT_WIN:
-                delta_a = player_a.k_factor * (1.0 - self.expected_score(old_rating_a, old_rating_b))
+                delta_a = self.calculate_delta(old_rating_a, old_rating_b, score_a, player_a.k_factor)
                 delta_b = -self.FORFEIT_PENALTY
             else:
                 delta_a = -self.FORFEIT_PENALTY
-                delta_b = player_b.k_factor * (1.0 - self.expected_score(old_rating_b, old_rating_a))
+                delta_b = self.calculate_delta(old_rating_b, old_rating_a, score_b, player_b.k_factor)
         else:
             delta_a = self.calculate_delta(old_rating_a, old_rating_b, score_a, player_a.k_factor)
             delta_b = self.calculate_delta(old_rating_b, old_rating_a, score_b, player_b.k_factor)

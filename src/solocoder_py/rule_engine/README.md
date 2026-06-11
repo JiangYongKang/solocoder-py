@@ -31,10 +31,10 @@
 
 ### Action
 规则动作，支持四种类型（见 `ActionType`）：
-- `ADD_FACT`：添加新事实（或在开启覆盖时修改）
-- `MODIFY_FACT`：修改已有事实（不存在则添加）
+- `ADD_FACT`：添加新事实；若键已存在且值不同，受 `allow_fact_overwrite` 控制（见冲突保护策略）
+- `MODIFY_FACT`：修改已有事实（不存在则添加）；若键已存在且值不同，受 `allow_fact_overwrite` 控制（见冲突保护策略）
 - `REMOVE_FACT`：删除事实
-- `EXTERNAL`：执行外部回调函数，签名为 `callback(engine: RuleEngine, facts: dict[str, Any]) -> None`
+- `EXTERNAL`：执行外部回调函数，签名为 `callback(engine: RuleEngine, facts: dict[str, Any]) -> None`；回调可通过传入的 engine 实例直接调用 `add_fact` / `remove_fact` 等方法修改事实库，引擎会自动检测这些变更（见 EXTERNAL 回调事实变更检测）
 
 ### Rule
 规则定义：
@@ -52,7 +52,7 @@
 - `reset()` 清空规则和事实
 - 构造参数：
   - `max_rounds`：最大推理轮次，默认 100
-  - `allow_fact_overwrite`：是否允许 `ADD_FACT` 动作覆盖已有事实值，默认 False
+  - `allow_fact_overwrite`：是否允许 `ADD_FACT` 和 `MODIFY_FACT` 动作覆盖已有事实值，默认 False（见事实修改冲突保护策略）
 
 ### InferenceResult
 推理结果：
@@ -119,6 +119,38 @@
 ### 防止重复触发
 
 系统通过记录 `(rule_id, facts_snapshot)` 组合来防止同一条规则在完全相同的事实状态下被重复触发。只有当事实集合发生变化时，规则才有可能被再次触发。
+
+### EXTERNAL 回调事实变更检测
+
+`EXTERNAL` 类型的动作允许执行用户自定义回调函数，回调签名为 `callback(engine: RuleEngine, facts: dict[str, Any]) -> None`。回调函数接收两个参数：
+
+- `engine`：当前规则引擎实例，可直接调用 `add_fact`、`add_facts`、`remove_fact` 等方法修改事实库
+- `facts`：当前事实字典的只读副本（用于只读访问，修改此参数不会影响事实库）
+
+**事实变更检测机制**：
+
+在执行回调前，引擎会对当前事实库拍摄一个快照（`snapshot_before`）；回调执行完毕后，再次拍摄快照（`snapshot_after`）。通过比较两个快照是否相等来判断回调是否修改了事实库。若检测到变更，引擎会：
+
+- 将 `facts_changed` 标记为 `True`
+- 确保前向链推理继续进行，后续依赖新增/删除事实的规则能够被正确触发，不会被遗漏
+
+如果回调未修改事实库，则不会影响推理收敛判定。
+
+### 事实修改冲突保护策略
+
+`ADD_FACT` 和 `MODIFY_FACT` 两种动作在修改已存在的事实键时，遵循统一的冲突保护策略，由 `RuleEngine` 的构造参数 `allow_fact_overwrite`（默认 `False`）控制：
+
+**当目标事实键不存在时**：
+两种动作行为一致，直接写入新事实，返回 `True` 表示事实发生变更。
+
+**当目标事实键已存在且值相同时**：
+两种动作均不做任何修改，返回 `False` 表示事实未发生变更，也不触发冲突。
+
+**当目标事实键已存在且值不同时**：
+- `allow_fact_overwrite = False`（默认）：抛出 `FactConflictError`，异常携带冲突的键名、旧值和新值信息，由上层 `run()` 捕获并包装为 `RuleExecutionError` 抛出，终止当前推理。
+- `allow_fact_overwrite = True`：静默覆盖旧值，写入新值，返回 `True` 表示事实发生变更。
+
+`REMOVE_FACT` 动作不受此标志影响，若键存在则直接删除并返回 `True`，不存在则返回 `False`。
 
 ## 使用示例
 

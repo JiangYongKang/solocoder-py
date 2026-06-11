@@ -76,6 +76,16 @@
 - 所有原始审批人全部通过，或升级后的上级审批人通过，节点即通过
 - 非当前轮到的审批人尝试审批会抛出异常
 
+#### 操作顺序约束
+
+串行节点的 **`approve` 和 `reject` 操作均严格遵循顺序约束**：
+
+- 节点维护 `sequential_index` 指针，指向当前可操作的审批人在 `approver_ids` 列表中的索引
+- 只有索引匹配的审批人才能执行 `approve` 或 `reject` 操作
+- 其他审批人尝试操作会抛出 `WorkflowExecutionError`，错误信息包含当前期望的审批人
+- 审批通过后 `sequential_index` 自动递增，指向下一个审批人
+- 已通过的审批人不能再次操作（包括驳回），因为其状态已变为 `APPROVED`
+
 ### 会签节点 (COUNTERSIGN)
 
 - 节点关联的所有审批人全部通过后，节点才通过
@@ -98,6 +108,29 @@
 1. **目标节点要求**：驳回目标必须是当前节点的前置节点（在节点列表中索引更小）
 2. **非法目标**：回退到当前节点或后续节点会抛出 `InvalidRejectTargetError`
 3. **不存在节点**：回退到不存在的节点会抛出 `NodeNotFoundError`
+
+### 节点状态流转规则
+
+驳回回退后，节点状态遵循以下流转规则：
+
+```
+驳回前节点状态
+    ↓
+reject() 被调用
+    ↓
+目标节点状态设为 REJECTED  ← 新的状态，等待重新提交
+    ↓
+resubmit() 被调用  ← 必须先调用此方法
+    ↓
+目标节点状态变为 IN_PROGRESS
+    ↓
+审批人可正常执行 approve / reject
+```
+
+- **驳回后**：目标节点的状态为 `REJECTED`，此时不能直接调用 `approve` 或 `reject`
+- **重新提交**：必须调用 `resubmit(instance_id, approver_id, comment)` 将节点状态激活为 `IN_PROGRESS`
+- **状态验证**：所有审批操作前都会检查节点状态，非 `IN_PROGRESS` 状态会抛出 `WorkflowExecutionError`
+- **resubmit 通知**：重新提交时，节点的所有待审批人会收到重新审批的通知
 
 ### 状态重置
 
@@ -157,6 +190,36 @@
 - 审批记录的 `is_escalated = True`，`original_approver_id` 指向原审批人
 - 上级审批通过的效果等同于原审批人通过
 - 会签节点中，升级的上级仅代表其下属一人
+
+### 动态审批人查询机制
+
+超时升级后，上级审批人被动态添加到节点的审批人列表中。`get_pending_approvers()` 方法支持正确返回这些动态添加的审批人：
+
+#### 查询规则
+
+1. **遍历节点状态**：从 `node_state.approver_states` 中获取所有状态为 `PENDING` 的审批人 ID
+2. **两级查找 Approver 对象**：
+   - **第一级**：在 `WorkflowDefinition.approvers` 静态列表中查找审批人信息（姓名、上级关系等）
+   - **第二级**：若未在静态列表中找到（理论上不会发生，因为升级时已验证），创建临时 `Approver` 对象，名称为 `动态审批人({id})` 以保证接口不返回空
+
+#### 上级审批人前置验证
+
+`escalate_timeout()` 和 `escalate_supervisor_timeout()` 在执行升级前会严格验证：
+
+- 原审批人的 `supervisor_id` 必须在 `WorkflowDefinition.approvers` 中注册
+- 若上级未预注册，抛出 `ApproverNotFoundError` 异常，确保升级链的完整性
+- 这避免了动态添加"未知"审批人导致的管理混乱
+
+#### 使用场景
+
+```python
+# 获取当前待审批人（包含可能的动态升级审批人）
+pending = engine.get_pending_approvers(instance.id)
+
+for approver in pending:
+    print(f"待审批人: {approver.name} (ID: {approver.id})")
+    # 可以通过 supervisor_id 判断是否为升级来的审批人
+```
 
 ## 使用示例
 

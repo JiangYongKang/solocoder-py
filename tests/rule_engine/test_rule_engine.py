@@ -542,7 +542,7 @@ class TestActionTypes:
         res = engine.run()
         assert res.final_facts["new_fact"] == "hello"
 
-    def test_modify_fact_action(self, engine):
+    def test_modify_fact_action(self, engine_with_overwrite):
         r = Rule(
             rule_id="modify",
             name="modify test",
@@ -551,9 +551,9 @@ class TestActionTypes:
                 Action(action_type=ActionType.MODIFY_FACT, fact_key="x", fact_value=100),
             ],
         )
-        engine.add_rule(r)
-        engine.add_fact(Fact(key="x", value=1))
-        res = engine.run()
+        engine_with_overwrite.add_rule(r)
+        engine_with_overwrite.add_fact(Fact(key="x", value=1))
+        res = engine_with_overwrite.run()
         assert res.final_facts["x"] == 100
 
     def test_remove_fact_action(self, engine):
@@ -590,6 +590,75 @@ class TestActionTypes:
         assert len(results) == 1
         assert results[0][0] == "called"
         assert results[0][1]["trigger"] is True
+
+    def test_external_callback_adds_fact_triggers_chained_rule(self, engine):
+        def add_fact_via_callback(eng, facts):
+            eng.add_fact(Fact(key="derived", value=True))
+
+        r_ext = Rule(
+            rule_id="ext_add",
+            name="callback adds fact",
+            conditions=[FactCondition(key="start", operator=FactOperator.EQ, expected_value=True)],
+            actions=[
+                Action(action_type=ActionType.EXTERNAL, callback=add_fact_via_callback),
+            ],
+        )
+        r_chained = Rule(
+            rule_id="chained",
+            name="depends on derived fact",
+            conditions=[FactCondition(key="derived", operator=FactOperator.EQ, expected_value=True)],
+            actions=[
+                Action(action_type=ActionType.ADD_FACT, fact_key="final", fact_value="done"),
+            ],
+        )
+        engine.add_rule(r_ext)
+        engine.add_rule(r_chained)
+        engine.add_fact(Fact(key="start", value=True))
+        result = engine.run()
+
+        assert result.converged is True
+        assert result.final_facts.get("derived") is True
+        assert result.final_facts.get("final") == "done"
+        assert any(rec.rule_id == "chained" for rec in result.execution_history)
+
+    def test_external_callback_removes_fact_detected_as_change(self, engine_with_overwrite):
+        initial_facts_holder = {}
+
+        def remove_fact_via_callback(eng, facts):
+            initial_facts_holder.update(facts)
+            eng.remove_fact("to_remove")
+
+        r_ext = Rule(
+            rule_id="ext_remove",
+            name="callback removes fact",
+            conditions=[FactCondition(key="trigger", operator=FactOperator.EQ, expected_value=True)],
+            actions=[
+                Action(action_type=ActionType.EXTERNAL, callback=remove_fact_via_callback),
+            ],
+            priority=100,
+        )
+        r_check = Rule(
+            rule_id="check_removed",
+            name="runs after removal when trigger still exists",
+            conditions=[
+                FactCondition(key="trigger", operator=FactOperator.EQ, expected_value=True),
+                FactCondition(key="to_remove", operator=FactOperator.NOT_EXISTS),
+            ],
+            actions=[
+                Action(action_type=ActionType.ADD_FACT, fact_key="removal_confirmed", fact_value=True),
+            ],
+        )
+        engine_with_overwrite.add_rule(r_ext)
+        engine_with_overwrite.add_rule(r_check)
+        engine_with_overwrite.add_facts([
+            Fact(key="trigger", value=True),
+            Fact(key="to_remove", value="hello"),
+        ])
+        result = engine_with_overwrite.run()
+
+        assert result.converged is True
+        assert "to_remove" not in result.final_facts
+        assert result.final_facts.get("removal_confirmed") is True
 
 
 # =============================
@@ -764,6 +833,53 @@ class TestConflictsAndErrors:
             engine.run()
         assert exc_info.value.rule_id == "conflict"
         assert isinstance(exc_info.value.cause, FactConflictError)
+
+    def test_modify_fact_conflict_during_rule_execution(self, engine):
+        engine.add_fact(Fact(key="x", value=1))
+        r = Rule(
+            rule_id="mod_conflict",
+            name="tries to modify fact without overwrite permission",
+            conditions=[],
+            actions=[
+                Action(action_type=ActionType.MODIFY_FACT, fact_key="x", fact_value=2),
+            ],
+        )
+        engine.add_rule(r)
+        with pytest.raises(RuleExecutionError) as exc_info:
+            engine.run()
+        assert exc_info.value.rule_id == "mod_conflict"
+        assert isinstance(exc_info.value.cause, FactConflictError)
+        assert exc_info.value.cause.fact_key == "x"
+        assert exc_info.value.cause.existing_value == 1
+        assert exc_info.value.cause.new_value == 2
+
+    def test_modify_fact_with_overwrite_allowed(self, engine_with_overwrite):
+        engine_with_overwrite.add_fact(Fact(key="x", value=1))
+        r = Rule(
+            rule_id="mod_ok",
+            name="modify fact with overwrite enabled",
+            conditions=[],
+            actions=[
+                Action(action_type=ActionType.MODIFY_FACT, fact_key="x", fact_value=2),
+            ],
+        )
+        engine_with_overwrite.add_rule(r)
+        result = engine_with_overwrite.run()
+        assert result.final_facts["x"] == 2
+
+    def test_modify_fact_same_value_no_conflict(self, engine):
+        engine.add_fact(Fact(key="x", value=1))
+        r = Rule(
+            rule_id="mod_same",
+            name="modify to same value",
+            conditions=[],
+            actions=[
+                Action(action_type=ActionType.MODIFY_FACT, fact_key="x", fact_value=1),
+            ],
+        )
+        engine.add_rule(r)
+        result = engine.run()
+        assert result.final_facts["x"] == 1
 
     def test_modify_fact_during_execution_with_overwrite(self, engine_with_overwrite):
         engine_with_overwrite.add_fact(Fact(key="x", value=1))

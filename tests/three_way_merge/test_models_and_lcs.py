@@ -11,7 +11,6 @@ from solocoder_py.three_way_merge.models import (
 from solocoder_py.three_way_merge.lcs import lcs_table, backtrack_lcs, diff_hunks
 from solocoder_py.three_way_merge.exceptions import (
     InvalidInputError,
-    MergeTimeoutError,
     ThreeWayMergeError,
 )
 
@@ -217,9 +216,6 @@ class TestDiffHunks:
 class TestExceptions:
     def test_invalid_input_is_merge_error(self):
         assert issubclass(InvalidInputError, ThreeWayMergeError)
-
-    def test_merge_timeout_is_merge_error(self):
-        assert issubclass(MergeTimeoutError, ThreeWayMergeError)
 
     def test_can_raise_and_catch(self):
         with pytest.raises(ThreeWayMergeError):

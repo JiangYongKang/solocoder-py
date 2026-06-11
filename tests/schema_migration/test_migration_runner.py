@@ -325,7 +325,10 @@ class TestMigrationFailureAndRollback:
         assert result.to_version == 0
         assert result.was_partial is True
         assert result.applied_versions == [1, 2]
-        assert result.rolled_back_versions == [1, 2]
+        assert result.rollback_attempted_versions == [1, 2]
+        assert result.rolled_back_versions == [2, 1]
+        assert result.successfully_rolled_back_versions == [2, 1]
+        assert result.failed_rollback_versions == []
 
         assert runner.current_version == 0
         assert "applied_v1" not in runner.state.data
@@ -592,29 +595,41 @@ class TestMigrationResultProperties:
         )
         assert result.was_partial is False
         assert result.had_rollback_failures is False
+        assert result.rollback_attempted_versions == []
+        assert result.rolled_back_versions == []
+        assert result.successfully_rolled_back_versions == []
+        assert result.failed_rollback_versions == []
 
         partial_result = MigrationResult(
             success=False,
             from_version=0,
             to_version=0,
             applied_versions=[1, 2],
-            rolled_back_versions=[1, 2],
+            rollback_attempted_versions=[1, 2],
+            rolled_back_versions=[2, 1],
             failed_version=3,
         )
         assert partial_result.was_partial is True
         assert partial_result.had_rollback_failures is False
+        assert partial_result.rollback_attempted_versions == [1, 2]
+        assert partial_result.successfully_rolled_back_versions == [2, 1]
+        assert partial_result.failed_rollback_versions == []
 
         partial_with_errors = MigrationResult(
             success=False,
             from_version=0,
             to_version=0,
-            applied_versions=[1, 2],
-            rolled_back_versions=[1, 2],
-            failed_version=3,
+            applied_versions=[1, 2, 3],
+            rollback_attempted_versions=[1, 2, 3],
+            rolled_back_versions=[3, 1],
+            failed_version=4,
             rollback_errors=[{"version": 2, "error": "failed"}],
         )
         assert partial_with_errors.was_partial is True
         assert partial_with_errors.had_rollback_failures is True
+        assert partial_with_errors.rollback_attempted_versions == [1, 2, 3]
+        assert partial_with_errors.successfully_rolled_back_versions == [3, 1]
+        assert partial_with_errors.failed_rollback_versions == [2]
 
 
 class TestStateCompare:
@@ -708,3 +723,158 @@ class TestHistoryTracking:
             (2, "rollback"),
             (1, "rollback"),
         ]
+
+
+class TestRegressionFixes:
+    def test_idempotency_failure_includes_rollback_errors(self):
+        def make_non_idempotent_with_bad_rollback(
+            version: int, non_idempotent: bool, fail_down: bool
+        ) -> Migration:
+            call_tracker = {"count": 0}
+
+            def up(data: Dict[str, Any]) -> None:
+                call_tracker["count"] += 1
+                if non_idempotent:
+                    data.setdefault("bad_counter", 0)
+                    data["bad_counter"] += 1
+                else:
+                    data[f"v{version}"] = True
+
+            def down(data: Dict[str, Any]) -> None:
+                if fail_down:
+                    raise RuntimeError(f"Rollback v{version} failed")
+                data.pop(f"v{version}", None)
+                data.pop("bad_counter", None)
+
+            return Migration(
+                version=version,
+                name=f"v{version}",
+                up=up,
+                down=down,
+            )
+
+        runner = make_runner()
+        runner.register_migrations([
+            make_non_idempotent_with_bad_rollback(1, False, True),
+            make_non_idempotent_with_bad_rollback(2, False, False),
+            make_non_idempotent_with_bad_rollback(3, True, False),
+        ])
+
+        result = runner.upgrade()
+        assert result.success is False
+        assert result.failed_version == 3
+        assert len(result.idempotency_errors) > 0
+
+        assert result.had_rollback_failures is True
+        assert len(result.rollback_errors) >= 1
+        rollback_failed_versions = [e["version"] for e in result.rollback_errors]
+        assert 1 in rollback_failed_versions
+
+        assert result.rollback_attempted_versions == [1, 2]
+        assert 2 in result.rolled_back_versions
+        assert 1 not in result.rolled_back_versions
+
+    def test_idempotency_failure_restores_to_original_state(self):
+        state_before_up = {"preexisting": "value"}
+        runner_state = make_state()
+        runner_state.data.update(state_before_up)
+
+        runner = make_runner(runner_state)
+
+        call_count = {"up": 0}
+
+        def non_idempotent_up(data: Dict[str, Any]) -> None:
+            call_count["up"] += 1
+            data.setdefault("side_effect_counter", 0)
+            data["side_effect_counter"] += 1
+
+        def down(data: Dict[str, Any]) -> None:
+            data.pop("side_effect_counter", None)
+
+        runner.register_migration(Migration(
+            version=1, name="bad", up=non_idempotent_up, down=down
+        ))
+
+        result = runner.upgrade()
+        assert result.success is False
+        assert result.failed_version == 1
+
+        assert runner.state.data == state_before_up
+        assert "side_effect_counter" not in runner.state.data
+        assert runner_state.current_version == 0
+        assert 1 not in runner_state.applied_migrations
+
+    def test_second_up_exception_restores_to_original_state(self):
+        call_count = {"up": 0}
+        state_before = {"existing_key": "existing_value"}
+        runner_state = make_state()
+        runner_state.data.update(state_before)
+
+        def second_up_fails(data: Dict[str, Any]) -> None:
+            call_count["up"] += 1
+            if call_count["up"] == 1:
+                data["first_up_side_effect"] = "should_be_removed"
+            else:
+                raise RuntimeError("Second up intentionally fails")
+
+        def down(data: Dict[str, Any]) -> None:
+            data.pop("first_up_side_effect", None)
+
+        runner = make_runner(runner_state)
+        runner.register_migration(Migration(
+            version=1, name="second_up_fails", up=second_up_fails, down=down
+        ))
+
+        result = runner.upgrade()
+        assert result.success is False
+        assert result.failed_version == 1
+        assert "Second up intentionally fails" in result.error_message
+
+        assert runner.state.data == state_before
+        assert "first_up_side_effect" not in runner.state.data
+        assert runner.current_version == 0
+        assert 1 not in runner_state.applied_migrations
+
+    def test_rolled_back_versions_accurately_reflects_success(self):
+        def make_migration(
+            version: int, fail_up: bool, fail_down: bool
+        ) -> Migration:
+            def up(data: Dict[str, Any]) -> None:
+                if fail_up:
+                    raise RuntimeError(f"Up v{version} failed")
+                data[f"v{version}"] = True
+
+            def down(data: Dict[str, Any]) -> None:
+                if fail_down:
+                    raise RuntimeError(f"Down v{version} failed")
+                data.pop(f"v{version}", None)
+
+            return Migration(
+                version=version, name=f"v{version}", up=up, down=down
+            )
+
+        runner = make_runner()
+        runner.register_migrations([
+            make_migration(1, False, True),
+            make_migration(2, False, False),
+            make_migration(3, False, True),
+            make_migration(4, False, False),
+            make_migration(5, True, False),
+        ])
+
+        result = runner.upgrade()
+        assert result.success is False
+        assert result.failed_version == 5
+
+        assert result.rollback_attempted_versions == [1, 2, 3, 4]
+
+        assert set(result.rolled_back_versions) == {4, 2}
+        assert len(result.rolled_back_versions) == 2
+
+        assert set(result.failed_rollback_versions) == {3, 1}
+        assert len(result.rollback_errors) == 2
+
+        failed_versions_in_errors = [e["version"] for e in result.rollback_errors]
+        assert sorted(failed_versions_in_errors) == [1, 3]
+
+        assert result.applied_versions == [1, 2, 3, 4]

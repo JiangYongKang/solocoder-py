@@ -60,19 +60,19 @@ class AntiEntropyEngine:
                 elif entry_a.version > entry_b.version:
                     diff_entry = DiffEntry(
                         key=key,
-                        status=EntryStatus.VERSION_MISMATCH,
+                        status=EntryStatus.A_HAS_NEWER,
                         entry_a=entry_a,
                         entry_b=entry_b,
                     )
-                    result.version_mismatch[key] = diff_entry
+                    result.a_has_newer[key] = diff_entry
                 else:
                     diff_entry = DiffEntry(
                         key=key,
-                        status=EntryStatus.VERSION_MISMATCH,
+                        status=EntryStatus.B_HAS_NEWER,
                         entry_a=entry_a,
                         entry_b=entry_b,
                     )
-                    result.version_mismatch[key] = diff_entry
+                    result.b_has_newer[key] = diff_entry
 
         return result
 
@@ -85,10 +85,8 @@ class AntiEntropyEngine:
                 sync_result.synced_keys.add(key)
                 sync_result.a_to_b_count += 1
 
-        for key, diff_entry in diff_result.version_mismatch.items():
-            if diff_entry.entry_a is None or diff_entry.entry_b is None:
-                continue
-            if diff_entry.entry_a.version > diff_entry.entry_b.version:
+        for key, diff_entry in diff_result.a_has_newer.items():
+            if diff_entry.entry_a is not None:
                 if self.replica_b.merge_entry(diff_entry.entry_a):
                     sync_result.synced_keys.add(key)
                     sync_result.a_to_b_count += 1
@@ -113,10 +111,8 @@ class AntiEntropyEngine:
                 sync_result.synced_keys.add(key)
                 sync_result.b_to_a_count += 1
 
-        for key, diff_entry in diff_result.version_mismatch.items():
-            if diff_entry.entry_a is None or diff_entry.entry_b is None:
-                continue
-            if diff_entry.entry_b.version > diff_entry.entry_a.version:
+        for key, diff_entry in diff_result.b_has_newer.items():
+            if diff_entry.entry_b is not None:
                 if self.replica_a.merge_entry(diff_entry.entry_b):
                     sync_result.synced_keys.add(key)
                     sync_result.b_to_a_count += 1
@@ -146,14 +142,14 @@ class AntiEntropyEngine:
                 sync_result.synced_keys.add(key)
                 sync_result.b_to_a_count += 1
 
-        for key, diff_entry in diff_result.version_mismatch.items():
-            if diff_entry.entry_a is None or diff_entry.entry_b is None:
-                continue
-            if diff_entry.entry_a.version > diff_entry.entry_b.version:
+        for key, diff_entry in diff_result.a_has_newer.items():
+            if diff_entry.entry_a is not None:
                 if self.replica_b.merge_entry(diff_entry.entry_a):
                     sync_result.synced_keys.add(key)
                     sync_result.a_to_b_count += 1
-            else:
+
+        for key, diff_entry in diff_result.b_has_newer.items():
+            if diff_entry.entry_b is not None:
                 if self.replica_a.merge_entry(diff_entry.entry_b):
                     sync_result.synced_keys.add(key)
                     sync_result.b_to_a_count += 1
@@ -178,13 +174,13 @@ class AntiEntropyEngine:
 
         conflict = self._conflicts[key]
         if winner == "a":
-            self.replica_b.merge_entry(conflict.entry_a)
+            self.replica_b.force_merge_entry(conflict.entry_a)
             conflict.resolved = True
             conflict.winner = "a"
             del self._conflicts[key]
             return True
         elif winner == "b":
-            self.replica_a.merge_entry(conflict.entry_b)
+            self.replica_a.force_merge_entry(conflict.entry_b)
             conflict.resolved = True
             conflict.winner = "b"
             del self._conflicts[key]

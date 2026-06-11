@@ -1,0 +1,7 @@
+你实现的数据迁移执行模块存在一些问题，需要修复：
+1. test_resume_from_failed_state_triggers_rollback 测试用例声称验证"从失败状态恢复触发回滚"，但测试正文中创建了新的 migrator 实例后仅断言其初始状态为 IDLE，从未调用 resume_from_checkpoint 方法，导致该异常分支场景实际未被覆盖。测试名与实际验证内容脱节，需要补充对 resume_from_checkpoint 触发回滚的实际调用和断言。
+2. exceptions.py 中定义了 EmptySourceError 异常类，但 migrate 方法遇到空数据源时直接将状态设为 COMPLETED 并返回，没有任何路径抛出此异常，成为死代码。如果设计上不需要抛出异常就应清除该定义。
+3. resume_from_checkpoint 方法通过 isinstance 判断检查点存储的具体子类类型来决定行为，导致任何符合 CheckpointStore 接口的自定义实现都无法被正确识别。应在基类中定义统一的抽象方法，对所有实现统一调用，不依赖具体子类类型判断。
+4. _restore_migration_state 方法在恢复断点状态时只标记批次状态但不向目标存储写回实际数据，如果调用方未传入已持久化的同一目标存储字典，状态与数据会产生不一致。
+5. 修复完成后重新运行 poetry run pytest tests/data_migration/ -v，确保所有测试通过。
+6. 更新 README.md，说明检查点接口的设计约定和断点续传时状态与数据的一致性保证。

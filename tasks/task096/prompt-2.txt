@@ -1,0 +1,6 @@
+你实现的审批流引擎存在一些问题，需要修复：
+1. resubmit 方法在驳回后不可用。reject 方法驳回后将目标节点从 PENDING 激活为 IN_PROGRESS，而 resubmit 入口检查节点状态不为 REJECTED 就直接返回，导致驳回后重新提交的路径永远是死路径。驳回后目标节点应保留为 REJECTED 状态等待重新提交，而非直接激活。
+2. get_pending_approvers 方法在超时升级后无法返回动态添加的上级审批人。escalate_timeout 将上级审批人加入 node_state 中，但 get_pending_approvers 通过 WorkflowDefinition 的静态审批人列表查找 Approver 对象，若上级未预注册则被静默跳过，导致调用方以为没有待审批人。
+3. _check_approver_in_node 方法在校验驳回权限时未施加串行顺序约束。SEQUENTIAL 节点中排在后面的审批人在前面审批人尚未操作时就能调用 reject。approve 方法校验了 sequential_index 顺序，但 reject 没有做同样检查，与"按顺序依次审批"的要求矛盾。
+4. 修复完成后重新运行 poetry run pytest tests/approval_workflow/ -v，确保所有测试通过。
+5. 更新 README.md，说明驳回回退后节点的状态流转规则、动态审批人的查询机制和串行节点的操作顺序约束。

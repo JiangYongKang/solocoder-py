@@ -9,7 +9,8 @@ class EntryStatus(str, Enum):
     IDENTICAL = "identical"
     ONLY_IN_A = "only_in_a"
     ONLY_IN_B = "only_in_b"
-    VERSION_MISMATCH = "version_mismatch"
+    A_HAS_NEWER = "a_has_newer"
+    B_HAS_NEWER = "b_has_newer"
     CONFLICT = "conflict"
 
 
@@ -31,19 +32,40 @@ class DiffEntry:
     entry_a: Optional[VersionedEntry] = None
     entry_b: Optional[VersionedEntry] = None
 
+    @property
+    def newer_entry(self) -> Optional[VersionedEntry]:
+        if self.status == EntryStatus.A_HAS_NEWER:
+            return self.entry_a
+        if self.status == EntryStatus.B_HAS_NEWER:
+            return self.entry_b
+        return None
+
+    @property
+    def older_entry(self) -> Optional[VersionedEntry]:
+        if self.status == EntryStatus.A_HAS_NEWER:
+            return self.entry_b
+        if self.status == EntryStatus.B_HAS_NEWER:
+            return self.entry_a
+        return None
+
 
 @dataclass
 class DiffResult:
     only_in_a: Dict[str, VersionedEntry] = field(default_factory=dict)
     only_in_b: Dict[str, VersionedEntry] = field(default_factory=dict)
-    version_mismatch: Dict[str, DiffEntry] = field(default_factory=dict)
+    a_has_newer: Dict[str, DiffEntry] = field(default_factory=dict)
+    b_has_newer: Dict[str, DiffEntry] = field(default_factory=dict)
     conflicts: Dict[str, DiffEntry] = field(default_factory=dict)
     identical: Set[str] = field(default_factory=set)
 
     @property
     def has_differences(self) -> bool:
         return bool(
-            self.only_in_a or self.only_in_b or self.version_mismatch or self.conflicts
+            self.only_in_a
+            or self.only_in_b
+            or self.a_has_newer
+            or self.b_has_newer
+            or self.conflicts
         )
 
     @property
@@ -55,9 +77,14 @@ class DiffResult:
         return (
             len(self.only_in_a)
             + len(self.only_in_b)
-            + len(self.version_mismatch)
+            + len(self.a_has_newer)
+            + len(self.b_has_newer)
             + len(self.conflicts)
         )
+
+    @property
+    def version_mismatch_count(self) -> int:
+        return len(self.a_has_newer) + len(self.b_has_newer)
 
 
 @dataclass

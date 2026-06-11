@@ -29,7 +29,7 @@
 | `MigrationStatus` | 迁移状态枚举：`PENDING`（待执行）、`APPLIED`（已应用）、`FAILED`（失败）、`ROLLED_BACK`（已回滚） |
 | `Migration` | 迁移脚本数据模型，包含版本号、名称、升级函数 `up`、回滚函数 `down`、描述等 |
 | `SchemaState` | Schema 完整状态数据模型，包括当前版本、已应用迁移映射、数据字典、迁移历史记录；提供状态快照、标记应用、标记回滚等方法 |
-| `MigrationResult` | 迁移执行结果数据模型，包含是否成功、起始/目标版本、已应用版本列表、已回滚版本列表、失败版本、错误信息、幂等性错误、回滚错误等 |
+| `MigrationResult` | 迁移执行结果数据模型，包含是否成功、起始/目标版本、已应用版本、**回滚尝试版本**（所有前序迁移）、**实际回滚成功版本**、失败版本、错误信息、幂等性错误、回滚错误详情等 |
 | `IdempotencyCheckResult` | 幂等性检查结果数据模型，包含是否通过、第一次执行状态、第二次执行状态、差异列表；提供 `raise_if_failed()` 便捷方法 |
 
 ### runner.py
@@ -313,10 +313,19 @@ runner.register_migrations([
 
 result = runner.upgrade()
 print(f"Success: {result.success}")                         # False
+print(f"Was partial: {result.was_partial}")                 # True
 print(f"Had rollback failures: {result.had_rollback_failures}")  # True
-print(f"Rollback errors: {result.rollback_errors}")
-# [{'version': 1, 'name': 'v1', 'error': 'Rollback v1 failed: file locked'}]
-# 注意：v2 的回滚成功了，只有 v1 的回滚失败
+
+print(f"Attempted rollback versions: {result.rollback_attempted_versions}")  # [1, 2]
+print(f"Successfully rolled back: {result.rolled_back_versions}")  # [2]   (只有 v2 回滚成功)
+print(f"Failed rollback versions: {result.failed_rollback_versions}")    # [1]
+print(f"Rollback errors:")
+for err in result.rollback_errors:
+    print(f"  - v{err['version']} ({err['name']}): {err['error']}")
+#  - v1 (v1): Rollback v1 failed: file locked
+
+assert set(result.rolled_back_versions) | set(result.failed_rollback_versions) == set(result.rollback_attempted_versions)
+# 成功回滚集 ∪ 回滚失败集 == 尝试回滚集（二者不交，且并集完备）
 ```
 
 ### 检查迁移历史

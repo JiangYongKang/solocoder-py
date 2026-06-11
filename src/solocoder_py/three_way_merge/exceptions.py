@@ -7,7 +7,3 @@ class ThreeWayMergeError(Exception):
 
 class InvalidInputError(ThreeWayMergeError):
     pass
-
-
-class MergeTimeoutError(ThreeWayMergeError):
-    pass

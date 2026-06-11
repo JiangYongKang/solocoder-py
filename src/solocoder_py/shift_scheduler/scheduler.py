@@ -92,13 +92,14 @@ class ShiftScheduler:
                 result[current_date] = assigned_staff
 
                 if current_date in self._schedule:
-                    existing = self._schedule[current_date]
-                    for ex in existing:
-                        if ex.staff_id == assigned_staff:
-                            pass
-                    self._schedule[current_date].append(
-                        ShiftAssignment(shift_date=current_date, staff_id=assigned_staff)
+                    already_assigned = any(
+                        ex.staff_id == assigned_staff
+                        for ex in self._schedule[current_date]
                     )
+                    if not already_assigned:
+                        self._schedule[current_date].append(
+                            ShiftAssignment(shift_date=current_date, staff_id=assigned_staff)
+                        )
                 else:
                     self._schedule[current_date] = [
                         ShiftAssignment(shift_date=current_date, staff_id=assigned_staff)
@@ -285,20 +286,12 @@ class ShiftScheduler:
         req_assignments = self._schedule.get(requester_date, [])
         req_kept = [a for a in req_assignments if a.staff_id != requester_id]
         req_kept.append(ShiftAssignment(shift_date=requester_date, staff_id=responder_id))
-        if not req_kept:
-            if requester_date in self._schedule:
-                del self._schedule[requester_date]
-        else:
-            self._schedule[requester_date] = req_kept
+        self._schedule[requester_date] = req_kept
 
         resp_assignments = self._schedule.get(responder_date, [])
         resp_kept = [a for a in resp_assignments if a.staff_id != responder_id]
         resp_kept.append(ShiftAssignment(shift_date=responder_date, staff_id=requester_id))
-        if not resp_kept:
-            if responder_date in self._schedule:
-                del self._schedule[responder_date]
-        else:
-            self._schedule[responder_date] = resp_kept
+        self._schedule[responder_date] = resp_kept
 
         swap.mark_effective()
 

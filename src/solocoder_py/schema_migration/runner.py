@@ -126,35 +126,40 @@ class MigrationRunner:
                 idempotency_check = self._execute_with_idempotency_check(migration)
                 if not idempotency_check.passed:
                     idempotency_errors.extend(idempotency_check.differences)
-                    self._rollback_migrations(applied)
+                    rollback_attempted = [m.version for m in applied]
+                    successfully_rolled_back, rollback_errors = self._rollback_migrations(applied)
                     return MigrationResult(
                         success=False,
                         from_version=from_version,
                         to_version=from_version,
                         applied_versions=[m.version for m in applied],
-                        rolled_back_versions=[m.version for m in applied],
+                        rollback_attempted_versions=rollback_attempted,
+                        rolled_back_versions=successfully_rolled_back,
                         failed_version=migration.version,
                         error_message=(
                             f"Migration {migration.version} failed idempotency check: "
                             + "; ".join(idempotency_check.differences)
                         ),
                         idempotency_errors=idempotency_errors,
+                        rollback_errors=rollback_errors,
                     )
 
                 self._state.mark_applied(migration)
                 applied.append(migration)
 
             except Exception as e:
-                rollback_result = self._rollback_migrations(applied)
+                rollback_attempted = [m.version for m in applied]
+                successfully_rolled_back, rollback_errors = self._rollback_migrations(applied)
                 return MigrationResult(
                     success=False,
                     from_version=from_version,
                     to_version=from_version,
                     applied_versions=[m.version for m in applied],
-                    rolled_back_versions=[m.version for m in applied],
+                    rollback_attempted_versions=rollback_attempted,
+                    rolled_back_versions=successfully_rolled_back,
                     failed_version=migration.version,
                     error_message=str(e),
-                    rollback_errors=rollback_result,
+                    rollback_errors=rollback_errors,
                 )
 
         return MigrationResult(
@@ -178,14 +183,17 @@ class MigrationRunner:
         try:
             migration.up(self._state.data)
         except Exception:
-            self._restore_data(state_after_first)
+            self._restore_data(state_before_any)
             raise
 
         state_after_second = self._state.snapshot_data()
 
         differences = self._compare_states(state_after_first, state_after_second)
 
-        self._restore_data(state_after_first)
+        if len(differences) == 0:
+            self._restore_data(state_after_first)
+        else:
+            self._restore_data(state_before_any)
 
         return IdempotencyCheckResult(
             passed=len(differences) == 0,
@@ -226,7 +234,8 @@ class MigrationRunner:
         self._state.data.clear()
         self._state.data.update(snapshot)
 
-    def _rollback_migrations(self, migrations: List[Migration]) -> List[Dict]:
+    def _rollback_migrations(self, migrations: List[Migration]) -> tuple[List[int], List[Dict]]:
+        successfully_rolled_back: List[int] = []
         rollback_errors: List[Dict] = []
         reversed_migrations = list(reversed(migrations))
 
@@ -234,6 +243,7 @@ class MigrationRunner:
             try:
                 migration.down(self._state.data)
                 self._state.mark_rolled_back(migration)
+                successfully_rolled_back.append(migration.version)
             except Exception as e:
                 rollback_errors.append({
                     "version": migration.version,
@@ -241,7 +251,7 @@ class MigrationRunner:
                     "error": str(e),
                 })
 
-        return rollback_errors
+        return successfully_rolled_back, rollback_errors
 
     def get_migration(self, version: int) -> Migration:
         if version not in self._migrations:

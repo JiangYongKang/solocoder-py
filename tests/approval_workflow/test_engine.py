@@ -12,6 +12,7 @@ from solocoder_py.approval_workflow import (
     ApprovalNode,
     ApprovalStatus,
     Approver,
+    ApproverNotFoundError,
     ApprovalWorkflowEngine,
     EscalationChainExhaustedError,
     InvalidRejectTargetError,
@@ -21,6 +22,7 @@ from solocoder_py.approval_workflow import (
     WorkflowAlreadyEndedError,
     WorkflowDefinition,
     WorkflowDefinitionError,
+    WorkflowExecutionError,
     WorkflowStatus,
 )
 from tests.approval_workflow.conftest import (
@@ -222,6 +224,9 @@ class TestRejectAndRollback:
             if n.node_id == "node-1"
         ]
         assert len(intermediate_notifs) >= 1
+        assert (
+            result.node_states["node-0"].status == NodeStatus.REJECTED
+        )
 
     def test_reject_then_reapprove(
         self,
@@ -236,6 +241,18 @@ class TestRejectAndRollback:
         engine.reject(instance.id, "approver-2", "node-1", "退回修改")
 
         assert instance.current_node_index == 1
+        assert (
+            instance.node_states["node-1"].status == NodeStatus.REJECTED
+        )
+
+        with pytest.raises(Exception):
+            engine.approve(instance.id, "approver-1")
+
+        engine.resubmit(instance.id, "approver-2", "已修改")
+
+        assert (
+            instance.node_states["node-1"].status == NodeStatus.IN_PROGRESS
+        )
 
         engine.approve(instance.id, "approver-1")
         engine.approve(instance.id, "approver-2")
@@ -262,7 +279,7 @@ class TestRejectAndRollback:
             instance.node_states["or-node"].status == NodeStatus.PENDING
         )
         assert (
-            instance.node_states["cs-node"].status == NodeStatus.IN_PROGRESS
+            instance.node_states["cs-node"].status == NodeStatus.REJECTED
         )
         for aid in ["cs-a1", "cs-a2", "cs-a3"]:
             assert (
@@ -271,6 +288,16 @@ class TestRejectAndRollback:
                 .status
                 == ApprovalStatus.PENDING
             )
+
+        engine.resubmit(instance.id, "or-a1", "已修正")
+        assert (
+            instance.node_states["cs-node"].status == NodeStatus.IN_PROGRESS
+        )
+
+        engine.approve(instance.id, "cs-a1")
+        engine.approve(instance.id, "cs-a2")
+        engine.approve(instance.id, "cs-a3")
+        assert instance.current_node_index == 2
 
 
 class TestTimeoutEscalation:
@@ -485,12 +512,17 @@ class TestEdgeCases:
         assert instance.current_node_index == 0
 
         assert (
-            instance.node_states["n-0"].status == NodeStatus.IN_PROGRESS
+            instance.node_states["n-0"].status == NodeStatus.REJECTED
         )
         for i in range(1, 4):
             assert (
                 instance.node_states[f"n-{i}"].status == NodeStatus.PENDING
             )
+
+        engine.resubmit(instance.id, "approver-4", "已修改")
+        assert (
+            instance.node_states["n-0"].status == NodeStatus.IN_PROGRESS
+        )
 
         for i in range(5):
             if i < 4:
@@ -692,6 +724,76 @@ class TestExceptionBranches:
                 ],
             )
 
+    def test_reject_sequential_order_constraint(
+        self, engine: ApprovalWorkflowEngine
+    ) -> None:
+        nodes, approvers = make_sequential_nodes(
+            node_count=2, approvers_per_node=3
+        )
+        definition = WorkflowDefinition(
+            id="wf-reject-order",
+            name="驳回顺序测试",
+            nodes=nodes,
+            approvers=approvers,
+        )
+        engine.register_definition(definition)
+        instance = engine.start_workflow(definition.id)
+
+        engine.approve(instance.id, "approver-0")
+        engine.approve(instance.id, "approver-1")
+        engine.approve(instance.id, "approver-2")
+
+        assert instance.current_node_index == 1
+
+        with pytest.raises(WorkflowExecutionError):
+            engine.reject(
+                instance.id,
+                "approver-5",
+                target_node_id="node-0",
+                comment="驳回",
+            )
+
+        with pytest.raises(WorkflowExecutionError):
+            engine.reject(
+                instance.id,
+                "approver-4",
+                target_node_id="node-0",
+                comment="驳回",
+            )
+
+        engine.reject(
+            instance.id,
+            "approver-3",
+            target_node_id="node-0",
+            comment="驳回",
+        )
+        assert instance.current_node_index == 0
+
+    def test_reject_after_approve_not_allowed(
+        self, engine: ApprovalWorkflowEngine
+    ) -> None:
+        nodes, approvers = make_sequential_nodes(
+            node_count=1, approvers_per_node=2
+        )
+        definition = WorkflowDefinition(
+            id="wf-reject-after-approve",
+            name="已审批后驳回测试",
+            nodes=nodes,
+            approvers=approvers,
+        )
+        engine.register_definition(definition)
+        instance = engine.start_workflow(definition.id)
+
+        engine.approve(instance.id, "approver-0")
+
+        with pytest.raises(WorkflowExecutionError):
+            engine.reject(
+                instance.id,
+                "approver-0",
+                target_node_id="node-0",
+                comment="驳回",
+            )
+
 
 class TestApprovalRecords:
     def test_records_track_comment_and_timestamp(
@@ -732,3 +834,93 @@ class TestApprovalRecords:
         assert "approver-0" in pending_ids
         assert "approver-1" not in pending_ids
         assert "approver-2" in pending_ids
+
+    def test_get_pending_approvers_includes_dynamic_escalated(
+        self,
+        engine: ApprovalWorkflowEngine,
+        escalation_workflow: tuple[WorkflowDefinition, List[Approver]],
+    ) -> None:
+        definition, approvers = escalation_workflow
+        instance = engine.start_workflow(definition.id)
+
+        pending = engine.get_pending_approvers(instance.id)
+        pending_ids = [a.id for a in pending]
+        assert "mgr-1" in pending_ids
+        assert "dir-1" not in pending_ids
+
+        node_state = instance.node_states["node-mgr"]
+        node_state.started_at = datetime.now() - timedelta(hours=2)
+        engine.escalate_timeout(instance.id)
+
+        pending = engine.get_pending_approvers(instance.id)
+        pending_ids = [a.id for a in pending]
+        assert "mgr-1" not in pending_ids
+        assert "dir-1" in pending_ids
+
+        dir_approver = next((a for a in pending if a.id == "dir-1"), None)
+        assert dir_approver is not None
+        assert dir_approver.name == "总监"
+
+    def test_get_pending_approvers_unknown_supervisor(
+        self,
+        engine: ApprovalWorkflowEngine,
+    ) -> None:
+        approvers = [
+            Approver(id="emp-1", name="员工", supervisor_id="unknown-mgr"),
+        ]
+        node = ApprovalNode(
+            id="node-1",
+            name="测试节点",
+            node_type=NodeType.SEQUENTIAL,
+            approver_ids=["emp-1"],
+            timeout=timedelta(hours=1),
+        )
+        definition = WorkflowDefinition(
+            id="wf-unknown-supervisor",
+            name="未知上级测试",
+            nodes=[node],
+            approvers=approvers,
+        )
+        engine.register_definition(definition)
+        instance = engine.start_workflow(definition.id)
+
+        node_state = instance.node_states["node-1"]
+        node_state.started_at = datetime.now() - timedelta(hours=2)
+
+        with pytest.raises(ApproverNotFoundError):
+            engine.escalate_timeout(instance.id)
+
+    def test_get_pending_approvers_dynamic_not_in_definition(
+        self,
+        engine: ApprovalWorkflowEngine,
+    ) -> None:
+        approvers = [
+            Approver(id="emp-1", name="员工", supervisor_id="mgr-dynamic"),
+            Approver(id="mgr-dynamic", name="动态主管"),
+        ]
+        node = ApprovalNode(
+            id="node-1",
+            name="测试节点",
+            node_type=NodeType.SEQUENTIAL,
+            approver_ids=["emp-1"],
+            timeout=timedelta(hours=1),
+        )
+        definition = WorkflowDefinition(
+            id="wf-dynamic-not-in-node",
+            name="动态不在节点测试",
+            nodes=[node],
+            approvers=approvers,
+        )
+        engine.register_definition(definition)
+        instance = engine.start_workflow(definition.id)
+
+        node_state = instance.node_states["node-1"]
+        node_state.started_at = datetime.now() - timedelta(hours=2)
+        engine.escalate_timeout(instance.id)
+
+        pending = engine.get_pending_approvers(instance.id)
+        pending_ids = [a.id for a in pending]
+        assert "mgr-dynamic" in pending_ids
+        mgr = next((a for a in pending if a.id == "mgr-dynamic"), None)
+        assert mgr is not None
+        assert mgr.name == "动态主管"

@@ -3,7 +3,6 @@ from .exceptions import (
     BatchMigrationError,
     RollbackError,
     CheckpointError,
-    EmptySourceError,
     InvalidBatchSizeError,
 )
 from .models import BatchStatus, MigrationStatus, MigrationState, BatchInfo
@@ -14,7 +13,6 @@ __all__ = [
     "BatchMigrationError",
     "RollbackError",
     "CheckpointError",
-    "EmptySourceError",
     "InvalidBatchSizeError",
     "BatchStatus",
     "MigrationStatus",

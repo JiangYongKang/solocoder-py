@@ -73,9 +73,6 @@ class MergeResult:
     conflict_count: int = 0
     blocks: List[Block] = field(default_factory=list)
 
-    def __post_init__(self) -> None:
-        pass
-
     @property
     def has_conflicts(self) -> bool:
         return self.conflict_count > 0

@@ -396,7 +396,7 @@ class TestTransactionGroup:
 
 
 class TestTransactionUndoFailure:
-    def test_transaction_undo_failure_preserves_state(self, stack, counter):
+    def test_transaction_undo_first_command_failure_preserves_state(self, stack, counter):
         fail_at = {"cmd3": False}
 
         def make_cmd(name, amount):
@@ -424,8 +424,299 @@ class TestTransactionUndoFailure:
         with pytest.raises(Exception):
             stack.undo()
 
+        assert counter["value"] == 7
         assert stack.undo_count == 1
         assert stack.redo_count == 0
+
+    def test_transaction_undo_middle_command_failure_preserves_state(self, stack, counter):
+        fail_at = {"cmd2": False}
+
+        def make_cmd(name, amount):
+            def execute():
+                counter["value"] += amount
+
+            def undo():
+                if name == "cmd2" and fail_at["cmd2"]:
+                    raise ValueError("cmd2 undo failed")
+                counter["value"] -= amount
+
+            return Command(name=name, execute=execute, undo=undo)
+
+        stack.begin_transaction("tx1")
+        stack.execute(make_cmd("cmd1", 10))
+        stack.execute(make_cmd("cmd2", 20))
+        stack.execute(make_cmd("cmd3", 30))
+        stack.commit_transaction()
+
+        assert counter["value"] == 60
+        assert stack.undo_count == 1
+
+        fail_at["cmd2"] = True
+
+        with pytest.raises(Exception):
+            stack.undo()
+
+        assert counter["value"] == 60
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+
+    def test_transaction_undo_last_command_failure_preserves_state(self, stack, counter):
+        fail_at = {"cmd1": False}
+
+        def make_cmd(name, amount):
+            def execute():
+                counter["value"] += amount
+
+            def undo():
+                if name == "cmd1" and fail_at["cmd1"]:
+                    raise ValueError("cmd1 undo failed")
+                counter["value"] -= amount
+
+            return Command(name=name, execute=execute, undo=undo)
+
+        stack.begin_transaction("tx1")
+        stack.execute(make_cmd("cmd1", 5))
+        stack.execute(make_cmd("cmd2", 15))
+        stack.execute(make_cmd("cmd3", 25))
+        stack.commit_transaction()
+
+        assert counter["value"] == 45
+        assert stack.undo_count == 1
+
+        fail_at["cmd1"] = True
+
+        with pytest.raises(Exception):
+            stack.undo()
+
+        assert counter["value"] == 45
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+
+    def test_transaction_redo_middle_command_failure_preserves_state(self, stack, counter):
+        fail_at = {"cmd2": False}
+
+        def make_cmd(name, amount):
+            def execute():
+                if name == "cmd2" and fail_at["cmd2"]:
+                    raise ValueError("cmd2 execute failed")
+                counter["value"] += amount
+
+            def undo():
+                counter["value"] -= amount
+
+            return Command(name=name, execute=execute, undo=undo)
+
+        stack.begin_transaction("tx1")
+        stack.execute(make_cmd("cmd1", 1))
+        stack.execute(make_cmd("cmd2", 2))
+        stack.execute(make_cmd("cmd3", 3))
+        stack.commit_transaction()
+
+        assert counter["value"] == 6
+
+        stack.undo()
+        assert counter["value"] == 0
+        assert stack.redo_count == 1
+
+        fail_at["cmd2"] = True
+
+        with pytest.raises(Exception):
+            stack.redo()
+
+        assert counter["value"] == 0
+        assert stack.undo_count == 0
+        assert stack.redo_count == 1
+
+    def test_transaction_rollback_middle_failure_preserves_state(self, stack, counter):
+        fail_at = {"cmd2": False}
+
+        def make_cmd(name, amount):
+            def execute():
+                counter["value"] += amount
+
+            def undo():
+                if name == "cmd2" and fail_at["cmd2"]:
+                    raise ValueError("cmd2 undo failed")
+                counter["value"] -= amount
+
+            return Command(name=name, execute=execute, undo=undo)
+
+        stack.begin_transaction("tx1")
+        stack.execute(make_cmd("cmd1", 100))
+        stack.execute(make_cmd("cmd2", 200))
+        stack.execute(make_cmd("cmd3", 300))
+
+        assert counter["value"] == 600
+        assert stack.state.has_active_transaction is True
+
+        fail_at["cmd2"] = True
+
+        with pytest.raises(Exception):
+            stack.rollback_transaction()
+
+        assert counter["value"] == 600
+
+
+class TestSameTransactionContinuousBoundary:
+    def test_same_transaction_consecutive_undo_raises(self, stack, counter, make_increment_command):
+        stack.begin_transaction("tx1")
+        stack.execute(make_increment_command(amount=10, name="inc10"))
+        stack.execute(make_increment_command(amount=20, name="inc20"))
+        stack.commit_transaction()
+
+        assert counter["value"] == 30
+        assert stack.undo_count == 1
+
+        stack.undo()
+        assert counter["value"] == 0
+        assert stack.undo_count == 0
+        assert stack.redo_count == 1
+
+        with pytest.raises(UndoStackEmptyError):
+            stack.undo()
+
+        assert counter["value"] == 0
+        assert stack.undo_count == 0
+        assert stack.redo_count == 1
+
+    def test_same_transaction_consecutive_redo_raises(self, stack, counter, make_increment_command):
+        stack.begin_transaction("tx1")
+        stack.execute(make_increment_command(amount=5, name="inc5"))
+        stack.execute(make_increment_command(amount=15, name="inc15"))
+        stack.commit_transaction()
+
+        assert counter["value"] == 20
+
+        stack.undo()
+        assert counter["value"] == 0
+        assert stack.redo_count == 1
+
+        stack.redo()
+        assert counter["value"] == 20
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+
+        with pytest.raises(RedoStackEmptyError):
+            stack.redo()
+
+        assert counter["value"] == 20
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+
+    def test_same_transaction_undo_redo_undo_redo_cycle(self, stack, counter, make_increment_command):
+        stack.begin_transaction("cycle-tx")
+        stack.execute(make_increment_command(amount=7, name="inc7"))
+        stack.execute(make_increment_command(amount=3, name="inc3"))
+        stack.commit_transaction()
+
+        assert counter["value"] == 10
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+
+        stack.undo()
+        assert counter["value"] == 0
+        assert stack.undo_count == 0
+        assert stack.redo_count == 1
+
+        stack.redo()
+        assert counter["value"] == 10
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+
+        stack.undo()
+        assert counter["value"] == 0
+        assert stack.undo_count == 0
+        assert stack.redo_count == 1
+
+        stack.redo()
+        assert counter["value"] == 10
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+
+    def test_same_transaction_then_new_command_clears_redo(self, stack, counter, make_increment_command):
+        stack.begin_transaction("tx1")
+        stack.execute(make_increment_command(amount=1, name="inc1"))
+        stack.execute(make_increment_command(amount=2, name="inc2"))
+        stack.commit_transaction()
+
+        assert counter["value"] == 3
+
+        stack.undo()
+        assert counter["value"] == 0
+        assert stack.redo_count == 1
+        assert stack.can_redo is True
+
+        new_cmd = make_increment_command(amount=100, name="inc100")
+        stack.execute(new_cmd)
+
+        assert counter["value"] == 100
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+        assert stack.can_redo is False
+
+        with pytest.raises(RedoStackEmptyError):
+            stack.redo()
+
+        assert counter["value"] == 100
+
+    def test_single_command_transaction_consecutive_undo_redo(self, stack, counter, make_increment_command):
+        stack.begin_transaction("single-tx")
+        stack.execute(make_increment_command(amount=42, name="inc42"))
+        stack.commit_transaction()
+
+        assert counter["value"] == 42
+        assert stack.undo_count == 1
+
+        stack.undo()
+        assert counter["value"] == 0
+        assert stack.redo_count == 1
+
+        with pytest.raises(UndoStackEmptyError):
+            stack.undo()
+
+        stack.redo()
+        assert counter["value"] == 42
+        assert stack.undo_count == 1
+        assert stack.redo_count == 0
+
+        with pytest.raises(RedoStackEmptyError):
+            stack.redo()
+
+        assert counter["value"] == 42
+
+    def test_same_transaction_after_multiple_others(self, stack, counter, make_increment_command):
+        cmd_a = make_increment_command(amount=10, name="incA")
+        stack.execute(cmd_a)
+
+        stack.begin_transaction("tx-target")
+        stack.execute(make_increment_command(amount=1, name="inc1"))
+        stack.execute(make_increment_command(amount=2, name="inc2"))
+        stack.commit_transaction()
+
+        cmd_b = make_increment_command(amount=20, name="incB")
+        stack.execute(cmd_b)
+
+        assert counter["value"] == 33
+        assert stack.undo_count == 3
+
+        stack.undo()
+        assert counter["value"] == 13
+
+        stack.undo()
+        assert counter["value"] == 10
+
+        stack.undo()
+        assert counter["value"] == 0
+        assert stack.redo_count == 3
+
+        stack.redo()
+        assert counter["value"] == 10
+
+        stack.redo()
+        assert counter["value"] == 13
+
+        stack.redo()
+        assert counter["value"] == 33
 
 
 class TestClear:

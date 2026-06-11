@@ -154,13 +154,52 @@ class TestReplicaMergeEntry:
         entry = VersionedEntry(key="key1", value="value1", version=2)
         assert replica.merge_entry(entry) is False
 
-    def test_merge_same_version_different_value_updates(self):
+    def test_merge_same_version_different_value_noop(self):
         replica = Replica(replica_id="node1")
         replica.put("key1", "old_value", version=2)
         entry = VersionedEntry(key="key1", value="new_value", version=2)
-        assert replica.merge_entry(entry) is True
+        assert replica.merge_entry(entry) is False
+        assert replica.get("key1").value == "old_value"
+        assert replica.get("key1").version == 2
+
+
+class TestReplicaForceMergeEntry:
+    def test_force_merge_new_entry(self):
+        replica = Replica(replica_id="node1")
+        entry = VersionedEntry(key="key1", value="value1", version=1)
+        assert replica.force_merge_entry(entry) is True
+        assert replica.get("key1").value == "value1"
+        assert replica.get("key1").version == 1
+
+    def test_force_merge_higher_version(self):
+        replica = Replica(replica_id="node1")
+        replica.put("key1", "old_value", version=1)
+        entry = VersionedEntry(key="key1", value="new_value", version=3)
+        assert replica.force_merge_entry(entry) is True
+        assert replica.get("key1").value == "new_value"
+        assert replica.get("key1").version == 3
+
+    def test_force_merge_lower_version_overwrites(self):
+        replica = Replica(replica_id="node1")
+        replica.put("key1", "value1", version=3)
+        entry = VersionedEntry(key="key1", value="value2", version=1)
+        assert replica.force_merge_entry(entry) is True
+        assert replica.get("key1").value == "value2"
+        assert replica.get("key1").version == 1
+
+    def test_force_merge_same_version_different_value_overwrites(self):
+        replica = Replica(replica_id="node1")
+        replica.put("key1", "old_value", version=2)
+        entry = VersionedEntry(key="key1", value="new_value", version=2)
+        assert replica.force_merge_entry(entry) is True
         assert replica.get("key1").value == "new_value"
         assert replica.get("key1").version == 2
+
+    def test_force_merge_same_version_same_value_overwrites(self):
+        replica = Replica(replica_id="node1")
+        replica.put("key1", "value1", version=2)
+        entry = VersionedEntry(key="key1", value="value1", version=2)
+        assert replica.force_merge_entry(entry) is True
 
 
 class TestReplicaIdValidation:

@@ -1,0 +1,5 @@
+你实现的反熵同步模块存在一些问题，需要修复：
+1. engine.py 的 diff 方法在处理双方都存在的键时，version_mismatch 的两个分支创建了完全相同的 DiffEntry 对象且状态相同，形成了冗余分支。同时 VERSION_MISMATCH 状态无法体现哪一方版本更高，同步方法必须再次比对版本号才能决定传输方向。
+2. replica.py 的 merge_entry 方法在版本相同但值不同时，未做任何冲突保护就直接覆盖了当前数据并返回 True。而 engine.py 的 diff 方法将同版本异值归类为 CONFLICT 并阻止自动同步。merge_entry 作为 Replica 的公开 API 与引擎层的冲突语义不一致，直接调用 merge_entry 可能导致数据在未检测到冲突的情况下被覆盖。
+3. 修复完成后重新运行 poetry run pytest tests/anti_entropy/ -v，确保所有测试通过。
+4. 更新 README.md，说明版本裁决规则中各层的冲突处理约定，确保低层 API 与高层引擎语义一致。

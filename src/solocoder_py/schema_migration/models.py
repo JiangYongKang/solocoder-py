@@ -78,6 +78,7 @@ class MigrationResult:
     from_version: int
     to_version: int
     applied_versions: List[int] = field(default_factory=list)
+    rollback_attempted_versions: List[int] = field(default_factory=list)
     rolled_back_versions: List[int] = field(default_factory=list)
     failed_version: Optional[int] = None
     error_message: str = ""
@@ -86,11 +87,19 @@ class MigrationResult:
 
     @property
     def was_partial(self) -> bool:
-        return len(self.rolled_back_versions) > 0
+        return len(self.rollback_attempted_versions) > 0
 
     @property
     def had_rollback_failures(self) -> bool:
         return len(self.rollback_errors) > 0
+
+    @property
+    def successfully_rolled_back_versions(self) -> List[int]:
+        return self.rolled_back_versions
+
+    @property
+    def failed_rollback_versions(self) -> List[int]:
+        return [err["version"] for err in self.rollback_errors]
 
 
 @dataclass

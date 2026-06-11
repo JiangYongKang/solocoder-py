@@ -1,0 +1,6 @@
+你实现的三方文本合并模块存在一些问题，需要修复：
+1. _ranges_conflict 函数在判断插入区间与修改区间是否冲突时使用了 b_end + 1 和 a_end + 1 的偏移量做 <= 范围匹配，导致一方修改某行区间而另一方在该区间之后紧邻位置插入新行时被误判为冲突。实际这两个操作互不影响，合并结果应是修改在前、插入在后。现有测试套件缺少对此场景的覆盖，需要补充对应的边界用例。
+2. merger.py 中存在 _ranges_overlap 和 _combine_hunks 两个从未被调用的函数，exceptions.py 中定义了 MergeTimeoutError 异常类从未被抛出或捕获。这些属于算法多轮重写后遗留的废弃代码和死代码，应予清理。
+3. merger.py 中 _merge_hunks_in_range 函数声明了变量 cursor 但从未读取，models.py 中 MergeResult.__post_init__ 方法体仅有一个空 pass 语句。这些属于编码不够严谨遗留的无效代码。
+4. 修复完成后重新运行 poetry run pytest tests/three_way_merge/ -v，确保所有测试通过。
+5. 更新 README.md，说明冲突判定的精确规则和插入紧邻修改的边界行为。

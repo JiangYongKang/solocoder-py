@@ -52,23 +52,11 @@ def _ranges_conflict(
         return a_start == b_start
 
     if a_insert and not b_insert:
-        return b_start <= a_start <= b_end + 1
+        return b_start <= a_start <= b_end
 
     if not a_insert and b_insert:
-        return a_start <= b_start <= a_end + 1
+        return a_start <= b_start <= a_end
 
-    return not (a_end < b_start or b_end < a_start)
-
-
-def _ranges_overlap(
-    a_start: int, a_end: int, b_start: int, b_end: int
-) -> bool:
-    a_insert = _is_insert_range(a_start, a_end)
-    b_insert = _is_insert_range(b_start, b_end)
-    if a_insert and b_insert:
-        return a_start == b_start
-    if a_insert or b_insert:
-        return False
     return not (a_end < b_start or b_end < a_start)
 
 
@@ -84,13 +72,6 @@ def _combine_ranges(
     if b_insert:
         return (min(a_start, b_start), a_end)
     return (min(a_start, b_start), max(a_end, b_end))
-
-
-def _combine_hunks(hunk_a: DiffHunk, hunk_b: DiffHunk) -> Tuple[int, int]:
-    return _combine_ranges(
-        hunk_a.base_start, hunk_a.base_end,
-        hunk_b.base_start, hunk_b.base_end,
-    )
 
 
 @dataclass
@@ -195,18 +176,10 @@ def _merge_hunks_in_range(
     sorted_hunks = sorted(hunks, key=lambda h: h.base_start)
 
     all_lines: List[TextLine] = []
-    cursor = range_start
-    other_start = 0 if sorted_hunks and sorted_hunks[0].other_start == 0 else (
-        sorted_hunks[0].other_start - (sorted_hunks[0].base_start - range_start)
-        if sorted_hunks else 0
-    )
-
     first_other_start = None
     last_other_end = None
 
     for h in sorted_hunks:
-        if h.base_start > cursor:
-            cursor = h.base_start
         other_lines = h.lines
         if first_other_start is None:
             first_other_start = h.other_start

@@ -474,19 +474,23 @@ class TestFailureAndRollback:
 class TestResumeAfterFailure:
     def test_resume_from_failed_state_triggers_rollback(self):
         source = make_source_data(30)
+        target_store = {}
         checkpoint_store = InMemoryCheckpointStore()
         fail_count = [0]
 
         def failing_migrator(records):
             for record in records:
-                if record["id"] == 15 and fail_count[0] == 0:
+                if record["id"] == 10 and fail_count[0] == 0:
                     fail_count[0] += 1
                     raise RuntimeError("Simulated failure")
+                target_store[record["id"]] = record
 
-        migrator1 = make_migrator(
-            source,
+        migrator1 = DataMigrator(
+            source_data=source,
+            target_store=target_store,
             batch_size=10,
             checkpoint_store=checkpoint_store,
+            id_extractor=lambda r: r["id"],
             batch_migrator=failing_migrator,
         )
 
@@ -495,15 +499,25 @@ class TestResumeAfterFailure:
 
         assert migrator1.state.status == MigrationStatus.FAILED
         assert migrator1.state.checkpoint == 0
+        assert len(target_store) == 10
 
-        migrator2 = make_migrator(
-            source,
+        migrator2 = DataMigrator(
+            source_data=source,
+            target_store=target_store,
             batch_size=10,
             checkpoint_store=checkpoint_store,
+            id_extractor=lambda r: r["id"],
             batch_migrator=failing_migrator,
         )
 
         assert migrator2.state.status == MigrationStatus.IDLE
+
+        state = migrator2.resume_from_checkpoint()
+
+        assert state.status == MigrationStatus.ROLLED_BACK
+        assert state.completed_batches == 0
+        assert state.checkpoint == -1
+        assert len(target_store) == 0
 
 
 class TestRollbackInterruptionAndResume:

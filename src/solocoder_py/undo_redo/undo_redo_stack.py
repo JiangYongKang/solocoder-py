@@ -94,8 +94,15 @@ class UndoRedoStack:
         self._state.redo_stack.append(item)
 
     def _undo_transaction_group(self, group: TransactionGroup) -> None:
-        for command in reversed(group.commands):
-            self._undo_command(command)
+        undone_commands: List[Command] = []
+        try:
+            for command in reversed(group.commands):
+                self._undo_command(command)
+                undone_commands.append(command)
+        except Exception:
+            for cmd in undone_commands:
+                self._execute_command(cmd)
+            raise
 
     def redo(self) -> None:
         if not self.can_redo:
@@ -115,8 +122,15 @@ class UndoRedoStack:
         self._state.undo_stack.append(item)
 
     def _redo_transaction_group(self, group: TransactionGroup) -> None:
-        for command in group.commands:
-            self._redo_command(command)
+        redone_commands: List[Command] = []
+        try:
+            for command in group.commands:
+                self._redo_command(command)
+                redone_commands.append(command)
+        except Exception:
+            for cmd in reversed(redone_commands):
+                self._undo_command(cmd)
+            raise
 
     def begin_transaction(self, name: str, description: str = "") -> None:
         if self._state.has_active_transaction:
@@ -149,8 +163,15 @@ class UndoRedoStack:
         transaction = self._state.active_transaction
         self._state.active_transaction = None
 
-        for command in reversed(transaction.commands):
-            self._undo_command(command)
+        undone_commands: List[Command] = []
+        try:
+            for command in reversed(transaction.commands):
+                self._undo_command(command)
+                undone_commands.append(command)
+        except Exception:
+            for cmd in undone_commands:
+                self._execute_command(cmd)
+            raise
 
     def _clear_redo_stack(self) -> None:
         self._state.redo_stack.clear()

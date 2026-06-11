@@ -1,0 +1,6 @@
+你实现的 Schema 版本迁移运行器存在一些问题，需要修复：
+1. _execute_migrations 方法在幂等性校验失败分支中调用了 _rollback_migrations 执行回滚但丢弃了其返回值，rollback_errors 被硬编码为空列表。当回滚过程中某个迁移的 down 函数也抛出异常时，调用方完全无法感知这部分回滚失败信息，系统静默丢失了关键的错误数据。需要收集并正确透传回滚返回值。
+2. _execute_migrations 方法中 rolled_back_versions 字段固定报告所有已应用的前序迁移为已回滚，但 _rollback_migrations 对每个迁移单独 try/except 包裹 down 调用，当某个 down 抛异常时该版本实际并未被标记回滚，结果字段却将其报告为已回滚。需要在结果中区分回滚尝试版本和回滚成功版本。
+3. _execute_with_idempotency_check 方法在第二次 up 执行抛异常时恢复到首次 up 执行后的状态快照而非迁移开始前的原始状态快照，导致失败迁移的首次 up 副作用未被清除，数据处于包含部分变更的中间态，与提示词要求的"恢复到迁移开始前状态"矛盾。
+4. 修复完成后重新运行 poetry run pytest tests/schema_migration/ -v，确保所有测试通过。
+5. 更新 README.md，说明回滚结果的准确性保证和幂等校验失败时的状态恢复策略。

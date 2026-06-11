@@ -1,0 +1,8 @@
+产物不满意：
+1. engine.py 的 _execute_single_action 方法中，修复后的 MODIFY_FACT 分支与 ADD_FACT 分支的逻辑完全一致，仅 action_type 不同。两段代码各自维护了一份相同的 if-else 嵌套判断（键存在性检查、值相等性检查、allow_fact_overwrite 分支和 FactConflictError 抛出），导致后续修改冲突保护逻辑时需要在两个位置同步更新，容易产生遗漏。正确做法是将"键存在且值冲突时的覆盖控制"逻辑抽取为一个私有方法，ADD_FACT 和 MODIFY_FACT 各自调用同一段裁决逻辑，消除重复代码。
+2. 测试文件 test_rule_engine.py 中，原 test_modify_fact_action 测试用例被改为使用 engine_with_overwrite fixture，导致 TestActionTypes 测试类中不再有使用默认引擎（allow_fact_overwrite=False）验证 MODIFY_FACT 基本行为的用例。TestConflictsAndErrors 类中的 test_modify_fact_conflict_during_rule_execution 测试的是冲突抛出场景，test_modify_fact_same_value_no_conflict 测试的是同值无冲突场景，但缺少一个对 MODIFY_FACT 在默认引擎下给不存在的键新增事实这一基本路径的显式验证。原因是在修复时只关注了让旧测试通过，没有重新梳理测试矩阵确保动作类型的基础测试覆盖度在默认配置下仍然完整。
+3. test_external_callback_removes_fact_detected_as_change 测试用例使用了 engine_with_overwrite fixture，但该测试的回调函数只调用了 eng.remove_fact，remove_fact 操作不受 allow_fact_overwrite 标志影响，使用 allow_fact_overwrite=True 的引擎实例在此处没有必要性。虽然不影响测试正确性，但过度配置了不相关的参数，降低了测试用例的意图清晰度，后续维护者可能误以为 remove 操作也需要 overwrite 权限才能执行。
+
+过程不满意：
+1. 模型在收到提示词后的第一步操作就是创建 5 项子任务的 TodoList，然后才去读取 engine.py 源代码。模型虽在思考文本中写了"我来分析并修复这两个问题。首先让我查看当前的代码"，但实际行为是先做规划再看代码，与标注规范中"应先分析问题再规划"的原则相反。这导致模型在第一次运行测试时才发现原有的 test_modify_fact_action 需要适配新的冲突保护语义，如果能先读完代码和测试再规划，这一步适配完全可以预判并纳入初始计划。
+2. 模型对测试文件 test_rule_engine.py 进行了三次读取操作：第一次在编写新测试前读取了测试文件的部分内容，第二次紧接着又读取了同一文件来查看异常测试部分，第三次是在测试失败后再次读取以定位需要修改的 test_modify_fact_action 位置。三次读取虽涉及不同区域，但其中前两次间隔很短且都在同一轮编码前进行，表明模型没有在第一次读取时建立完整的测试结构心智模型，导致后续需要反复回到文件确认细节，属于推理效率偏低的信号。正确做法是在首次读取时完整扫描测试文件结构，一次性定位所有相关测试类和方法，减少往返读取次数。

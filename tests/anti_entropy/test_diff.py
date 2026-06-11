@@ -11,10 +11,12 @@ class TestDiffIdenticalReplicas:
         assert not diff.has_differences
         assert len(diff.only_in_a) == 0
         assert len(diff.only_in_b) == 0
-        assert len(diff.version_mismatch) == 0
+        assert len(diff.a_has_newer) == 0
+        assert len(diff.b_has_newer) == 0
         assert len(diff.conflicts) == 0
         assert len(diff.identical) == 0
         assert diff.diff_count == 0
+        assert diff.version_mismatch_count == 0
 
     def test_identical_entries(self, replica_a, replica_b, engine):
         replica_a.put("key1", "value1", version=1)
@@ -27,6 +29,7 @@ class TestDiffIdenticalReplicas:
         assert "key1" in diff.identical
         assert "key2" in diff.identical
         assert diff.diff_count == 0
+        assert diff.version_mismatch_count == 0
 
 
 class TestDiffOnlyInOneSide:
@@ -64,13 +67,17 @@ class TestDiffVersionMismatch:
 
         diff = engine.diff()
         assert diff.has_differences
-        assert len(diff.version_mismatch) == 1
-        assert "key1" in diff.version_mismatch
-        entry = diff.version_mismatch["key1"]
-        assert entry.status == EntryStatus.VERSION_MISMATCH
+        assert len(diff.a_has_newer) == 1
+        assert len(diff.b_has_newer) == 0
+        assert "key1" in diff.a_has_newer
+        entry = diff.a_has_newer["key1"]
+        assert entry.status == EntryStatus.A_HAS_NEWER
         assert entry.entry_a.version == 2
         assert entry.entry_b.version == 1
+        assert entry.newer_entry.version == 2
+        assert entry.older_entry.version == 1
         assert diff.diff_count == 1
+        assert diff.version_mismatch_count == 1
 
     def test_b_has_higher_version(self, replica_a, replica_b, engine):
         replica_a.put("key1", "value_v1", version=1)
@@ -78,12 +85,17 @@ class TestDiffVersionMismatch:
 
         diff = engine.diff()
         assert diff.has_differences
-        assert len(diff.version_mismatch) == 1
-        assert "key1" in diff.version_mismatch
-        entry = diff.version_mismatch["key1"]
+        assert len(diff.a_has_newer) == 0
+        assert len(diff.b_has_newer) == 1
+        assert "key1" in diff.b_has_newer
+        entry = diff.b_has_newer["key1"]
+        assert entry.status == EntryStatus.B_HAS_NEWER
         assert entry.entry_a.version == 1
         assert entry.entry_b.version == 3
+        assert entry.newer_entry.version == 3
+        assert entry.older_entry.version == 1
         assert diff.diff_count == 1
+        assert diff.version_mismatch_count == 1
 
     def test_same_version_same_value_identical(self, replica_a, replica_b, engine):
         replica_a.put("key1", "same_value", version=5)
@@ -92,8 +104,25 @@ class TestDiffVersionMismatch:
         diff = engine.diff()
         assert not diff.has_differences
         assert "key1" in diff.identical
-        assert len(diff.version_mismatch) == 0
+        assert len(diff.a_has_newer) == 0
+        assert len(diff.b_has_newer) == 0
         assert len(diff.conflicts) == 0
+
+    def test_multiple_mixed_mismatches(self, replica_a, replica_b, engine):
+        replica_a.put("k1", "a_high", version=3)
+        replica_a.put("k2", "a_low", version=1)
+        replica_a.put("k3", "same", version=2)
+        replica_b.put("k1", "b_low", version=1)
+        replica_b.put("k2", "b_high", version=4)
+        replica_b.put("k3", "same", version=2)
+
+        diff = engine.diff()
+        assert len(diff.a_has_newer) == 1
+        assert "k1" in diff.a_has_newer
+        assert len(diff.b_has_newer) == 1
+        assert "k2" in diff.b_has_newer
+        assert "k3" in diff.identical
+        assert diff.version_mismatch_count == 2
 
 
 class TestDiffConflicts:
@@ -144,12 +173,13 @@ class TestDiffMixedScenarios:
         assert "only_a" in diff.only_in_a
         assert len(diff.only_in_b) == 1
         assert "only_b" in diff.only_in_b
-        assert len(diff.version_mismatch) == 1
-        assert "shared_high" in diff.version_mismatch
+        assert len(diff.a_has_newer) == 1
+        assert "shared_high" in diff.a_has_newer
         assert len(diff.conflicts) == 1
         assert "conflict_key" in diff.conflicts
         assert "identical" in diff.identical
         assert diff.diff_count == 4
+        assert diff.version_mismatch_count == 1
 
     def test_all_keys_present_but_various_states(self, replica_a, replica_b, engine):
         for i in range(10):
@@ -159,3 +189,29 @@ class TestDiffMixedScenarios:
         diff = engine.diff()
         assert len(diff.conflicts) == 10
         assert diff.has_conflicts
+
+
+class TestDiffEntryHelpers:
+    def test_newer_entry_a_has_newer(self, replica_a, replica_b, engine):
+        replica_a.put("k", "v2", version=2)
+        replica_b.put("k", "v1", version=1)
+        diff = engine.diff()
+        entry = diff.a_has_newer["k"]
+        assert entry.newer_entry is entry.entry_a
+        assert entry.older_entry is entry.entry_b
+
+    def test_newer_entry_b_has_newer(self, replica_a, replica_b, engine):
+        replica_a.put("k", "v1", version=1)
+        replica_b.put("k", "v2", version=2)
+        diff = engine.diff()
+        entry = diff.b_has_newer["k"]
+        assert entry.newer_entry is entry.entry_b
+        assert entry.older_entry is entry.entry_a
+
+    def test_newer_entry_conflict_returns_none(self, replica_a, replica_b, engine):
+        replica_a.put("k", "va", version=2)
+        replica_b.put("k", "vb", version=2)
+        diff = engine.diff()
+        entry = diff.conflicts["k"]
+        assert entry.newer_entry is None
+        assert entry.older_entry is None

@@ -1,0 +1,5 @@
+你实现的规则引擎（前向链推理）模块存在一些问题，需要修复：
+1. _execute_single_action 方法中对 EXTERNAL 动作始终返回 False，未检测回调函数通过传入的 engine 参数对事实库的修改。回调函数接收 engine 实例可以直接 add_fact、remove_fact 修改事实集合，但该方法硬编码返回 False 导致上层的 facts_changed 标志无法反映这些变更，引擎可能在回调已添加新事实的情况下仍判定收敛并终止推理，后续依赖新事实的规则链被遗漏未触发。
+2. _execute_single_action 方法中 MODIFY_FACT 分支未校验 allow_fact_overwrite 标志位。ADD_FACT 动作在 allow_fact_overwrite=False 且值冲突时会抛出 FactConflictError，但 MODIFY_FACT 在相同条件下直接执行赋值，静默覆盖已有事实值，两条路径的保护行为不一致。
+3. 修复完成后重新运行 poetry run pytest tests/rule_engine/ -v，确保所有测试通过。
+4. 更新 README.md，说明 EXTERNAL 回调的事实变更检测机制和事实修改的冲突保护策略。

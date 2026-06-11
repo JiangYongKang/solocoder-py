@@ -1,0 +1,6 @@
+你实现的 ELO 匹配评分模块存在一些问题，需要修复：
+1. conftest.py 中 make_engine 和 make_matcher 两个工厂函数缺少 @pytest.fixture 装饰器，导致首次运行全部 64 个测试用例均报 ERROR，测试框架无法识别 fixture 注入。需要添加正确的装饰器使 Pytest 能正常解析 fixture。
+2. settle_match 方法在第 92 行调用 _get_actual_scores 获取了退赛场景的得分值，但第 94-100 行的退赛分支完全未使用这些返回值，改用内联计算绕过了 calculate_delta 静态方法。如果将来评分公式需要统一调整，退赛分支将不会随之更新。退赛分支应复用 calculate_delta 方法统一评分计算路径。
+3. settle_match 方法中 FORFEIT_LOSS 分支对获胜方的 expected_score 调用参数顺序与模块中其他调用约定不一致，影响代码可读性。
+4. 修复完成后重新运行 poetry run pytest tests/elo_rating/ -v，确保所有测试通过。
+5. 更新 README.md，说明评分计算的统一路径约定和退赛场景的处理方式。

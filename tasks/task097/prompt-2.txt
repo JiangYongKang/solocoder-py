@@ -1,0 +1,5 @@
+你实现的值班轮换排班模块存在一些问题，需要修复：
+1. generate_rotation_schedule 方法中有一段 for 循环遍历已有排班表检测当前日期是否已被分配了相同人员，但命中后仅有 pass 语句不做任何拦截，随后无条件执行 append 追加新的 ShiftAssignment 记录。这导致对已有排班的日期范围再次调用该方法时，同一天同一人员会被重复分配，触发空档检测报告重复覆盖异常。
+2. _execute_swap 方法中有两个 if not req_kept 和 if not resp_kept 的空列表检测分支，意图在交换后若日期分配列表为空则删除该日期记录。但每次判断之前都已执行了 append 将新的 ShiftAssignment 加入列表，列表至少包含一个元素，这两个分支永远不会被触发，属于不可达死代码。
+3. 修复完成后重新运行 poetry run pytest tests/shift_scheduler/ -v，确保所有测试通过。
+4. 更新 README.md，说明排班表生成的幂等性保证和换班时的边界处理规则。

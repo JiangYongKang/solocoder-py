@@ -1,0 +1,5 @@
+产物不满意：
+1. README.md 中状态恢复策略的旧描述未随代码修改同步更新。runner.py 的 _execute_with_idempotency_check 方法修复后，幂等校验失败时恢复到 state_before_any（迁移前的原始快照），幂等校验通过时恢复到 state_after_first（首次执行后状态）。但文档第59行"幂等性校验机制"部分仍写"无论幂等性检查通过与否，检查完成后都会将数据恢复到第一次执行后的正确状态"，第385行"实现设计说明"也保留了完全相同的表述。两处旧描述与新增的差异化恢复策略直接矛盾，阅读文档者会误以为非幂等迁移的首次 up 副作用未被清除。原因是模型在修改代码后只在前段新增了"状态恢复策略四分支详述"，忽略了后面保留的旧描述文字，应全文搜索所有状态恢复相关描述并统一修正。
+过程不满意：
+1. 模型收到提示词后未做任何代码分析就直接用 todo_write 创建了6项子任务计划（session-cot-2.md 第6行），然后才去阅读 runner.py 和 models.py。这与标注规范中"不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划"的要求相悖。虽然本次任务简单计划最终得到执行，但这种先做计划再理解的模式在复杂任务中容易导致计划粒度与模块边界不匹配、后续反复调整。
+2. 模型在编写 test_second_up_exception_restores_to_original_state 测试时第一版使用 pytest.raises 期望异常直接传播（session-cot-2.md 第185行后的测试编写），但实际执行流中 _execute_migrations 的 try/except 会捕获 _execute_with_idempotency_check 的异常并转换为 MigrationResult 失败结果，异常不会继续向上传播。运行测试失败后（第241行）才定位到此问题并修改断言（第243至258行）。这属于试错式调试——根据运行结果反推修改而非基于调用链代码分析的精准编写。正确做法是先理清从 _execute_with_idempotency_check 到 _execute_migrations 再到 upgrade 的完整异常转换链路，再据此设计测试断言。

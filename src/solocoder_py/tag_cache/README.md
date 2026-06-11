@@ -27,10 +27,10 @@
 | `add_tags(key, tags)` | 为已有条目添加标签，返回实际新增的标签数 |
 | `remove_tags(key, tags)` | 从条目移除标签，返回实际移除的标签数 |
 | `get_tags_for_entry(key)` | 获取指定条目关联的所有标签 |
-| `get_entries_by_tag(tag)` | 获取指定标签下关联的所有有效条目 key |
-| `has_tag(tag)` | 判断标签是否存在且关联了有效条目 |
-| `invalidate_tag(tag)` | 按标签批量失效所有关联条目，返回失效数量 |
-| `invalidate_tags(tags)` | 同时失效多个标签下的所有条目，返回失效数量 |
+| `get_entries_by_tag(tag)` | 获取指定标签下关联的所有有效条目 key；标签不存在时抛出 `TagNotFoundError` |
+| `has_tag(tag)` | 判断标签是否存在且关联了有效条目；标签不存在时抛出 `TagNotFoundError` |
+| `invalidate_tag(tag)` | 按标签批量失效所有关联条目，返回失效数量；标签不存在时抛出 `TagNotFoundError` |
+| `invalidate_tags(tags)` | 同时失效多个标签下的所有条目，返回失效数量；任一标签不存在时抛出 `TagNotFoundError` |
 | `find_dangling_tags()` | 检测所有悬空标签（无有效条目关联的标签） |
 | `cleanup_dangling_tags()` | 清理所有悬空标签，返回清理数量 |
 | `get_stats()` | 获取缓存统计信息 |
@@ -78,6 +78,53 @@ Entry 3 ────────┘
 - 从条目查标签：直接访问 `CacheEntry.tags`
 - 从标签查条目：直接访问 `_tag_index[tag]`
 
+## 过期清理策略
+
+采用惰性过期回收机制，不使用后台线程，而是在每次读写操作时触发过期检查。
+
+### 全量扫描覆盖
+
+`_purge_expired` 方法在一次调用中**遍历所有条目**，收集并删除所有已过期的缓存条目。不存在扫描盲区：无论过期条目位于存储字典的哪个位置，都能被检测和清理。这保证了：
+
+- 过期条目不会因位置偏后而长期驻留内存
+- `size` 属性和 `entry_count` 统计始终准确反映有效条目数量
+- 标签索引与实际存储保持一致
+
+### O(1) 快速路径
+
+通过 `_expirable_count` 计数器精确追踪带 TTL 的条目数量。若计数为 0，`_purge_expired` 立即返回，无任何扫描开销。计数器在 `set`/`delete`/`get`/`has`/`clear` 操作中精确增减。
+
+### 清理触发时机
+
+过期清理在以下操作时被触发：`get`、`set`、`has`、`delete`、`size`、`add_tags`、`remove_tags`、`get_tags_for_entry`、`get_entries_by_tag`、`has_tag`、`invalidate_tag`、`invalidate_tags`、`get_stats`。
+
+## 标签校验一致性约定
+
+所有接受标签参数的方法对 `None` 标签执行统一的校验行为：**传入 `None` 作为标签值时，抛出 `InvalidTagError`**。
+
+以下方法均遵循此约定：
+
+- `set(key, value, tags=...)` - 遍历标签集合校验
+- `add_tags(key, tags)` - 遍历标签列表校验
+- `remove_tags(key, tags)` - 遍历标签列表校验
+- `get_entries_by_tag(tag)` - 单标签校验
+- `has_tag(tag)` - 单标签校验
+- `invalidate_tag(tag)` - 单标签校验
+- `invalidate_tags(tags)` - 遍历标签列表校验
+
+## 标签不存在时的异常行为
+
+所有标签查询和操作方法遵循统一的异常契约：**当指定的标签在索引中不存在时，抛出 `TagNotFoundError`**。
+
+此约定适用于以下方法：
+
+- `get_entries_by_tag(tag)` - 标签不存在时抛出 `TagNotFoundError`
+- `has_tag(tag)` - 标签不存在时抛出 `TagNotFoundError`
+- `invalidate_tag(tag)` - 标签不存在时抛出 `TagNotFoundError`
+- `invalidate_tags(tags)` - 任一标签不存在时抛出 `TagNotFoundError`
+
+**注意**：当 `auto_cleanup_dangling=True`（默认）时，标签在被清空后会自动从索引中移除，此时再查询该标签会触发 `TagNotFoundError`。若需在标签清空后仍保留索引条目以便后续查询返回空结果，可设置 `auto_cleanup_dangling=False`。
+
 ## 原子性保证
 
 按标签失效操作通过以下机制保证原子性：
@@ -93,7 +140,7 @@ Entry 3 ────────┘
 
 系统提供两种处理模式：
 
-1. **自动清理**（默认）：`auto_cleanup_dangling=True`，在删除、失效、过期清理等操作后自动清理悬空标签
+1. **自动清理**（默认）：`auto_cleanup_dangling=True`，在 `set`、`delete`、`remove_tags`、`invalidate_tag`、`invalidate_tags` 及过期清理等操作后自动清理悬空标签
 2. **手动清理**：`auto_cleanup_dangling=False`，需显式调用 `cleanup_dangling_tags()` 进行清理
 
 ## 使用示例
@@ -130,6 +177,22 @@ invalidated = cache.invalidate_tag("user")
 cache.get("user:1")  # None
 cache.get("user:2")  # None
 cache.get("product:1")  # 仍然存在
+```
+
+### 标签不存在的异常处理
+
+```python
+from solocoder_py.tag_cache import TagNotFoundError
+
+try:
+    cache.get_entries_by_tag("nonexistent")
+except TagNotFoundError:
+    print("标签不存在")
+
+try:
+    cache.invalidate_tag("nonexistent")
+except TagNotFoundError:
+    print("标签不存在，无法失效")
 ```
 
 ### 多标签关联与跨标签失效
@@ -169,8 +232,8 @@ cache.set("temp_key", "value", tags=["temp"], ttl=5)
 # 5 秒后
 cache.get("temp_key")  # None
 
-# 过期条目会自动从标签索引中移除
-cache.get_entries_by_tag("temp")  # []
+# 过期条目会自动从标签索引中移除，标签变为悬空后也会被自动清理
+# 后续查询该标签会抛出 TagNotFoundError
 ```
 
 ### 悬空标签管理

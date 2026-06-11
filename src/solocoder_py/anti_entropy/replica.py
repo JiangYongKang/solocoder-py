@@ -98,13 +98,27 @@ class Replica:
 
     def merge_entry(self, entry: VersionedEntry) -> bool:
         with self._lock:
-            if entry.key in self._data:
-                current = self._data[entry.key]
-                if entry.version < current.version:
-                    return False
-                if entry.version == current.version:
-                    if entry.value == current.value:
-                        return False
+            if entry.key not in self._data:
+                self._data[entry.key] = VersionedEntry(
+                    key=entry.key,
+                    value=entry.value,
+                    version=entry.version,
+                )
+                return True
+
+            current = self._data[entry.key]
+            if entry.version > current.version:
+                self._data[entry.key] = VersionedEntry(
+                    key=entry.key,
+                    value=entry.value,
+                    version=entry.version,
+                )
+                return True
+
+            return False
+
+    def force_merge_entry(self, entry: VersionedEntry) -> bool:
+        with self._lock:
             self._data[entry.key] = VersionedEntry(
                 key=entry.key,
                 value=entry.value,

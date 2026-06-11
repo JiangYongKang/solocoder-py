@@ -296,8 +296,10 @@ class RuleEngine:
             value = action.fact_value
             if key in self._facts:
                 if self._facts[key] != value:
-                    self._facts[key] = value
-                    return True
+                    if self._allow_fact_overwrite:
+                        self._facts[key] = value
+                        return True
+                    raise FactConflictError(key, self._facts[key], value)
                 return False
             else:
                 self._facts[key] = value
@@ -311,7 +313,9 @@ class RuleEngine:
             return False
 
         if action.action_type == ActionType.EXTERNAL:
+            snapshot_before = _snapshot_facts(self._facts)
             action.callback(self, dict(self._facts))
-            return False
+            snapshot_after = _snapshot_facts(self._facts)
+            return snapshot_before != snapshot_after
 
         raise InvalidRuleError(f"Unknown action type: {action.action_type}")

@@ -11,6 +11,7 @@ from solocoder_py.tag_cache import (
     InvalidTagError,
     TagCache,
     TagCacheStats,
+    TagNotFoundError,
 )
 
 
@@ -31,7 +32,8 @@ class TestBasicOperations:
         cache.set("key", "new", tags=["tag2"])
         assert cache.get("key") == "new"
         assert cache.get_tags_for_entry("key") == {"tag2"}
-        assert cache.get_entries_by_tag("tag1") == []
+        with pytest.raises(TagNotFoundError):
+            cache.get_entries_by_tag("tag1")
         assert cache.get_entries_by_tag("tag2") == ["key"]
         assert cache.size == 1
 
@@ -97,8 +99,8 @@ class TestSingleEntrySingleTag:
         assert cache.get("user:2") is None
         assert cache.get("product:1") == "Laptop"
 
-        user_entries = cache.get_entries_by_tag("user")
-        assert user_entries == []
+        with pytest.raises(TagNotFoundError):
+            cache.get_entries_by_tag("user")
         product_entries = cache.get_entries_by_tag("product")
         assert product_entries == ["product:1"]
 
@@ -148,8 +150,8 @@ class TestSingleEntryMultipleTags:
 
         tech_entries = cache.get_entries_by_tag("tech")
         assert tech_entries == ["doc2"]
-        python_entries = cache.get_entries_by_tag("python")
-        assert python_entries == []
+        with pytest.raises(TagNotFoundError):
+            cache.get_entries_by_tag("python")
 
 
 class TestBatchInvalidationMultipleEntries:
@@ -199,8 +201,8 @@ class TestBoundaryConditions:
         cache.set("a", 1, tags=["tag1"])
         cache.invalidate_tag("tag1")
 
-        invalidated = cache.invalidate_tag("tag1")
-        assert invalidated == 0
+        with pytest.raises(TagNotFoundError):
+            cache.invalidate_tag("tag1")
         assert cache.size == 0
 
     def test_entry_without_tags(self):
@@ -317,16 +319,16 @@ class TestDanglingTagCleanup:
 class TestExceptionBranches:
     def test_invalidate_nonexistent_tag(self):
         cache = TagCache()
-        invalidated = cache.invalidate_tag("nonexistent")
-        assert invalidated == 0
+        with pytest.raises(TagNotFoundError):
+            cache.invalidate_tag("nonexistent")
 
     def test_invalidate_already_invalidated_entries(self):
         cache = TagCache()
         cache.set("a", 1, tags=["tag1"])
         cache.invalidate_tag("tag1")
 
-        invalidated = cache.invalidate_tag("tag1")
-        assert invalidated == 0
+        with pytest.raises(TagNotFoundError):
+            cache.invalidate_tag("tag1")
         assert cache.get("a") is None
 
     def test_duplicate_tag_association_is_idempotent(self):
@@ -366,6 +368,10 @@ class TestExceptionBranches:
 
         with pytest.raises(InvalidTagError, match="Tag cannot be None"):
             cache.add_tags("key", [None])
+
+        cache.set("key", "value", tags=["tag1"])
+        with pytest.raises(InvalidTagError, match="Tag cannot be None"):
+            cache.remove_tags("key", [None])
 
     def test_invalid_ttl_raises(self):
         cache = TagCache()
@@ -456,13 +462,15 @@ class TestHasTag:
         cache = TagCache()
         cache.set("a", 1, tags=["tag1"])
         assert cache.has_tag("tag1") is True
-        assert cache.has_tag("nonexistent") is False
+        with pytest.raises(TagNotFoundError):
+            cache.has_tag("nonexistent")
 
     def test_has_tag_with_expired_entries(self):
         cache = TagCache()
         cache.set("a", 1, tags=["tag1"], ttl=0.01)
         time.sleep(0.05)
-        assert cache.has_tag("tag1") is False
+        with pytest.raises(TagNotFoundError):
+            cache.has_tag("tag1")
 
     def test_has_tag_with_dangling_tag(self):
         cache = TagCache(auto_cleanup_dangling=False)
@@ -694,7 +702,8 @@ class TestEdgeCases:
 
         assert cache.get("key") == "value2"
         assert cache.get_tags_for_entry("key") == {"tag2", "tag3"}
-        assert cache.get_entries_by_tag("tag1") == []
+        with pytest.raises(TagNotFoundError):
+            cache.get_entries_by_tag("tag1")
         assert cache.get_entries_by_tag("tag2") == ["key"]
         assert cache.get_entries_by_tag("tag3") == ["key"]
 
@@ -724,8 +733,12 @@ class TestEdgeCases:
         assert cache.get("anything") is None
         assert cache.has("anything") is False
         assert cache.delete("anything") is False
-        assert cache.invalidate_tag("anything") == 0
-        assert cache.get_entries_by_tag("anything") == []
+        with pytest.raises(TagNotFoundError):
+            cache.invalidate_tag("anything")
+        with pytest.raises(TagNotFoundError):
+            cache.get_entries_by_tag("anything")
+        with pytest.raises(TagNotFoundError):
+            cache.has_tag("anything")
         assert cache.find_dangling_tags() == set()
         assert cache.cleanup_dangling_tags() == 0
 
@@ -754,3 +767,84 @@ class TestEdgeCases:
         invalidated = cache.invalidate_tag("tag50")
         assert invalidated == 1
         assert cache.get("key") is None
+
+
+class TestPurgeExpiredFullScan:
+    def test_purge_expired_cleans_all_entries_beyond_100(self):
+        cache = TagCache(auto_cleanup_dangling=True)
+        for i in range(200):
+            cache.set(f"key{i}", f"value{i}", tags=[f"tag{i}"], ttl=0.5)
+
+        assert cache.size == 200
+        time.sleep(0.6)
+
+        assert cache.size == 0
+
+    def test_purge_expired_cleans_mixed_entries(self):
+        cache = TagCache(auto_cleanup_dangling=True)
+        for i in range(150):
+            if i % 2 == 0:
+                cache.set(f"key{i}", f"value{i}", tags=[f"tag{i}"], ttl=0.5)
+            else:
+                cache.set(f"key{i}", f"value{i}", tags=[f"tag{i}"])
+
+        assert cache.size == 150
+        time.sleep(0.6)
+
+        assert cache.size == 75
+
+        for i in range(150):
+            if i % 2 == 0:
+                assert cache.get(f"key{i}") is None
+            else:
+                assert cache.get(f"key{i}") == f"value{i}"
+
+    def test_purge_expired_updates_tag_index(self):
+        cache = TagCache(auto_cleanup_dangling=True)
+        for i in range(200):
+            cache.set(f"key{i}", f"value{i}", tags=["shared"], ttl=0.5)
+
+        time.sleep(0.6)
+
+        with pytest.raises(TagNotFoundError):
+            cache.get_entries_by_tag("shared")
+
+
+class TestTagNotFoundErrorConsistency:
+    def test_get_entries_by_tag_raises_for_nonexistent(self):
+        cache = TagCache()
+        with pytest.raises(TagNotFoundError, match="not found"):
+            cache.get_entries_by_tag("nonexistent")
+
+    def test_has_tag_raises_for_nonexistent(self):
+        cache = TagCache()
+        with pytest.raises(TagNotFoundError, match="not found"):
+            cache.has_tag("nonexistent")
+
+    def test_invalidate_tag_raises_for_nonexistent(self):
+        cache = TagCache()
+        with pytest.raises(TagNotFoundError, match="not found"):
+            cache.invalidate_tag("nonexistent")
+
+    def test_invalidate_tags_raises_for_nonexistent(self):
+        cache = TagCache()
+        cache.set("a", 1, tags=["tag1"])
+        with pytest.raises(TagNotFoundError, match="not found"):
+            cache.invalidate_tags(["tag1", "nonexistent"])
+
+    def test_tag_not_found_after_auto_cleanup(self):
+        cache = TagCache(auto_cleanup_dangling=True)
+        cache.set("a", 1, tags=["temp"])
+        cache.delete("a")
+
+        with pytest.raises(TagNotFoundError):
+            cache.get_entries_by_tag("temp")
+
+    def test_tag_still_queryable_with_manual_cleanup(self):
+        cache = TagCache(auto_cleanup_dangling=False)
+        cache.set("a", 1, tags=["temp"])
+        cache.delete("a")
+
+        entries = cache.get_entries_by_tag("temp")
+        assert entries == []
+        assert cache.has_tag("temp") is False

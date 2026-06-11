@@ -710,6 +710,168 @@ class TestScheduleGenerationErrors:
             scheduler.set_shift(date(2026, 1, 1), StaffId("ghost"))
 
 
+class TestRotationIdempotency:
+    def test_generate_twice_same_range_no_duplicates(self):
+        scheduler, staff_ids = make_scheduler_with_staff(4)
+        start = date(2026, 5, 1)
+        end = date(2026, 5, 14)
+
+        scheduler.generate_rotation_schedule(staff_ids, start, end)
+        result1 = scheduler.validate_schedule(start, end)
+        assert result1.is_valid is True
+
+        scheduler.generate_rotation_schedule(staff_ids, start, end)
+        result2 = scheduler.validate_schedule(start, end)
+        assert result2.is_valid is True
+
+        for i in range(14):
+            d = start + timedelta(days=i)
+            assignments = scheduler.get_assignment(d)
+            assert len(assignments) == 1
+
+    def test_generate_partial_overlap_with_same_start_alignment_no_duplicates(self):
+        scheduler, staff_ids = make_scheduler_with_staff(3)
+        s1, s2, s3 = staff_ids
+
+        scheduler.generate_rotation_schedule(
+            staff_ids, date(2026, 4, 1), date(2026, 4, 10)
+        )
+
+        scheduler.generate_rotation_schedule(
+            staff_ids, date(2026, 4, 1), date(2026, 4, 15)
+        )
+
+        result = scheduler.validate_schedule(
+            date(2026, 4, 1), date(2026, 4, 15)
+        )
+        assert result.is_valid is True
+
+        for i in range(15):
+            d = date(2026, 4, 1) + timedelta(days=i)
+            assignments = scheduler.get_assignment(d)
+            assert len(assignments) == 1
+
+        assert scheduler.get_assignment(date(2026, 4, 1)) == [s1]
+        assert scheduler.get_assignment(date(2026, 4, 10)) == [s1]
+        assert scheduler.get_assignment(date(2026, 4, 15)) == [s3]
+
+    def test_generate_different_order_overlap_creates_duplicates_detected(self):
+        scheduler, staff_ids = make_scheduler_with_staff(3)
+        s1, s2, s3 = staff_ids
+        reversed_order = [s3, s2, s1]
+
+        scheduler.generate_rotation_schedule(
+            staff_ids, date(2026, 3, 1), date(2026, 3, 7)
+        )
+
+        scheduler.generate_rotation_schedule(
+            reversed_order, date(2026, 3, 1), date(2026, 3, 7)
+        )
+
+        result = scheduler.validate_schedule(
+            date(2026, 3, 1), date(2026, 3, 7)
+        )
+        assert result.is_valid is False
+        assert result.duplicate_count > 0
+
+    def test_generate_three_times_still_valid(self):
+        scheduler, staff_ids = make_scheduler_with_staff(2)
+        start = date(2026, 2, 1)
+        end = date(2026, 2, 28)
+
+        for _ in range(3):
+            scheduler.generate_rotation_schedule(staff_ids, start, end)
+
+        result = scheduler.validate_schedule(start, end)
+        assert result.is_valid is True
+        assert result.duplicate_count == 0
+
+        for i in range(28):
+            d = start + timedelta(days=i)
+            assert len(scheduler.get_assignment(d)) == 1
+
+
+class TestSwapBoundaryHandling:
+    def test_swap_preserves_other_assignments_on_same_day(self):
+        scheduler, staff_ids = make_scheduler_with_staff(4)
+        s1, s2, s3, s4 = staff_ids
+        today = date(2026, 6, 10)
+        start = date(2026, 6, 15)
+        end = date(2026, 6, 18)
+
+        scheduler.generate_rotation_schedule(staff_ids, start, end)
+
+        scheduler.set_shift(date(2026, 6, 15), s3)
+
+        assert s1 in scheduler.get_assignment(date(2026, 6, 15))
+        assert s3 in scheduler.get_assignment(date(2026, 6, 15))
+        assert len(scheduler.get_assignment(date(2026, 6, 15))) == 2
+
+        request_id = scheduler.create_swap_request(
+            requester_id=s1,
+            responder_id=s2,
+            requester_date=date(2026, 6, 15),
+            responder_date=date(2026, 6, 16),
+            today=today,
+        )
+
+        scheduler.approve_swap_request(request_id, approver_id=s2)
+
+        day15 = scheduler.get_assignment(date(2026, 6, 15))
+        day16 = scheduler.get_assignment(date(2026, 6, 16))
+
+        assert s2 in day15
+        assert s3 in day15
+        assert len(day15) == 2
+        assert s1 not in day15
+
+        assert s1 in day16
+        assert len(day16) == 1
+
+    def test_swap_with_duplicate_assignment_preserves_count(self):
+        scheduler, staff_ids = make_scheduler_with_staff(5)
+        s1, s2, s3, s4, s5 = staff_ids
+        today = date(2026, 6, 10)
+
+        scheduler.generate_rotation_schedule(
+            staff_ids, date(2026, 6, 15), date(2026, 6, 30)
+        )
+
+        initial_count = len(scheduler.get_assignment(date(2026, 6, 15)))
+        assert initial_count == 1
+
+        request_id = scheduler.create_swap_request(
+            requester_id=s1,
+            responder_id=s2,
+            requester_date=date(2026, 6, 15),
+            responder_date=date(2026, 6, 16),
+            today=today,
+        )
+        scheduler.approve_swap_request(request_id, approver_id=s2)
+
+        assert len(scheduler.get_assignment(date(2026, 6, 15))) == 1
+        assert len(scheduler.get_assignment(date(2026, 6, 16))) == 1
+
+    def test_swap_effective_cannot_be_reprocessed(self):
+        scheduler, staff_ids = make_scheduler_with_staff(3)
+        s1, s2, s3 = staff_ids
+        today = date(2026, 6, 10)
+        scheduler.generate_rotation_schedule(
+            staff_ids, date(2026, 6, 15), date(2026, 6, 30)
+        )
+
+        request_id = scheduler.create_swap_request(
+            s1, s2, date(2026, 6, 15), date(2026, 6, 16), today=today
+        )
+        scheduler.approve_swap_request(request_id, approver_id=s2)
+
+        with pytest.raises(SwapRequestAlreadyProcessedError):
+            scheduler.reject_swap_request(request_id, rejecter_id=s2)
+
+        swap = scheduler.get_swap_request(request_id)
+        assert swap.is_effective is True
+
+
 class TestSwapRequestErrors:
     def test_create_swap_unregistered_requester(self):
         scheduler, staff_ids = make_scheduler_with_staff(2)

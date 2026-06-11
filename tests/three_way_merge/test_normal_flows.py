@@ -121,3 +121,61 @@ class TestMultipleNonOverlappingChanges:
         result_list = make_result(base, a, b)
         assert result_str.get_merged_text() == result_list.get_merged_text()
         assert result_list.has_conflicts is False
+
+
+class TestAdjacentInsertAndModify:
+    def test_modify_then_insert_right_after_no_conflict(self):
+        base = "line1\nline2\nline3\nline4"
+        a = "line1\nline2_modified\nline3\nline4"
+        b = "line1\nline2\ninserted_after_line2\nline3\nline4"
+        result = make_result(base, a, b)
+        assert result.has_conflicts is False
+        assert result.conflict_count == 0
+        assert result.get_merged_text() == "line1\nline2_modified\ninserted_after_line2\nline3\nline4"
+
+    def test_insert_then_modify_next_block_no_conflict(self):
+        base = "A\nB\nC\nD"
+        a = "A\nA_inserted\nB\nC\nD"
+        b = "A\nB\nC_changed\nD"
+        result = make_result(base, a, b)
+        assert result.has_conflicts is False
+        assert result.get_merged_text() == "A\nA_inserted\nB\nC_changed\nD"
+
+    def test_delete_range_then_insert_after_no_conflict(self):
+        base = "L1\nL2\nL3\nL4\nL5"
+        a = "L1\nL4\nL5"
+        b = "L1\nL2\nL3\nB_after_L3\nL4\nL5"
+        result = make_result(base, a, b)
+        assert result.has_conflicts is False
+        expected = "L1\nB_after_L3\nL4\nL5"
+        assert result.get_merged_text() == expected
+
+    def test_modify_range_insert_at_end_no_conflict(self):
+        base_lines = [f"L{i}" for i in range(1, 11)]
+        base = "\n".join(base_lines)
+        a_list = [f"L{i}" for i in range(1, 5)] + ["A5", "A6"] + [f"L{i}" for i in range(7, 11)]
+        a = "\n".join(a_list)
+        b_list = base_lines[:] + ["B_tail"]
+        b = "\n".join(b_list)
+        result = make_result(base, a, b)
+        assert result.has_conflicts is False
+        expected = (
+            "L1\nL2\nL3\nL4\nA5\nA6\nL7\nL8\nL9\nL10\nB_tail"
+        )
+        assert result.get_merged_text() == expected
+
+    def test_insert_at_beginning_modify_middle_no_conflict(self):
+        base = "M1\nM2\nM3\nM4"
+        a = "HEAD\nM1\nM2\nM3\nM4"
+        b = "M1\nM2\nM3_new\nM4"
+        result = make_result(base, a, b)
+        assert result.has_conflicts is False
+        assert result.get_merged_text() == "HEAD\nM1\nM2\nM3_new\nM4"
+
+    def test_insert_inside_modified_range_is_conflict(self):
+        base = "L1\nL2\nL3\nL4"
+        a = "L1\nL2_mod\nL3_mod\nL4"
+        b = "L1\nL2\nINSERT\nL3\nL4"
+        result = make_result(base, a, b)
+        assert result.has_conflicts is True
+        assert result.conflict_count >= 1

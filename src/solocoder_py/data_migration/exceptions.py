@@ -21,9 +21,5 @@ class CheckpointError(DataMigrationError):
     pass
 
 
-class EmptySourceError(DataMigrationError):
-    pass
-
-
 class InvalidBatchSizeError(DataMigrationError):
     pass
