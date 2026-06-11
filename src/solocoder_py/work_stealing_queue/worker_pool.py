@@ -54,7 +54,9 @@ class WorkerPool:
         self._lock = threading.Lock()
         self._submitted_count = 0
         self._completed_count = 0
+        self._failed_count = 0
         self._stolen_count = 0
+        self._round_robin_index = 0
 
     @property
     def num_workers(self) -> int:
@@ -75,6 +77,10 @@ class WorkerPool:
     @property
     def completed_count(self) -> int:
         return self._completed_count
+
+    @property
+    def failed_count(self) -> int:
+        return self._failed_count
 
     @property
     def stolen_count(self) -> int:
@@ -107,7 +113,8 @@ class WorkerPool:
         """
         if worker_id is None:
             with self._lock:
-                worker_id = self._submitted_count % self._num_workers
+                worker_id = self._round_robin_index % self._num_workers
+                self._round_robin_index += 1
                 self._submitted_count += 1
         else:
             if worker_id < 0 or worker_id >= self._num_workers:
@@ -206,8 +213,11 @@ class WorkerPool:
             task.mark_running()
             task_handler(task)
             task.mark_completed()
-        except Exception:
-            task.mark_completed()
+        except Exception as e:
+            task.mark_failed(error_message=str(e))
         finally:
             with self._lock:
-                self._completed_count += 1
+                if task.status == TaskStatus.FAILED:
+                    self._failed_count += 1
+                else:
+                    self._completed_count += 1

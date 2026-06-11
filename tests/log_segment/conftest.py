@@ -31,16 +31,7 @@ def make_log_with_old_segments():
     def _make(num_old_segments: int = 3,
               entries_per_segment: int = 5,
               old_timestamp: float | None = None) -> SegmentedLog:
-        config = SegmentedLogConfig()
-        log = SegmentedLog.__new__(SegmentedLog)
-        log.config = config
-        log.segments = {}
-        log.segment_order = []
-        log.offset_mapper = OffsetMapper()
-        log.compactor = LogCompactor()
-        log.next_segment_id = 0
-        log.next_logical_offset = 0
-        log.active_segment_id = None
+        log = SegmentedLog()
 
         base_time = old_timestamp or (time.time() - 3600)
         current_offset = 0
@@ -68,8 +59,6 @@ def make_log_with_old_segments():
             log.offset_mapper.register_segment(seg_id)
         log.next_segment_id = num_old_segments
         log.next_logical_offset = current_offset
-        if log.next_segment_id not in log.segments:
-            log._create_new_segment()
         return log
     return _make
 

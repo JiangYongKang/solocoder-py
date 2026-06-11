@@ -9,9 +9,5 @@ class QueueFullError(WorkStealingQueueError):
     pass
 
 
-class QueueEmptyError(WorkStealingQueueError):
-    pass
-
-
 class InvalidWorkerError(WorkStealingQueueError):
     pass

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
@@ -105,7 +106,9 @@ class PriorityThreadPool:
     ) -> List[str]:
         task_ids: List[str] = []
         for func, args, kwargs, priority in tasks:
-            tid = self.submit(func, *args, priority=priority, **kwargs)
+            task_kwargs = dict(kwargs)
+            duration = task_kwargs.pop("duration", 0.0)
+            tid = self.submit(func, *args, priority=priority, duration=duration, **task_kwargs)
             task_ids.append(tid)
         return task_ids
 
@@ -123,17 +126,23 @@ class PriorityThreadPool:
             if not wait:
                 return
 
-            while self._state != ThreadPoolState.TERMINATED:
+        is_manual = hasattr(self._clock, "advance")
+        while True:
+            with self._lock:
                 self._advance_time(0)
                 if self._state == ThreadPoolState.TERMINATED:
                     break
                 if self._running:
                     min_completes = min(rt.completes_at for rt in self._running)
                     wait_time = max(0.0, min_completes - self._clock.now())
-                    if hasattr(self._clock, "advance"):
-                        self._clock.advance(wait_time + 0.001)
-                    else:
-                        break
+                else:
+                    wait_time = 0.001
+            if is_manual:
+                with self._lock:
+                    self._clock.advance(wait_time + 0.001)
+            else:
+                if wait_time > 0:
+                    time.sleep(wait_time)
 
     def get_task_result(self, task_id: str) -> TaskResult:
         with self._lock:
@@ -141,19 +150,33 @@ class PriorityThreadPool:
                 return self._results[task_id]
             if task_id in self._pending_tasks:
                 task = self._pending_tasks[task_id]
-                is_running = any(rt.task.task_id == task_id for rt in self._running)
-                status = TaskStatus.RUNNING if is_running else TaskStatus.PENDING
-                return TaskResult(
-                    task_id=task_id,
-                    status=status,
-                    priority=task.priority,
-                    submitted_at=task.submitted_at,
-                    original_priority=task.original_priority,
-                    priority_boost_count=task.priority_boost_count,
+                running_task = next(
+                    (rt for rt in self._running if rt.task.task_id == task_id),
+                    None,
                 )
+                if running_task is not None:
+                    return TaskResult(
+                        task_id=task_id,
+                        status=TaskStatus.RUNNING,
+                        priority=task.priority,
+                        submitted_at=task.submitted_at,
+                        started_at=running_task.started_at,
+                        original_priority=task.original_priority,
+                        priority_boost_count=task.priority_boost_count,
+                    )
+                else:
+                    return TaskResult(
+                        task_id=task_id,
+                        status=TaskStatus.PENDING,
+                        priority=task.priority,
+                        submitted_at=task.submitted_at,
+                        original_priority=task.original_priority,
+                        priority_boost_count=task.priority_boost_count,
+                    )
             raise TaskNotFoundError(task_id)
 
     def wait_for_task(self, task_id: str, timeout: Optional[float] = None) -> TaskResult:
+        is_manual = hasattr(self._clock, "advance")
         start = self._clock.now()
         while True:
             with self._lock:
@@ -165,38 +188,60 @@ class PriorityThreadPool:
                     elapsed = self._clock.now() - start
                     if elapsed >= timeout:
                         task = self._pending_tasks[task_id]
-                        is_running = any(rt.task.task_id == task_id for rt in self._running)
-                        status = TaskStatus.RUNNING if is_running else TaskStatus.PENDING
-                        return TaskResult(
-                            task_id=task_id,
-                            status=status,
-                            priority=task.priority,
-                            submitted_at=task.submitted_at,
-                            original_priority=task.original_priority,
-                            priority_boost_count=task.priority_boost_count,
+                        running_task = next(
+                            (rt for rt in self._running if rt.task.task_id == task_id),
+                            None,
                         )
+                        if running_task is not None:
+                            return TaskResult(
+                                task_id=task_id,
+                                status=TaskStatus.RUNNING,
+                                priority=task.priority,
+                                submitted_at=task.submitted_at,
+                                started_at=running_task.started_at,
+                                original_priority=task.original_priority,
+                                priority_boost_count=task.priority_boost_count,
+                            )
+                        else:
+                            return TaskResult(
+                                task_id=task_id,
+                                status=TaskStatus.PENDING,
+                                priority=task.priority,
+                                submitted_at=task.submitted_at,
+                                original_priority=task.original_priority,
+                                priority_boost_count=task.priority_boost_count,
+                            )
                 self._advance_time(0)
                 if self._running:
                     min_completes = min(rt.completes_at for rt in self._running)
                     wait_time = max(0.0, min_completes - self._clock.now())
-                    if hasattr(self._clock, "advance"):
-                        self._clock.advance(wait_time + 0.001)
-                    else:
-                        self._advance_time(0)
+                else:
+                    wait_time = 0.001
+            if is_manual:
+                with self._lock:
+                    self._clock.advance(wait_time + 0.001)
+            else:
+                if wait_time > 0:
+                    time.sleep(wait_time)
 
     def run_until_complete(self) -> None:
-        with self._lock:
-            while self._has_pending_work():
+        is_manual = hasattr(self._clock, "advance")
+        while True:
+            with self._lock:
                 self._advance_time(0)
                 if not self._has_pending_work():
                     break
                 if self._running:
                     min_completes = min(rt.completes_at for rt in self._running)
                     wait_time = max(0.0, min_completes - self._clock.now())
-                    if hasattr(self._clock, "advance"):
-                        self._clock.advance(wait_time + 0.001)
-                    else:
-                        break
+                else:
+                    wait_time = 0.001
+            if is_manual:
+                with self._lock:
+                    self._clock.advance(wait_time + 0.001)
+            else:
+                if wait_time > 0:
+                    time.sleep(wait_time)
 
     def tick(self) -> None:
         with self._lock:

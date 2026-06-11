@@ -5,7 +5,7 @@ from typing import Generic, Optional
 
 from .exceptions import DataSourceError
 from .lru_cache import LRUCache
-from .models import CacheStats, DataSource, K, V
+from .models import CacheStats, DataSource, K, V, _MISSING, _MutableStats
 
 
 class MultiLevelCache(Generic[K, V]):
@@ -27,7 +27,7 @@ class MultiLevelCache(Generic[K, V]):
         self._data_source = data_source
         self._lock = threading.RLock()
 
-        self._stats = CacheStats()
+        self._stats = _MutableStats()
 
     @property
     def l1_capacity(self) -> int:
@@ -61,43 +61,19 @@ class MultiLevelCache(Generic[K, V]):
     def get(self, key: K) -> V:
         with self._lock:
             value = self._l1.get(key)
-            if value is not None:
-                self._stats = CacheStats(
-                    l1_hits=self._stats.l1_hits + 1,
-                    l2_hits=self._stats.l2_hits,
-                    l1_misses=self._stats.l1_misses,
-                    l2_misses=self._stats.l2_misses,
-                    data_source_loads=self._stats.data_source_loads,
-                )
+            if value is not _MISSING:
+                self._stats.l1_hits += 1
                 return value
 
-            self._stats = CacheStats(
-                l1_hits=self._stats.l1_hits,
-                l2_hits=self._stats.l2_hits,
-                l1_misses=self._stats.l1_misses + 1,
-                l2_misses=self._stats.l2_misses,
-                data_source_loads=self._stats.data_source_loads,
-            )
+            self._stats.l1_misses += 1
 
             value = self._l2.get(key)
-            if value is not None:
-                self._stats = CacheStats(
-                    l1_hits=self._stats.l1_hits,
-                    l2_hits=self._stats.l2_hits + 1,
-                    l1_misses=self._stats.l1_misses,
-                    l2_misses=self._stats.l2_misses,
-                    data_source_loads=self._stats.data_source_loads,
-                )
+            if value is not _MISSING:
+                self._stats.l2_hits += 1
                 self._l1.set(key, value)
                 return value
 
-            self._stats = CacheStats(
-                l1_hits=self._stats.l1_hits,
-                l2_hits=self._stats.l2_hits,
-                l1_misses=self._stats.l1_misses,
-                l2_misses=self._stats.l2_misses + 1,
-                data_source_loads=self._stats.data_source_loads,
-            )
+            self._stats.l2_misses += 1
 
             if self._data_source is None:
                 raise DataSourceError("No data source configured")
@@ -107,13 +83,7 @@ class MultiLevelCache(Generic[K, V]):
             except Exception as e:
                 raise DataSourceError(f"Failed to load from data source: {e}") from e
 
-            self._stats = CacheStats(
-                l1_hits=self._stats.l1_hits,
-                l2_hits=self._stats.l2_hits,
-                l1_misses=self._stats.l1_misses,
-                l2_misses=self._stats.l2_misses,
-                data_source_loads=self._stats.data_source_loads + 1,
-            )
+            self._stats.data_source_loads += 1
 
             self._l2.set(key, value)
             self._l1.set(key, value)
@@ -122,8 +92,8 @@ class MultiLevelCache(Generic[K, V]):
 
     def set(self, key: K, value: V) -> None:
         with self._lock:
-            self._l1.delete(key)
-            self._l2.delete(key)
+            self._l2.set(key, value)
+            self._l1.set(key, value)
 
     def delete(self, key: K) -> bool:
         with self._lock:
@@ -135,7 +105,7 @@ class MultiLevelCache(Generic[K, V]):
         with self._lock:
             self._l1.clear()
             self._l2.clear()
-            self._stats = CacheStats()
+            self._stats.reset()
 
     def invalidate(self, key: K) -> None:
         self.delete(key)

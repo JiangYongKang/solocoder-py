@@ -16,7 +16,14 @@ class CancelToken:
         self._token_id = token_id or str(uuid.uuid4())
         self._parent = parent
         self._children: List["CancelToken"] = []
-        self._is_cancelled = initially_cancelled
+        if initially_cancelled:
+            self._is_cancelled = True
+        elif parent is not None and parent.is_cancelled:
+            self._is_cancelled = True
+        else:
+            self._is_cancelled = False
+        if parent is not None:
+            parent._children.append(self)
 
     @property
     def token_id(self) -> str:
@@ -43,13 +50,11 @@ class CancelToken:
         return len(self._children)
 
     def create_child(self, token_id: Optional[str] = None) -> "CancelToken":
-        child = CancelToken(
+        return CancelToken(
             token_id=token_id,
             parent=self,
             initially_cancelled=self._is_cancelled,
         )
-        self._children.append(child)
-        return child
 
     def cancel(self) -> None:
         if self._is_cancelled:

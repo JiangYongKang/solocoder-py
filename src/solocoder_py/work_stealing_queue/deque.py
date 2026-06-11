@@ -41,13 +41,19 @@ class WorkStealingDeque(Generic[T]):
         return self._max_capacity
 
     def __len__(self) -> int:
-        return len(self._deque)
+        return self.size()
 
     def is_empty(self) -> bool:
-        return len(self._deque) == 0
+        return self.size() == 0
 
     def size(self) -> int:
-        return len(self._deque)
+        self._bottom_lock.acquire()
+        self._steal_lock.acquire()
+        try:
+            return len(self._deque)
+        finally:
+            self._steal_lock.release()
+            self._bottom_lock.release()
 
     def push_bottom(self, item: T) -> None:
         """

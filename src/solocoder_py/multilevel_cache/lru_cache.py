@@ -3,10 +3,10 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Generic, Optional, TypeVar
+from typing import Generic, Optional, Union
 
 from .exceptions import InvalidCapacityError
-from .models import K, V
+from .models import K, V, _MISSING, _SentinelType
 
 
 @dataclass
@@ -16,8 +16,8 @@ class _CacheEntry(Generic[V]):
 
 class LRUCache(Generic[K, V]):
     def __init__(self, capacity: int) -> None:
-        if capacity < 0:
-            raise InvalidCapacityError("capacity must be non-negative")
+        if capacity <= 0:
+            raise InvalidCapacityError("capacity must be positive")
 
         self._capacity = capacity
         self._store: OrderedDict[K, _CacheEntry[V]] = OrderedDict()
@@ -38,13 +38,19 @@ class LRUCache(Generic[K, V]):
         with self._lock:
             return self._eviction_count
 
-    def get(self, key: K) -> Optional[V]:
+    def get(self, key: K) -> Union[V, _SentinelType]:
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
-                return None
+                return _MISSING
             self._store.move_to_end(key)
             return entry.value
+
+    def get_or_none(self, key: K) -> Optional[V]:
+        value = self.get(key)
+        if value is _MISSING:
+            return None
+        return value
 
     def set(self, key: K, value: V) -> None:
         with self._lock:
@@ -73,9 +79,6 @@ class LRUCache(Generic[K, V]):
             self._eviction_count = 0
 
     def _evict_if_needed(self) -> None:
-        if self._capacity <= 0:
-            return
-
         while len(self._store) > self._capacity:
             self._evict_lru()
 

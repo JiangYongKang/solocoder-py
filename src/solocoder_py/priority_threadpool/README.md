@@ -29,7 +29,6 @@
 - `RUNNING`：正在执行
 - `SUCCESS`：执行成功
 - `FAILED`：执行过程中抛出业务异常
-- `CANCELLED`：任务被取消
 - `REJECTED`：线程池已关闭，任务被拒绝
 
 ### ThreadPoolState
@@ -59,8 +58,8 @@
 | `result` | Any | 任务返回值（成功时有效） |
 | `exception` | Optional[BaseException] | 任务执行异常（失败时有效） |
 | `submitted_at` | float | 提交时间戳 |
-| `started_at` | Optional[float] | 开始执行时间戳 |
-| `completed_at` | Optional[float] | 完成时间戳 |
+| `started_at` | Optional[float] | 开始执行时间戳，未开始时为 `None` |
+| `completed_at` | Optional[float] | 完成时间戳，未完成时为 `None` |
 | `original_priority` | Priority | 提交时的原始优先级 |
 | `priority_boost_count` | int | 老化提权次数 |
 
@@ -91,7 +90,7 @@
 - `run_until_complete()`：运行直到所有已提交任务完成
 - `shutdown(wait: bool = True)`：优雅关闭线程池。`wait=True` 时阻塞直到所有任务完成；`wait=False` 时仅触发关闭流程，需后续调度
 - `wait_for_task(task_id: str, timeout: Optional[float] = None) -> TaskResult`：等待指定任务完成
-- `get_task_result(task_id: str) -> TaskResult`：获取任务结果，任务未完成时抛出 `TaskNotFoundError`
+- `get_task_result(task_id: str) -> TaskResult`：获取任务结果。若 task_id 不存在则抛出 `TaskNotFoundError`；若任务尚未完成，返回包含当前状态（PENDING 或 RUNNING）的 `TaskResult`，其中 `started_at` 和 `completed_at` 为 `None`
 - `get_stats() -> ThreadPoolStats`：获取线程池统计快照
 
 ### 异常类

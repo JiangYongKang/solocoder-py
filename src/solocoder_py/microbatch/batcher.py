@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Callable, Generic, Optional, Protocol, TypeVar
 from collections.abc import Sequence
+
+logger = logging.getLogger(__name__)
 
 from .clock import Clock, SystemClock
 from .exceptions import BufferClosedError
@@ -79,10 +82,8 @@ class MicroBatchBatcher(Generic[T]):
 
         with self._buffer_lock:
             self._buffer.append(item)
-            current_size = len(self._buffer)
 
-        if current_size >= self._config.max_size:
-            self.flush_if_needed(force=False)
+        self.flush_if_needed(force=False)
 
     def submit_many(self, items: Sequence[T]) -> None:
         if self._closed:
@@ -90,10 +91,8 @@ class MicroBatchBatcher(Generic[T]):
 
         with self._buffer_lock:
             self._buffer.extend(items)
-            current_size = len(self._buffer)
 
-        if current_size >= self._config.max_size:
-            self.flush_if_needed(force=False)
+        self.flush_if_needed(force=False)
 
     def flush_if_needed(self, force: bool = False) -> bool:
         with self._buffer_lock:
@@ -159,7 +158,7 @@ class MicroBatchBatcher(Generic[T]):
             try:
                 self.flush_if_needed(force=False)
             except Exception:
-                pass
+                logger.exception("Error in MicroBatchBatcher scheduler loop")
             self._scheduler_stop_event.wait(interval)
 
     def _flush_batch(self, batch: list[T]) -> None:

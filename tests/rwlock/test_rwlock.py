@@ -24,6 +24,14 @@ def acquire_with_park(lock: RWLock, scheduler: ManualScheduler, mode: str, threa
         pass
 
 
+def resume_after_unpark(lock: RWLock, scheduler: ManualScheduler, mode: str, thread_id: str) -> None:
+    scheduler.set_current_thread(thread_id)
+    if mode == "read":
+        lock.acquire_read()
+    else:
+        lock.acquire_write()
+
+
 class TestRWLockStateModel:
     def test_initial_state(self):
         from solocoder_py.rwlock import RWLockState
@@ -227,8 +235,11 @@ class TestWriteLockExclusive:
         lock.release()
 
         assert scheduler.is_parked("writer-2") is False
+
+        resume_after_unpark(lock, scheduler, "write", "writer-2")
         assert lock.state.is_write_locked is True
         assert lock.state.writer_thread_id == "writer-2"
+        assert lock.state.write_lock_count == 1
 
     def test_reader_blocked_by_writer(self):
         scheduler = make_scheduler()
@@ -266,8 +277,11 @@ class TestReadThenWrite:
         scheduler.set_current_thread("reader-2")
         lock.release()
         assert scheduler.is_parked("writer-1") is False
+
+        resume_after_unpark(lock, scheduler, "write", "writer-1")
         assert lock.state.is_write_locked is True
         assert lock.state.writer_thread_id == "writer-1"
+        assert lock.state.write_lock_count == 1
 
 
 class TestWriterPriority:
@@ -289,6 +303,9 @@ class TestWriterPriority:
         lock.release()
 
         assert scheduler.is_parked("writer-1") is False
+        assert scheduler.is_parked("reader-2") is True
+
+        resume_after_unpark(lock, scheduler, "write", "writer-1")
         assert lock.state.is_write_locked is True
         assert lock.state.writer_thread_id == "writer-1"
 
@@ -313,6 +330,11 @@ class TestWriterPriority:
         assert scheduler.is_parked("reader-1") is False
         assert scheduler.is_parked("reader-2") is False
         assert scheduler.is_parked("reader-3") is False
+
+        resume_after_unpark(lock, scheduler, "read", "reader-1")
+        resume_after_unpark(lock, scheduler, "read", "reader-2")
+        resume_after_unpark(lock, scheduler, "read", "reader-3")
+
         assert lock.state.is_read_locked is True
         assert lock.state.reader_count == 3
 
@@ -395,7 +417,7 @@ class TestErrorCases:
             lock.acquire_write()
 
     def test_lock_requires_scheduler(self):
-        with pytest.raises(ValueError, match="scheduler must be provided"):
+        with pytest.raises(TypeError):
             RWLock()
 
 
@@ -414,13 +436,19 @@ class TestFairnessAndComplexScenarios:
 
         scheduler.set_current_thread("writer-1")
         lock.release()
-        assert lock.state.writer_thread_id == "writer-2"
         assert scheduler.is_parked("writer-3") is True
+
+        resume_after_unpark(lock, scheduler, "write", "writer-2")
+        assert lock.state.writer_thread_id == "writer-2"
+        assert lock.state.write_lock_count == 1
 
         scheduler.set_current_thread("writer-2")
         lock.release()
-        assert lock.state.writer_thread_id == "writer-3"
         assert scheduler.is_parked("writer-3") is False
+
+        resume_after_unpark(lock, scheduler, "write", "writer-3")
+        assert lock.state.writer_thread_id == "writer-3"
+        assert lock.state.write_lock_count == 1
 
     def test_reader_then_writer_then_reader_fairness(self):
         scheduler = make_scheduler()
@@ -438,13 +466,23 @@ class TestFairnessAndComplexScenarios:
         scheduler.set_current_thread("reader-1")
         lock.release()
 
-        assert lock.state.is_write_locked is True
-        assert lock.state.writer_thread_id == "writer-1"
+        assert scheduler.is_parked("writer-1") is False
         assert scheduler.is_parked("reader-2") is True
         assert scheduler.is_parked("reader-3") is True
 
+        resume_after_unpark(lock, scheduler, "write", "writer-1")
+        assert lock.state.is_write_locked is True
+        assert lock.state.writer_thread_id == "writer-1"
+        assert lock.state.write_lock_count == 1
+
         scheduler.set_current_thread("writer-1")
         lock.release()
+
+        assert scheduler.is_parked("reader-2") is False
+        assert scheduler.is_parked("reader-3") is False
+
+        resume_after_unpark(lock, scheduler, "read", "reader-2")
+        resume_after_unpark(lock, scheduler, "read", "reader-3")
 
         assert lock.state.is_read_locked is True
         assert lock.state.reader_count == 2
@@ -468,5 +506,8 @@ class TestFairnessAndComplexScenarios:
         assert scheduler.is_parked("writer-2") is True
 
         lock.release()
-        assert lock.state.writer_thread_id == "writer-2"
         assert scheduler.is_parked("writer-2") is False
+
+        resume_after_unpark(lock, scheduler, "write", "writer-2")
+        assert lock.state.writer_thread_id == "writer-2"
+        assert lock.state.write_lock_count == 1

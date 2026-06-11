@@ -23,6 +23,7 @@ from .models import (
 class PartitionAssignor:
     partitions: dict[int, Partition] = field(default_factory=dict)
     consumers: dict[str, Consumer] = field(default_factory=dict)
+    unassigned_partitions: set[int] = field(default_factory=set)
     orphan_partitions: set[int] = field(default_factory=set)
     partition_to_consumer: dict[int, str] = field(default_factory=dict)
     generation_id: int = 0
@@ -54,7 +55,7 @@ class PartitionAssignor:
                 )
             if pid not in self.partitions:
                 self.partitions[pid] = Partition(partition_id=pid)
-                self.orphan_partitions.add(pid)
+                self.unassigned_partitions.add(pid)
 
     def remove_partitions(self, partition_ids: Iterable[int]) -> None:
         for pid in partition_ids:
@@ -67,6 +68,7 @@ class PartitionAssignor:
                 if consumer_id in self.consumers:
                     self.consumers[consumer_id].assigned_partitions.discard(pid)
                 del self.partition_to_consumer[pid]
+            self.unassigned_partitions.discard(pid)
             self.orphan_partitions.discard(pid)
             del self.partitions[pid]
 
@@ -82,6 +84,9 @@ class PartitionAssignor:
 
     def get_all_partitions(self) -> list[Partition]:
         return list(self.partitions.values())
+
+    def get_unassigned_partitions(self) -> list[int]:
+        return sorted(self.unassigned_partitions)
 
     def get_orphan_partitions(self) -> list[int]:
         return sorted(self.orphan_partitions)
@@ -100,7 +105,34 @@ class PartitionAssignor:
         consumer = self.get_consumer(consumer_id)
         consumer.last_heartbeat = timestamp
 
+    def check_heartbeat_timeout(self, current_time: float, timeout_seconds: float) -> list[str]:
+        timed_out_consumers: list[str] = []
+        for cid, consumer in self.consumers.items():
+            if consumer.status == ConsumerStatus.ACTIVE:
+                if current_time - consumer.last_heartbeat > timeout_seconds:
+                    consumer.status = ConsumerStatus.LEAVING
+                    timed_out_consumers.append(cid)
+        return timed_out_consumers
+
+    def _process_leaving_consumers(self) -> list[int]:
+        newly_orphaned: list[int] = []
+        consumers_to_remove: list[str] = []
+        for cid, consumer in self.consumers.items():
+            if consumer.status == ConsumerStatus.LEAVING:
+                for partition_id in consumer.assigned_partitions:
+                    self.orphan_partitions.add(partition_id)
+                    newly_orphaned.append(partition_id)
+                    if partition_id in self.partition_to_consumer:
+                        del self.partition_to_consumer[partition_id]
+                consumer.assigned_partitions.clear()
+                consumers_to_remove.append(cid)
+        for cid in consumers_to_remove:
+            del self.consumers[cid]
+        return newly_orphaned
+
     def rebalance(self) -> RebalanceResult:
+        newly_orphaned = self._process_leaving_consumers()
+
         if not self.consumers:
             raise EmptyConsumerGroupError(
                 "Cannot rebalance with empty consumer group"
@@ -153,8 +185,14 @@ class PartitionAssignor:
             if pid in all_partition_ids:
                 partitions_to_reassign.append(pid)
 
+        for pid in sorted(self.unassigned_partitions):
+            if pid in all_partition_ids and pid not in partitions_to_reassign:
+                partitions_to_reassign.append(pid)
+
         orphan_recovered = sorted(set(self.orphan_partitions) & set(all_partition_ids))
+        unassigned_assigned = sorted(set(self.unassigned_partitions) & set(all_partition_ids))
         self.orphan_partitions.clear()
+        self.unassigned_partitions.clear()
 
         consumers_needing_more = []
         for cid in active_consumers:

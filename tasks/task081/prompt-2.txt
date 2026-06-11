@@ -1,0 +1,4 @@
+你实现的取消令牌树模块存在一些缺陷，需要修复：
+1. exceptions.py 中定义了 CancelTokenError 异常类，但 cancel_token.py 中没有任何地方实际抛出该异常。cancel 方法对已取消令牌直接 return 不报错，create_child 方法在已取消令牌上创建子令牌也是直接返回已取消子令牌。如果提示词不要求定义自定义异常，应删除这个生产路径上从未被使用的异常类，避免误导维护者。
+2. cancel_token.py 的构造函数公开暴露了 parent 参数，但通过 CancelToken(parent=some_token) 直接构造时不会将新令牌注册到父令牌的 children 列表中，只有 create_child 方法才会正确注册。这导致绕过 create_child 创建的父子关系单向断裂，父令牌的 children_count 和 tokens 属性都查不到该子令牌。需要修复使得构造函数传入 parent 参数时也能正确完成双向注册。
+3. 修复完成后重新运行 poetry run pytest tests/cancel_token/ -q，确保所有测试通过。

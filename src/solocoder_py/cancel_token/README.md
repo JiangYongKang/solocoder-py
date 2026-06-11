@@ -27,6 +27,14 @@
 | `children` | List[CancelToken] | 子令牌列表（只读副本） |
 | `children_count` | int | 子令牌数量 |
 
+**构造函数参数：**
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `token_id` | Optional[str] | 令牌唯一标识，不指定时自动生成 UUID |
+| `parent` | Optional[CancelToken] | 父令牌引用，传入后会自动将新令牌注册到父令牌的 children 列表中 |
+| `initially_cancelled` | bool | 是否将令牌初始化为已取消状态，默认为 False |
+
 **核心方法：**
 
 - `create_child(token_id: Optional[str] = None) -> CancelToken`：创建并返回一个子令牌，子令牌会继承当前令牌的取消状态
@@ -44,10 +52,6 @@
 | `is_active` | bool | 是否处于活跃状态 |
 | `parent_id` | Optional[str] | 父令牌 ID，根令牌为 None |
 | `children_count` | int | 子令牌数量 |
-
-### CancelTokenError
-
-取消令牌模块的基异常类，用于标识该模块抛出的所有异常。
 
 ## 取消传播规则
 
@@ -146,6 +150,42 @@ print(f"Root has {root.children_count} children")  # 2
 # 创建孙令牌
 grandchild = child1.create_child(token_id="grandchild")
 print(f"Grandchild parent: {grandchild.parent.token_id}")  # "child1"
+```
+
+### 通过构造函数传入 parent 创建父子关系
+
+除了使用 `create_child()` 方法，也可以直接通过构造函数的 `parent` 参数创建父子令牌，两种方式等价，都会完成双向注册：
+
+```python
+from solocoder_py.cancel_token import CancelToken
+
+# 通过构造函数直接指定 parent
+root = CancelToken(token_id="root")
+child1 = CancelToken(token_id="child1", parent=root)
+child2 = CancelToken(token_id="child2", parent=root)
+
+# 双向关系已正确建立
+assert root.children_count == 2
+assert root.children[0] is child1
+assert root.children[1] is child2
+assert child1.parent is root
+assert child2.parent is root
+
+# 也可以混合使用两种方式
+child3 = root.create_child(token_id="child3")
+assert root.children_count == 3
+
+# 创建深层嵌套同样可行
+level1 = CancelToken(token_id="l1", parent=root)
+level2 = CancelToken(token_id="l2", parent=level1)
+assert level1.children[0] is level2
+assert level2.parent is level1
+
+# 级联取消同样生效
+root.cancel()
+assert child1.is_cancelled is True
+assert child2.is_cancelled is True
+assert level2.is_cancelled is True
 ```
 
 ### 父子级联取消

@@ -19,7 +19,6 @@ class TaskStatus(str, Enum):
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
 
 
@@ -55,8 +54,8 @@ class TaskResult:
     result: Any = None
     exception: Optional[BaseException] = None
     submitted_at: float = 0.0
-    started_at: float = 0.0
-    completed_at: float = 0.0
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
     original_priority: Priority = Priority.LOW
     priority_boost_count: int = 0
 

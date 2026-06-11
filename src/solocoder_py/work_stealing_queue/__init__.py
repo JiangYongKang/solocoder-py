@@ -1,7 +1,6 @@
 from .deque import WorkStealingDeque
 from .exceptions import (
     InvalidWorkerError,
-    QueueEmptyError,
     QueueFullError,
     WorkStealingQueueError,
 )
@@ -12,7 +11,6 @@ __all__ = [
     "WorkStealingDeque",
     "WorkStealingQueueError",
     "QueueFullError",
-    "QueueEmptyError",
     "InvalidWorkerError",
     "Task",
     "TaskStatus",

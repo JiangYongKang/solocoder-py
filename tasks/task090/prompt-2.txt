@@ -1,0 +1,6 @@
+你实现的多级缓存模块存在一些缺陷，需要修复：
+1. multilevel_cache.py 的 get 方法中 L1 和 L2 缓存命中判断均使用 `if value is not None` 作为命中条件。None 同时承担"key 不存在"和"缓存值为 None"两种语义，当缓存中存储的正常业务值恰好为 None 时会被误判为未命中并触发不必要的穿透查询。需要使用专用哨兵值或 Result 封装来区分"未找到"与"值为 None"两种状态。
+2. multilevel_cache.py 的 set 方法签名接受 value 参数，但方法体内仅执行 delete 将 L1 和 L2 删除，传入的 value 被完全丢弃。set 的方法名和参数暗示数据会被写入，实际却是纯失效操作，调用者必须另外手动更新数据源才能保证后续读到新值。需要保持 set 的语义与行为一致，要么真正写入 value，要么改名为 invalidate 并移除 value 参数。
+3. multilevel_cache.py 的 get 方法中，L1 命中、L2 命中、数据源加载等多个状态变更路径各自创建了一个完整的 CacheStats 新实例，同一构造模板重复出现多次。大量字段值未变化却需要逐字段拷贝，代码冗余且存在字段拷贝遗漏导致统计丢失的风险。应改用可变统计对象内部累加，仅在 stats 属性返回时构建不可变快照。
+4. lru_cache.py 的 _evict_if_needed 方法中，当 capacity <= 0 时直接 return 跳过淘汰逻辑，而构造器仅拦截 capacity < 0，允许 capacity=0。这导致 capacity=0 时淘汰被短路，缓存可无限增长，与容量限制的核心语义矛盾。需要修正 capacity=0 的行为，要么在构造器中拦截这一无效值，要么在淘汰方法中不短路。
+5. 修复完成后重新运行 poetry run pytest tests/multilevel_cache/ -q，确保所有测试通过。

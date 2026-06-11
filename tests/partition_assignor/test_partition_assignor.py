@@ -39,6 +39,13 @@ class TestConsumerModel:
             Consumer(consumer_id="")
 
 
+class TestConsumerStatus:
+    def test_consumer_status_has_only_active_and_leaving(self):
+        assert ConsumerStatus.ACTIVE == "active"
+        assert ConsumerStatus.LEAVING == "leaving"
+        assert len(ConsumerStatus) == 2
+
+
 class TestExceptions:
     def test_exception_hierarchy(self):
         assert issubclass(ConsumerAlreadyRegisteredError, PartitionAssignorError)
@@ -92,33 +99,52 @@ class TestConsumerRegistration:
 
 
 class TestPartitionManagement:
-    def test_add_single_partition(self, make_empty_assignor):
+    def test_add_single_partition_goes_to_unassigned(self, make_empty_assignor):
         assignor = make_empty_assignor()
         assignor.add_partitions([0])
         assert len(assignor.get_all_partitions()) == 1
-        assert 0 in assignor.get_orphan_partitions()
+        assert 0 in assignor.get_unassigned_partitions()
+        assert 0 not in assignor.get_orphan_partitions()
 
-    def test_add_multiple_partitions(self, make_empty_assignor):
+    def test_add_multiple_partitions_go_to_unassigned(self, make_empty_assignor):
         assignor = make_empty_assignor()
         assignor.add_partitions(range(10))
         assert len(assignor.get_all_partitions()) == 10
-        assert len(assignor.get_orphan_partitions()) == 10
+        assert len(assignor.get_unassigned_partitions()) == 10
+        assert len(assignor.get_orphan_partitions()) == 0
+
+    def test_unassigned_and_orphan_are_separate(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=2, num_partitions=4)
+        assert len(assignor.get_unassigned_partitions()) == 0
+        assert len(assignor.get_orphan_partitions()) == 0
+        assignor.add_partitions([4, 5])
+        assignor.unregister_consumer("consumer-0")
+        unassigned = assignor.get_unassigned_partitions()
+        orphan = assignor.get_orphan_partitions()
+        assert len(unassigned) == 2
+        assert len(orphan) == 2
+        assert set(unassigned) == {4, 5}
+        for pid in orphan:
+            assert pid not in unassigned
 
     def test_add_duplicate_partition_is_idempotent(self, make_empty_assignor):
         assignor = make_empty_assignor()
         assignor.add_partitions([0])
         assignor.add_partitions([0])
         assert len(assignor.get_all_partitions()) == 1
+        assert len(assignor.get_unassigned_partitions()) == 1
 
     def test_add_negative_partition_id_raises_error(self, make_empty_assignor):
         assignor = make_empty_assignor()
         with pytest.raises(InvalidPartitionIdError):
             assignor.add_partitions([-1])
 
-    def test_remove_partition(self, make_assignor_with_partitions):
+    def test_remove_partition_removes_from_both_unassigned_and_orphan(self, make_assignor_with_partitions):
         assignor = make_assignor_with_partitions(num_partitions=5)
+        assert 0 in assignor.get_unassigned_partitions()
         assignor.remove_partitions([0])
         assert len(assignor.get_all_partitions()) == 4
+        assert 0 not in assignor.get_unassigned_partitions()
         assert 0 not in assignor.get_orphan_partitions()
 
     def test_remove_assigned_partition(self, make_balanced_assignor):
@@ -180,6 +206,7 @@ class TestEvenRebalanceOnConsumerJoin:
             all_assigned.update(partitions)
         assert all_assigned == set(range(7))
         assert len(assignor.get_orphan_partitions()) == 0
+        assert len(assignor.get_unassigned_partitions()) == 0
 
     def test_no_partition_assigned_to_multiple_consumers(self, make_assignor_with_partitions):
         assignor = make_assignor_with_partitions(num_partitions=20)
@@ -281,14 +308,12 @@ class TestOrphanPartitionRecovery:
             assert pid in result.orphan_partitions_recovered
         assert len(assignor.get_orphan_partitions()) == 0
 
-    def test_orphan_partitions_distributed_evenly(self, make_assignor_with_partitions):
-        assignor = make_assignor_with_partitions(num_partitions=6)
-        assignor.register_consumer("consumer-0")
-        assignor.register_consumer("consumer-1")
+    def test_orphan_partitions_distributed_evenly(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=2, num_partitions=6)
+        assignor.unregister_consumer("consumer-0")
         result = assignor.rebalance()
-        assert len(result.orphan_partitions_recovered) == 6
-        assert len(result.assignments["consumer-0"]) == 3
-        assert len(result.assignments["consumer-1"]) == 3
+        assert len(result.orphan_partitions_recovered) == 3
+        assert len(result.assignments["consumer-1"]) == 6
 
     def test_consumer_removal_creates_orphans_then_recovery(self, make_balanced_assignor):
         assignor = make_balanced_assignor(num_consumers=5, num_partitions=10)
@@ -304,6 +329,107 @@ class TestOrphanPartitionRecovery:
             all_assigned.update(partitions)
         assert removed_partitions.issubset(all_assigned)
 
+    def test_orphan_partitions_priority_over_unassigned(self, make_empty_assignor):
+        assignor = make_empty_assignor()
+        assignor.add_partitions([0, 1, 2, 3, 4, 5])
+        assignor.register_consumer("consumer-0")
+        assignor.register_consumer("consumer-1")
+        assignor.rebalance()
+        assert len(assignor.get_orphan_partitions()) == 0
+        assert len(assignor.get_unassigned_partitions()) == 0
+        assignor.unregister_consumer("consumer-0")
+        assignor.add_partitions([6, 7])
+        assert len(assignor.get_orphan_partitions()) == 3
+        assert len(assignor.get_unassigned_partitions()) == 2
+        result = assignor.rebalance()
+        assert len(result.orphan_partitions_recovered) == 3
+        assert len(assignor.get_orphan_partitions()) == 0
+        assert len(assignor.get_unassigned_partitions()) == 0
+        all_assigned = set()
+        for partitions in result.assignments.values():
+            all_assigned.update(partitions)
+        assert all_assigned == {0, 1, 2, 3, 4, 5, 6, 7}
+
+
+class TestHeartbeatTimeout:
+    def test_check_heartbeat_timeout_marks_leaving(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 100.0)
+        assignor.heartbeat("consumer-2", 50.0)
+        timed_out = assignor.check_heartbeat_timeout(current_time=130.0, timeout_seconds=30.0)
+        assert len(timed_out) == 1
+        assert "consumer-2" in timed_out
+        assert assignor.get_consumer("consumer-0").status == ConsumerStatus.ACTIVE
+        assert assignor.get_consumer("consumer-1").status == ConsumerStatus.ACTIVE
+        assert assignor.get_consumer("consumer-2").status == ConsumerStatus.LEAVING
+
+    def test_check_heartbeat_timeout_no_timeout(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 100.0)
+        assignor.heartbeat("consumer-2", 100.0)
+        timed_out = assignor.check_heartbeat_timeout(current_time=129.0, timeout_seconds=30.0)
+        assert len(timed_out) == 0
+        for consumer in assignor.get_all_consumers():
+            assert consumer.status == ConsumerStatus.ACTIVE
+
+    def test_check_heartbeat_timeout_multiple_consumers(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=4, num_partitions=8)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 50.0)
+        assignor.heartbeat("consumer-2", 40.0)
+        assignor.heartbeat("consumer-3", 100.0)
+        timed_out = assignor.check_heartbeat_timeout(current_time=130.0, timeout_seconds=30.0)
+        assert len(timed_out) == 2
+        assert "consumer-1" in timed_out
+        assert "consumer-2" in timed_out
+        assert assignor.get_consumer("consumer-1").status == ConsumerStatus.LEAVING
+        assert assignor.get_consumer("consumer-2").status == ConsumerStatus.LEAVING
+
+    def test_rebalance_removes_leaving_consumers_and_recovers_partitions(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 100.0)
+        assignor.heartbeat("consumer-2", 50.0)
+        consumer_2_partitions = set(assignor.get_assignment("consumer-2"))
+        assignor.check_heartbeat_timeout(current_time=130.0, timeout_seconds=30.0)
+        assert "consumer-2" in assignor.consumers
+        assert assignor.get_consumer("consumer-2").status == ConsumerStatus.LEAVING
+        result = assignor.rebalance()
+        assert "consumer-2" not in assignor.consumers
+        assert "consumer-2" not in result.assignments
+        assert set(result.orphan_partitions_recovered) == consumer_2_partitions
+        all_assigned = set()
+        for partitions in result.assignments.values():
+            all_assigned.update(partitions)
+        assert consumer_2_partitions.issubset(all_assigned)
+        assert len(assignor.get_orphan_partitions()) == 0
+
+    def test_heartbeat_prevents_timeout(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=2, num_partitions=4)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 100.0)
+        assignor.heartbeat("consumer-0", 120.0)
+        timed_out = assignor.check_heartbeat_timeout(current_time=129.0, timeout_seconds=30.0)
+        assert len(timed_out) == 0
+        timed_out = assignor.check_heartbeat_timeout(current_time=131.0, timeout_seconds=30.0)
+        assert len(timed_out) == 1
+        assert "consumer-1" in timed_out
+
+    def test_check_heartbeat_timeout_for_nonexistent_consumer_raises_error(self, make_empty_assignor):
+        assignor = make_empty_assignor()
+        with pytest.raises(ConsumerNotFoundError):
+            assignor.heartbeat("nonexistent", 100.0)
+
+    def test_rebalance_after_all_consumers_timeout_raises_error(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=2, num_partitions=4)
+        assignor.heartbeat("consumer-0", 50.0)
+        assignor.heartbeat("consumer-1", 50.0)
+        assignor.check_heartbeat_timeout(current_time=100.0, timeout_seconds=30.0)
+        with pytest.raises(EmptyConsumerGroupError):
+            assignor.rebalance()
+
 
 class TestBoundaryConditions:
     def test_single_consumer_holds_all_partitions(self, make_assignor_with_partitions):
@@ -312,6 +438,7 @@ class TestBoundaryConditions:
         result = assignor.rebalance()
         assert len(result.assignments["consumer-0"]) == 10
         assert len(assignor.get_orphan_partitions()) == 0
+        assert len(assignor.get_unassigned_partitions()) == 0
 
     def test_partitions_equal_to_consumers(self, make_assignor_with_partitions):
         assignor = make_assignor_with_partitions(num_partitions=5)
@@ -414,20 +541,6 @@ class TestAssignmentChangeTracking:
             assert len(change.revoked_partitions) == 1
 
 
-class TestHeartbeat:
-    def test_heartbeat_updates_timestamp(self, make_empty_assignor):
-        assignor = make_empty_assignor()
-        assignor.register_consumer("consumer-0")
-        assignor.heartbeat("consumer-0", 100.0)
-        consumer = assignor.get_consumer("consumer-0")
-        assert consumer.last_heartbeat == 100.0
-
-    def test_heartbeat_for_nonexistent_consumer_raises_error(self, make_empty_assignor):
-        assignor = make_empty_assignor()
-        with pytest.raises(ConsumerNotFoundError):
-            assignor.heartbeat("nonexistent", 100.0)
-
-
 class TestGenerationId:
     def test_generation_id_increments_on_rebalance(self, make_assignor_with_partitions):
         assignor = make_assignor_with_partitions(num_partitions=3)
@@ -452,3 +565,39 @@ class TestPartitionToConsumerMapping:
                 assert pid not in partition_to_consumer
                 partition_to_consumer[pid] = cid
         assert len(partition_to_consumer) == 9
+
+
+class TestLeavingStateTransition:
+    def test_leaving_consumers_not_in_active_list(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
+        assignor.heartbeat("consumer-2", 50.0)
+        assignor.check_heartbeat_timeout(current_time=100.0, timeout_seconds=30.0)
+        assert assignor.get_consumer("consumer-2").status == ConsumerStatus.LEAVING
+        assert len(assignor.get_all_consumers()) == 3
+
+    def test_process_leaving_consumers_on_rebalance(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=3, num_partitions=6)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 100.0)
+        assignor.heartbeat("consumer-2", 50.0)
+        consumer_2_partitions = set(assignor.get_assignment("consumer-2"))
+        assignor.check_heartbeat_timeout(current_time=130.0, timeout_seconds=30.0)
+        result = assignor.rebalance()
+        assert "consumer-2" not in assignor.consumers
+        assert consumer_2_partitions == set(result.orphan_partitions_recovered)
+        total_partitions = sum(len(p) for p in result.assignments.values())
+        assert total_partitions == 6
+
+    def test_multiple_leaving_consumers_processed(self, make_balanced_assignor):
+        assignor = make_balanced_assignor(num_consumers=4, num_partitions=8)
+        assignor.heartbeat("consumer-0", 100.0)
+        assignor.heartbeat("consumer-1", 50.0)
+        assignor.heartbeat("consumer-2", 50.0)
+        assignor.heartbeat("consumer-3", 100.0)
+        assignor.check_heartbeat_timeout(current_time=130.0, timeout_seconds=30.0)
+        result = assignor.rebalance()
+        assert "consumer-1" not in assignor.consumers
+        assert "consumer-2" not in assignor.consumers
+        assert len(result.assignments) == 2
+        total_partitions = sum(len(p) for p in result.assignments.values())
+        assert total_partitions == 8

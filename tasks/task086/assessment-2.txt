@@ -1,0 +1,9 @@
+产物不满意：
+1. README.md 中对 get_task_result 方法的描述更新后仍然不准确。文档写道"若任务尚未完成，返回包含当前状态（PENDING 或 RUNNING）的 TaskResult，其中 started_at 和 completed_at 为 None"，但实际代码中 get_task_result 方法对 RUNNING 状态的任务会通过 running_task.started_at 返回有效的开始执行时间戳，只有 completed_at 为 None。调用者阅读文档后会以为 RUNNING 任务也无法获取 started_at，与真实行为矛盾。根本原因是模型修改 README 时只考虑了 PENDING 状态下的语义，忽略了 RUNNING 任务在 _running 列表中已持有 started_at 字段这一事实，写完文档后没有对照实际代码中的分支逻辑进行复核。应按实际代码行为修正描述，将 PENDING 和 RUNNING 两种状态分开说明，明确指出 RUNNING 状态下 started_at 有效、completed_at 为 None。
+
+2. models.py 的 TaskStatus 枚举中 REJECTED 值仍然未被任何代码路径使用。提示词第 4 条明确要求"删除未使用的枚举值或在相应场景中实际使用它们"，模型删除了 CANCELLED 但保留了 REJECTED，声称"预留，关闭后拒绝任务场景使用"。然而查看 threadpool.py 的 submit 方法，线程池关闭后拒绝新任务时仍然直接抛出 ThreadPoolShutdownError 异常，并未创建 status=REJECTED 的 TaskResult 并存入 _results 字典。REJECTED 枚举值与实际代码行为之间没有任何连接点，属于名义上保留但实质上仍是未使用状态。正确做法是或彻底删除 REJECTED，或在 submit 方法中捕获关闭状态不抛异常而是创建 REJECTED 状态的 TaskResult 供后续查询。
+
+过程不满意：
+1. 模型在收到提示词后的第一个动作就是调用 todo_write 创建 6 项子任务计划，然后才开始用 view_files 读取 threadpool.py 和 models.py 的源代码。这个行为顺序违反了合理的分析先于规划的原则。提示词中明确指出了 5 个具体缺陷且每个缺陷都描述了涉及的代码路径和问题表现，但模型没有先通读当前代码确认每个缺陷的实际表现和影响范围，直接凭提示词描述就划分了修复任务项。合理的做法是先完整读取所有相关源文件，理解现有代码中每个缺陷的具体位置和上下文，再据此制定有准确粒度的执行计划。
+
+2. 模型在修改 README.md 描述时对 get_task_result 的行为下了断言，称"started_at 和 completed_at 为 None"，但这一描述仅在 PENDING 场景下正确，RUNNING 场景下 started_at 已被赋值。这是典型的文档未经验证就主观断言的问题。模型在编写完 threadpool.py 中的 get_task_result 逻辑（其中 RUNNING 分支明确包含 started_at=running_task.started_at）之后，并没有对照该代码分支去验证 README 中对应描述是否准确，而是凭记忆或惯性将"未完成"统一理解为"时间戳全为 None"。正确做法是在修改文档后，针对文档中描述的每个场景，回到源代码中逐分支核对行为的一致性。

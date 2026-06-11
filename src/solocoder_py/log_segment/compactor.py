@@ -22,6 +22,7 @@ class CompactionResult:
 class LogCompactor:
     is_compacting: bool = False
     pending_writes: List[Tuple[int, LogEntry]] = field(default_factory=list)
+    pending_offset_map: Dict[int, int] = field(default_factory=dict)
 
     def compact_segments(
         self,
@@ -80,11 +81,11 @@ class LogCompactor:
                 new_seg = seg.compacted_copy(retained)
                 for idx, new_entry in enumerate(retained):
                     if idx < len(new_seg.entries):
-                        old_physical = new_seg.entries[idx].physical_offset
+                        new_physical = new_seg.entries[idx].physical_offset
                         logical_off = new_entry.logical_offset
-                        offset_mapper.segment_mappings[seg.segment_id].logical_to_physical[logical_off] = old_physical
-                        offset_mapper.global_mapping.logical_to_physical[logical_off] = old_physical
-                        offset_mapping_changes[logical_off] = old_physical
+                        offset_mapper.segment_mappings[seg.segment_id].logical_to_physical[logical_off] = new_physical
+                        offset_mapper.global_mapping.logical_to_physical[logical_off] = new_physical
+                        offset_mapping_changes[logical_off] = new_physical
                 new_entries_retained += len(retained)
                 total_space_saved += (original_size - new_seg.physical_size)
                 new_segments.append(new_seg)

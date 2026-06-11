@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import List, Optional
 
-from .exceptions import AllCombinatorError, AnyCombinatorError
+from .exceptions import AllCombinatorError, AnyCombinatorError, FutureAlreadyCompletedError
 from .future import Future
 from .models import FutureState
+
+logger = logging.getLogger(__name__)
 
 
 def all_combinator(futures: List[Future]) -> Future:
@@ -31,8 +34,10 @@ def all_combinator(futures: List[Future]) -> Future:
                     first_error = f.error
                 try:
                     result_future.set_error(AllCombinatorError(first_error))
-                except Exception:
+                except FutureAlreadyCompletedError:
                     pass
+                except Exception:
+                    logger.exception("Unexpected error in all_combinator on_complete")
                 return
 
             results[index] = f.result
@@ -41,8 +46,10 @@ def all_combinator(futures: List[Future]) -> Future:
             if completed_count == total:
                 try:
                     result_future.set_result(list(results))
-                except Exception:
+                except FutureAlreadyCompletedError:
                     pass
+                except Exception:
+                    logger.exception("Unexpected error in all_combinator on_complete")
 
     for i, f in enumerate(futures):
         f.add_callback(lambda fut, idx=i: on_complete(idx, fut))
@@ -72,8 +79,10 @@ def any_combinator(futures: List[Future]) -> Future:
             if f.state == FutureState.COMPLETED:
                 try:
                     result_future.set_result(f.result)
-                except Exception:
+                except FutureAlreadyCompletedError:
                     pass
+                except Exception:
+                    logger.exception("Unexpected error in any_combinator on_complete")
                 return
 
             errors[index] = f.error
@@ -82,8 +91,10 @@ def any_combinator(futures: List[Future]) -> Future:
             if failed_count == total:
                 try:
                     result_future.set_error(AnyCombinatorError(list(errors)))
-                except Exception:
+                except FutureAlreadyCompletedError:
                     pass
+                except Exception:
+                    logger.exception("Unexpected error in any_combinator on_complete")
 
     for i, f in enumerate(futures):
         f.add_callback(lambda fut, idx=i: on_complete(idx, fut))
@@ -96,22 +107,31 @@ def race_combinator(futures: List[Future]) -> Future:
         raise ValueError("race_combinator requires at least one Future")
 
     result_future: Future = Future()
-    settled = threading.Event()
+    settled_lock = threading.Lock()
+    settled_flag: bool = False
 
     def on_complete(f: Future) -> None:
-        if settled.is_set():
-            return
-        settled.set()
+        nonlocal settled_flag
+
+        with settled_lock:
+            if settled_flag:
+                return
+            settled_flag = True
+
         if f.state == FutureState.COMPLETED:
             try:
                 result_future.set_result(f.result)
-            except Exception:
+            except FutureAlreadyCompletedError:
                 pass
+            except Exception:
+                logger.exception("Unexpected error in race_combinator on_complete")
         else:
             try:
                 result_future.set_error(f.error)
-            except Exception:
+            except FutureAlreadyCompletedError:
                 pass
+            except Exception:
+                logger.exception("Unexpected error in race_combinator on_complete")
 
     for f in futures:
         f.add_callback(on_complete)

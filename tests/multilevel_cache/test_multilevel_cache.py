@@ -2,24 +2,25 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Dict
+from typing import Dict, Optional
 
 import pytest
 
 from solocoder_py.multilevel_cache import (
     DataSourceError,
     InvalidCapacityError,
+    LRUCache,
     MultiLevelCache,
 )
 
 
 class MockDataSource:
-    def __init__(self, data: Dict[str, str], should_fail: bool = False) -> None:
+    def __init__(self, data: Dict[str, Optional[str]], should_fail: bool = False) -> None:
         self.data = data
         self.should_fail = should_fail
         self.load_count = 0
 
-    def load(self, key: str) -> str:
+    def load(self, key: str) -> Optional[str]:
         self.load_count += 1
         if self.should_fail:
             raise RuntimeError("Data source failure")
@@ -31,7 +32,7 @@ class MockDataSource:
 class TestNormalFlow:
     def test_l1_hit_direct_return(self):
         data_source = MockDataSource({"a": "1", "b": "2"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.get("a")
         assert cache.has_in_l1("a") is True
@@ -57,7 +58,7 @@ class TestNormalFlow:
 
     def test_l2_hit_backfill_to_l1(self):
         data_source = MockDataSource({"a": "1", "b": "2", "c": "3"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.get("a")
         cache.get("b")
@@ -77,7 +78,7 @@ class TestNormalFlow:
 
     def test_both_miss_penetrate_and_backfill(self):
         data_source = MockDataSource({"x": "100"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         assert cache.has_in_l1("x") is False
         assert cache.has_in_l2("x") is False
@@ -95,7 +96,7 @@ class TestNormalFlow:
 
     def test_second_read_hits_l1(self):
         data_source = MockDataSource({"y": "200"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.get("y")
         data_source.load_count = 0
@@ -105,11 +106,44 @@ class TestNormalFlow:
         assert data_source.load_count == 0
         assert cache.stats.l1_hits >= 1
 
+    def test_none_value_cached_correctly_l1_hit(self):
+        data_source = MockDataSource({"none_key": None})
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
+
+        result = cache.get("none_key")
+        assert result is None
+        assert data_source.load_count == 1
+
+        data_source.load_count = 0
+        result = cache.get("none_key")
+        assert result is None
+        assert data_source.load_count == 0
+        assert cache.has_in_l1("none_key") is True
+        assert cache.has_in_l2("none_key") is True
+        assert cache.stats.l1_hits >= 1
+
+    def test_none_value_cached_correctly_l2_hit(self):
+        data_source = MockDataSource({"none_key": None})
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
+
+        cache.get("none_key")
+        cache._l1.clear()
+
+        assert cache.has_in_l1("none_key") is False
+        assert cache.has_in_l2("none_key") is True
+
+        data_source.load_count = 0
+        result = cache.get("none_key")
+        assert result is None
+        assert data_source.load_count == 0
+        assert cache.has_in_l1("none_key") is True
+        assert cache.stats.l2_hits >= 1
+
 
 class TestBoundaryConditions:
     def test_l1_full_triggers_eviction(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(5)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=10, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=10, data_source=data_source)
 
         cache.get("k0")
         cache.get("k1")
@@ -125,7 +159,7 @@ class TestBoundaryConditions:
 
     def test_l1_eviction_does_not_affect_l2(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(4)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=10, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=10, data_source=data_source)
 
         cache.get("k0")
         cache.get("k1")
@@ -138,7 +172,7 @@ class TestBoundaryConditions:
 
     def test_l2_full_triggers_eviction(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(6)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=3, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=3, data_source=data_source)
 
         cache.get("k0")
         cache.get("k1")
@@ -153,7 +187,7 @@ class TestBoundaryConditions:
 
     def test_l2_eviction_does_not_affect_l1(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(5)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=3, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=3, data_source=data_source)
 
         cache.get("k0")
         cache.get("k1")
@@ -167,15 +201,48 @@ class TestBoundaryConditions:
         assert cache.has_in_l1("k3") is True
         assert cache.has_in_l1("k4") is True
 
-    def test_write_invalidation_removes_from_both_levels(self):
+    def test_set_writes_value_to_both_levels(self):
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5)
+
+        cache.set("a", "new_value")
+
+        assert cache.has_in_l1("a") is True
+        assert cache.has_in_l2("a") is True
+
+        data_source = MockDataSource({"a": "old_from_source"})
+        cache2 = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
+
+        cache2.set("a", "direct_set_value")
+        data_source.load_count = 0
+
+        result = cache2.get("a")
+        assert result == "direct_set_value"
+        assert data_source.load_count == 0
+
+    def test_set_overwrites_existing_value(self):
+        data_source = MockDataSource({"x": "old"})
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
+
+        cache.get("x")
+        assert cache.get("x") == "old"
+
+        cache.set("x", "brand_new")
+        data_source.load_count = 0
+
+        result = cache.get("x")
+        assert result == "brand_new"
+        assert data_source.load_count == 0
+        assert cache.get("x") == "brand_new"
+
+    def test_invalidate_removes_from_both_levels(self):
         data_source = MockDataSource({"a": "1"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.get("a")
         assert cache.has_in_l1("a") is True
         assert cache.has_in_l2("a") is True
 
-        cache.set("a", "2")
+        cache.invalidate("a")
 
         assert cache.has_in_l1("a") is False
         assert cache.has_in_l2("a") is False
@@ -187,7 +254,7 @@ class TestBoundaryConditions:
 
     def test_update_then_read_returns_new_value(self):
         data_source = MockDataSource({"x": "old"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         assert cache.get("x") == "old"
 
@@ -199,7 +266,7 @@ class TestBoundaryConditions:
 
     def test_l1_evicted_then_backfilled_from_l2(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(3)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=10, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=10, data_source=data_source)
 
         cache.get("k0")
         cache.get("k1")
@@ -214,11 +281,28 @@ class TestBoundaryConditions:
         assert data_source.load_count == 0
         assert cache.has_in_l1("k0") is True
 
+    def test_set_with_none_value(self):
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5)
+
+        cache.set("nullable", None)
+
+        assert cache.has_in_l1("nullable") is True
+        assert cache.has_in_l2("nullable") is True
+
+        data_source = MockDataSource({"nullable": "should_not_use"})
+        cache2 = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache2.set("nullable", None)
+        data_source.load_count = 0
+
+        result = cache2.get("nullable")
+        assert result is None
+        assert data_source.load_count == 0
+
 
 class TestExceptionBranches:
     def test_data_source_failure_no_write_to_either_level(self):
         failing_source = MockDataSource({"a": "1"}, should_fail=True)
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=failing_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=failing_source)
 
         with pytest.raises(DataSourceError, match="Failed to load from data source"):
             cache.get("a")
@@ -230,7 +314,7 @@ class TestExceptionBranches:
 
     def test_data_source_failure_propagates_original_exception(self):
         failing_source = MockDataSource({}, should_fail=True)
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=failing_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=failing_source)
 
         with pytest.raises(DataSourceError) as exc_info:
             cache.get("missing")
@@ -238,14 +322,14 @@ class TestExceptionBranches:
         assert "Data source failure" in str(exc_info.value.__cause__)
 
     def test_no_data_source_configured_raises(self):
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5)
 
         with pytest.raises(DataSourceError, match="No data source configured"):
             cache.get("anything")
 
     def test_repeated_eviction_and_backfill_consistency(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(5)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         for round in range(3):
             for i in range(5):
@@ -260,7 +344,7 @@ class TestExceptionBranches:
 
     def test_key_not_found_in_data_source(self):
         data_source = MockDataSource({"a": "1"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         with pytest.raises(DataSourceError):
             cache.get("nonexistent")
@@ -272,7 +356,7 @@ class TestExceptionBranches:
 class TestIndependentEviction:
     def test_l1_and_l2_eviction_counts_are_independent(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(10)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         for i in range(10):
             cache.get(f"k{i}")
@@ -284,7 +368,7 @@ class TestIndependentEviction:
 
     def test_l1_eviction_preserves_l2_data(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(4)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=10, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=10, data_source=data_source)
 
         cache.get("k0")
         cache.get("k1")
@@ -299,7 +383,7 @@ class TestIndependentEviction:
 
     def test_l2_eviction_preserves_l1_data(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(6)})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=3, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=3, data_source=data_source)
 
         cache.get("k0")
         cache.get("k1")
@@ -319,7 +403,7 @@ class TestIndependentEviction:
 class TestInvalidateOperation:
     def test_invalidate_removes_from_both_levels(self):
         data_source = MockDataSource({"a": "1"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.get("a")
         cache.invalidate("a")
@@ -329,14 +413,14 @@ class TestInvalidateOperation:
 
     def test_invalidate_nonexistent_key_no_error(self):
         data_source = MockDataSource({"a": "1"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.invalidate("nonexistent")
         assert cache.delete("nonexistent") is False
 
     def test_delete_returns_true_if_existed_in_any_level(self):
         data_source = MockDataSource({"a": "1"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.get("a")
         assert cache.delete("a") is True
@@ -346,30 +430,32 @@ class TestInvalidateOperation:
 class TestConstructorValidation:
     def test_l1_capacity_must_be_positive(self):
         with pytest.raises(ValueError, match="l1_capacity must be positive"):
-            MultiLevelCache[str, str](l1_capacity=0, l2_capacity=5)
+            MultiLevelCache[str, Optional[str]](l1_capacity=0, l2_capacity=5)
 
     def test_l2_capacity_must_be_positive(self):
         with pytest.raises(ValueError, match="l2_capacity must be positive"):
-            MultiLevelCache[str, str](l1_capacity=2, l2_capacity=0)
+            MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=0)
 
     def test_l1_must_be_less_than_l2(self):
         with pytest.raises(ValueError, match="l1_capacity must be less than l2_capacity"):
-            MultiLevelCache[str, str](l1_capacity=5, l2_capacity=5)
+            MultiLevelCache[str, Optional[str]](l1_capacity=5, l2_capacity=5)
 
         with pytest.raises(ValueError, match="l1_capacity must be less than l2_capacity"):
-            MultiLevelCache[str, str](l1_capacity=5, l2_capacity=3)
+            MultiLevelCache[str, Optional[str]](l1_capacity=5, l2_capacity=3)
 
-    def test_lru_cache_invalid_capacity(self):
-        from solocoder_py.multilevel_cache import LRUCache
+    def test_lru_cache_negative_capacity_raises(self):
+        with pytest.raises(InvalidCapacityError, match="capacity must be positive"):
+            LRUCache[str, int](capacity=-1)
 
-        with pytest.raises(InvalidCapacityError, match="capacity must be non-negative"):
-            LRUCache(capacity=-1)
+    def test_lru_cache_zero_capacity_raises(self):
+        with pytest.raises(InvalidCapacityError, match="capacity must be positive"):
+            LRUCache[str, int](capacity=0)
 
 
 class TestClearOperation:
     def test_clear_resets_both_levels(self):
         data_source = MockDataSource({"a": "1", "b": "2"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.get("a")
         cache.get("b")
@@ -384,7 +470,7 @@ class TestClearOperation:
 
     def test_clear_resets_stats(self):
         data_source = MockDataSource({"a": "1"})
-        cache = MultiLevelCache[str, str](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
 
         cache.get("a")
         cache.get("a")
@@ -402,8 +488,6 @@ class TestClearOperation:
 
 class TestLRUCacheBasic:
     def test_lru_basic_operations(self):
-        from solocoder_py.multilevel_cache import LRUCache
-
         cache: LRUCache[str, int] = LRUCache(capacity=3)
         cache.set("a", 1)
         cache.set("b", 2)
@@ -414,8 +498,6 @@ class TestLRUCacheBasic:
         assert cache.get("c") == 3
 
     def test_lru_eviction_order(self):
-        from solocoder_py.multilevel_cache import LRUCache
-
         cache: LRUCache[str, int] = LRUCache(capacity=2)
         cache.set("a", 1)
         cache.set("b", 2)
@@ -423,12 +505,10 @@ class TestLRUCacheBasic:
         cache.set("c", 3)
 
         assert cache.get("a") == 1
-        assert cache.get("b") is None
+        assert cache.get_or_none("b") is None
         assert cache.get("c") == 3
 
     def test_lru_update_existing_key(self):
-        from solocoder_py.multilevel_cache import LRUCache
-
         cache: LRUCache[str, int] = LRUCache(capacity=2)
         cache.set("a", 1)
         cache.set("a", 2)
@@ -436,11 +516,68 @@ class TestLRUCacheBasic:
         assert cache.get("a") == 2
         assert cache.size == 1
 
+    def test_lru_none_value_stored_correctly(self):
+        cache: LRUCache[str, Optional[int]] = LRUCache(capacity=2)
+        cache.set("nullable", None)
+
+        assert cache.has("nullable") is True
+        value = cache.get("nullable")
+        assert value is None
+        assert cache.get_or_none("nullable") is None
+        assert cache.size == 1
+
+    def test_lru_missing_vs_none_distinction(self):
+        from solocoder_py.multilevel_cache.models import _MISSING
+
+        cache: LRUCache[str, Optional[int]] = LRUCache(capacity=2)
+        cache.set("has_none", None)
+
+        assert cache.get("has_none") is None
+        assert cache.get("missing") is _MISSING
+
+        assert cache.has("has_none") is True
+        assert cache.has("missing") is False
+
+
+class TestStatsAccumulation:
+    def test_stats_are_mutable_and_accumulate(self):
+        data_source = MockDataSource({"a": "1", "b": "2", "c": "3"})
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
+
+        cache.get("a")
+        cache.get("b")
+
+        stats1 = cache.stats
+        assert stats1.data_source_loads == 2
+
+        cache.get("a")
+        cache.get("b")
+
+        stats2 = cache.stats
+        assert stats2.l1_hits >= 2
+        assert stats2.data_source_loads == 2
+
+        cache.clear()
+        stats3 = cache.stats
+        assert stats3.l1_hits == 0
+        assert stats3.data_source_loads == 0
+
+    def test_stats_snapshot_is_immutable(self):
+        from dataclasses import FrozenInstanceError
+
+        data_source = MockDataSource({"a": "1"})
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=2, l2_capacity=5, data_source=data_source)
+        cache.get("a")
+
+        stats = cache.stats
+        with pytest.raises(FrozenInstanceError):
+            stats.l1_hits = 999
+
 
 class TestConcurrentAccess:
     def test_concurrent_reads_and_writes(self):
         data_source = MockDataSource({f"k{i}": f"v{i}" for i in range(20)})
-        cache = MultiLevelCache[str, str](l1_capacity=5, l2_capacity=15, data_source=data_source)
+        cache = MultiLevelCache[str, Optional[str]](l1_capacity=5, l2_capacity=15, data_source=data_source)
 
         errors = []
 

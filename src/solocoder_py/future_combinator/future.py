@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Callable, Optional
 
 from .exceptions import FutureAlreadyCompletedError, FutureNotReadyError
 from .models import FutureState
 
+logger = logging.getLogger(__name__)
 
 _Callback = Callable[["Future"], None]
 
@@ -59,8 +61,10 @@ class Future:
         for cb in callbacks:
             try:
                 cb(self)
-            except Exception:
+            except FutureAlreadyCompletedError:
                 pass
+            except Exception:
+                logger.exception("Unexpected error in Future callback during set_result")
 
     def set_error(self, error: Exception) -> None:
         with self._lock:
@@ -76,8 +80,10 @@ class Future:
         for cb in callbacks:
             try:
                 cb(self)
-            except Exception:
+            except FutureAlreadyCompletedError:
                 pass
+            except Exception:
+                logger.exception("Unexpected error in Future callback during set_error")
 
     def add_callback(self, callback: _Callback) -> None:
         with self._lock:
@@ -90,8 +96,10 @@ class Future:
         if fire_now:
             try:
                 callback(self)
-            except Exception:
+            except FutureAlreadyCompletedError:
                 pass
+            except Exception:
+                logger.exception("Unexpected error in Future callback during add_callback")
 
     def wait(self, timeout: Optional[float] = None) -> bool:
         return self._event.wait(timeout=timeout)

@@ -491,3 +491,184 @@ class TestExceptionsHierarchy:
         err = TaskNotFoundError("abc")
         assert isinstance(err, Exception)
         assert err.task_id == "abc"
+
+
+class TestSubmitMany:
+    def test_submit_many_basic(self, make_pool, manual_clock):
+        pool = make_pool(max_concurrency=2)
+        results = []
+
+        def make_task(name):
+            def task():
+                results.append(name)
+                return name
+            return task
+
+        tasks = [
+            (make_task("t1"), (), {}, Priority.HIGH),
+            (make_task("t2"), (), {}, Priority.MEDIUM),
+            (make_task("t3"), (), {}, Priority.LOW),
+        ]
+
+        ids = pool.submit_many(tasks)
+        assert len(ids) == 3
+
+        pool.run_until_complete()
+        assert len(results) == 3
+
+        for tid in ids:
+            result = pool.get_task_result(tid)
+            assert result.status == TaskStatus.SUCCESS
+
+    def test_submit_many_with_duration(self, make_pool, manual_clock):
+        pool = make_pool(max_concurrency=1)
+
+        def task():
+            return "done"
+
+        tasks = [
+            (task, (), {"duration": 10.0}, Priority.HIGH),
+            (task, (), {"duration": 5.0}, Priority.HIGH),
+        ]
+
+        ids = pool.submit_many(tasks)
+
+        pool.tick()
+        stats = pool.get_stats()
+        assert stats.current_concurrency == 1
+        assert stats.high_queue_size == 1
+
+        manual_clock.advance(10.0)
+        pool.tick()
+        stats = pool.get_stats()
+        assert stats.current_concurrency == 1
+        assert stats.total_completed == 1
+
+        manual_clock.advance(5.0)
+        pool.tick()
+        stats = pool.get_stats()
+        assert stats.current_concurrency == 0
+        assert stats.total_completed == 2
+
+    def test_submit_many_with_args_kwargs(self, make_pool):
+        pool = make_pool(max_concurrency=2)
+
+        def add(a, b, *, c=0):
+            return a + b + c
+
+        tasks = [
+            (add, (1, 2), {"c": 3}, Priority.HIGH),
+            (add, (10, 20), {}, Priority.MEDIUM),
+        ]
+
+        ids = pool.submit_many(tasks)
+        pool.run_until_complete()
+
+        r1 = pool.get_task_result(ids[0])
+        r2 = pool.get_task_result(ids[1])
+        assert r1.result == 6
+        assert r2.result == 30
+
+
+class TestTaskResultTimestamps:
+    def test_pending_task_has_none_timestamps(self, make_pool, manual_clock):
+        pool = make_pool(max_concurrency=1)
+
+        def task():
+            pass
+
+        tid = pool.submit(task, priority=Priority.HIGH, task_id="pending", duration=10.0)
+
+        result = pool.get_task_result(tid)
+        assert result.status == TaskStatus.PENDING
+        assert result.started_at is None
+        assert result.completed_at is None
+        assert isinstance(result.submitted_at, float)
+
+    def test_running_task_has_started_at_but_no_completed_at(self, make_pool, manual_clock):
+        pool = make_pool(max_concurrency=1)
+
+        def task():
+            pass
+
+        tid = pool.submit(task, priority=Priority.HIGH, task_id="running", duration=10.0)
+        pool.tick()
+
+        result = pool.get_task_result(tid)
+        assert result.status == TaskStatus.RUNNING
+        assert result.started_at is not None
+        assert isinstance(result.started_at, float)
+        assert result.completed_at is None
+
+    def test_completed_task_has_both_timestamps(self, make_pool, manual_clock):
+        pool = make_pool(max_concurrency=1)
+
+        def task():
+            return 42
+
+        tid = pool.submit(task, priority=Priority.HIGH, task_id="done", duration=5.0)
+        pool.tick()
+        manual_clock.advance(5.0)
+        pool.tick()
+
+        result = pool.get_task_result(tid)
+        assert result.status == TaskStatus.SUCCESS
+        assert result.started_at is not None
+        assert result.completed_at is not None
+        assert result.completed_at >= result.started_at
+
+
+class TestSystemClockIntegration:
+    def test_systemclock_run_until_complete(self):
+        pool = PriorityThreadPool(ThreadPoolConfig(max_concurrency=2))
+        completed = []
+
+        def make_task(name, duration):
+            def task():
+                completed.append(name)
+                return name
+            return task
+
+        for i in range(3):
+            pool.submit(make_task(f"t{i}", 0.01), task_id=f"t{i}", duration=0.01)
+
+        pool.run_until_complete()
+
+        assert len(completed) == 3
+        stats = pool.get_stats()
+        assert stats.total_completed == 3
+        assert stats.current_concurrency == 0
+
+    def test_systemclock_shutdown_wait(self):
+        pool = PriorityThreadPool(ThreadPoolConfig(max_concurrency=1))
+
+        def task():
+            return "done"
+
+        pool.submit(task, task_id="t1", duration=0.02)
+        pool.submit(task, task_id="t2", duration=0.02)
+
+        pool.shutdown(wait=True)
+
+        assert pool.state == ThreadPoolState.TERMINATED
+        stats = pool.get_stats()
+        assert stats.total_completed == 2
+
+    def test_systemclock_short_duration_tasks(self):
+        pool = PriorityThreadPool(ThreadPoolConfig(max_concurrency=3))
+        results = []
+
+        def task(n):
+            results.append(n)
+            return n * 2
+
+        for i in range(5):
+            pool.submit(task, i, task_id=f"t{i}", duration=0.005)
+
+        pool.run_until_complete()
+
+        assert len(results) == 5
+        for i in range(5):
+            r = pool.get_task_result(f"t{i}")
+            assert r.status == TaskStatus.SUCCESS
+            assert r.result == i * 2

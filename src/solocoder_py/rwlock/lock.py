@@ -13,9 +13,7 @@ from .scheduler import Scheduler, Parked
 
 
 class RWLock:
-    def __init__(self, scheduler: Optional[Scheduler] = None) -> None:
-        if scheduler is None:
-            raise ValueError("scheduler must be provided")
+    def __init__(self, scheduler: Scheduler) -> None:
         self._state: RWLockState = RWLockState()
         self._scheduler: Scheduler = scheduler
 
@@ -35,26 +33,27 @@ class RWLock:
                 "Cannot acquire read lock while holding write lock in the same thread"
             )
 
-        if self._state.is_free:
-            self._state.mode = LockMode.READ
-            self._state.readers[tid] = self._state.readers.get(tid, 0) + 1
-            return
+        while True:
+            if self._state.is_free:
+                self._state.mode = LockMode.READ
+                self._state.readers[tid] = self._state.readers.get(tid, 0) + 1
+                return
 
-        if self._state.is_read_locked and not self._state.has_waiting_writers:
-            self._state.readers[tid] = self._state.readers.get(tid, 0) + 1
-            return
+            if self._state.is_read_locked and not self._state.has_waiting_writers:
+                self._state.readers[tid] = self._state.readers.get(tid, 0) + 1
+                return
 
-        ticket = self._state.generate_ticket()
-        waiter = Waiter(thread_id=tid, waiter_type=WaiterType.READER, ticket=ticket)
-        self._state.waiting_readers.append(waiter)
+            ticket = self._state.generate_ticket()
+            waiter = Waiter(thread_id=tid, waiter_type=WaiterType.READER, ticket=ticket)
+            self._state.waiting_readers.append(waiter)
 
-        try:
-            self._scheduler.park(tid)
-        except Parked:
-            raise
-        except BaseException:
-            self._remove_waiter_from_queue(self._state.waiting_readers, ticket)
-            raise
+            try:
+                self._scheduler.park(tid)
+            except Parked:
+                raise
+            except Exception:
+                self._remove_waiter_from_queue(self._state.waiting_readers, ticket)
+                raise
 
     def acquire_write(self, thread_id: Optional[Any] = None) -> None:
         tid = thread_id if thread_id is not None else self._scheduler.current_thread_id()
@@ -68,23 +67,24 @@ class RWLock:
                 "Cannot acquire write lock while holding read lock in the same thread"
             )
 
-        if self._state.is_free:
-            self._state.mode = LockMode.WRITE
-            self._state.writer_thread_id = tid
-            self._state.write_lock_count = 1
-            return
+        while True:
+            if self._state.is_free:
+                self._state.mode = LockMode.WRITE
+                self._state.writer_thread_id = tid
+                self._state.write_lock_count = 1
+                return
 
-        ticket = self._state.generate_ticket()
-        waiter = Waiter(thread_id=tid, waiter_type=WaiterType.WRITER, ticket=ticket)
-        self._state.waiting_writers.append(waiter)
+            ticket = self._state.generate_ticket()
+            waiter = Waiter(thread_id=tid, waiter_type=WaiterType.WRITER, ticket=ticket)
+            self._state.waiting_writers.append(waiter)
 
-        try:
-            self._scheduler.park(tid)
-        except Parked:
-            raise
-        except BaseException:
-            self._remove_waiter_from_queue(self._state.waiting_writers, ticket)
-            raise
+            try:
+                self._scheduler.park(tid)
+            except Parked:
+                raise
+            except Exception:
+                self._remove_waiter_from_queue(self._state.waiting_writers, ticket)
+                raise
 
     def release(self, thread_id: Optional[Any] = None) -> None:
         tid = thread_id if thread_id is not None else self._scheduler.current_thread_id()
@@ -111,18 +111,10 @@ class RWLock:
     def _wake_waiters(self) -> None:
         if self._state.has_waiting_writers:
             first_writer = self._state.waiting_writers.popleft()
-            self._state.mode = LockMode.WRITE
-            self._state.writer_thread_id = first_writer.thread_id
-            self._state.write_lock_count = 1
             self._scheduler.unpark(first_writer.thread_id)
             return
 
         if self._state.has_waiting_readers:
-            self._state.mode = LockMode.READ
-            for waiter in list(self._state.waiting_readers):
-                self._state.readers[waiter.thread_id] = (
-                    self._state.readers.get(waiter.thread_id, 0) + 1
-                )
             reader_thread_ids = [w.thread_id for w in self._state.waiting_readers]
             self._state.waiting_readers.clear()
             self._scheduler.unpark_all(reader_thread_ids)

@@ -24,8 +24,6 @@ class LogSegment:
         if self.is_recycled:
             raise SegmentRecycledError(f"Segment {self.segment_id} has been recycled")
         entry.physical_offset = self.physical_size
-        if entry.logical_offset == 0 and len(self.entries) == 0:
-            entry.logical_offset = self.base_logical_offset
         entry.logical_offset = self.next_logical_offset
         self.entries.append(entry)
         self.physical_size += entry.size()

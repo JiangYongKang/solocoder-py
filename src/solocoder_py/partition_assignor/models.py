@@ -8,7 +8,6 @@ from typing import Optional
 class ConsumerStatus(str, Enum):
     ACTIVE = "active"
     LEAVING = "leaving"
-    ORPHANED = "orphaned"
 
 
 @dataclass(frozen=True)

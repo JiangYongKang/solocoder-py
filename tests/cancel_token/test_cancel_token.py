@@ -1,7 +1,6 @@
 import pytest
 
 from solocoder_py.cancel_token import CancelToken, CancelTokenInfo
-from solocoder_py.cancel_token.exceptions import CancelTokenError
 
 
 class TestCancelTokenCreation:
@@ -218,10 +217,73 @@ class TestCancelTokenInfo:
         assert child_info.parent_id == "parent"
 
 
-class TestCancelTokenError:
-    def test_cancel_token_error_is_exception(self):
-        assert issubclass(CancelTokenError, Exception)
+class TestConstructorParentRegistration:
+    def test_constructor_with_parent_registers_in_parent_children(self):
+        root = CancelToken(token_id="root")
+        child = CancelToken(token_id="child", parent=root)
+        assert root.children_count == 1
+        assert root.children[0] is child
+        assert child.parent is root
 
-    def test_raise_cancel_token_error(self):
-        with pytest.raises(CancelTokenError):
-            raise CancelTokenError("test error")
+    def test_constructor_with_parent_multiple_children(self):
+        root = CancelToken(token_id="root")
+        child1 = CancelToken(token_id="child1", parent=root)
+        child2 = CancelToken(token_id="child2", parent=root)
+        child3 = CancelToken(token_id="child3", parent=root)
+        assert root.children_count == 3
+        assert root.children == [child1, child2, child3]
+        for child in [child1, child2, child3]:
+            assert child.parent is root
+
+    def test_constructor_with_cancelled_parent_propagates_cancelled_state(self):
+        root = CancelToken(token_id="root")
+        root.cancel()
+        child = CancelToken(token_id="child", parent=root)
+        assert child.is_cancelled is True
+        assert child.is_active is False
+        assert root.children_count == 1
+        assert root.children[0] is child
+
+    def test_constructor_with_initially_cancelled_flag(self):
+        token = CancelToken(token_id="pre-cancelled", initially_cancelled=True)
+        assert token.is_cancelled is True
+        assert token.is_active is False
+
+    def test_constructor_with_parent_and_initially_cancelled_flag_both(self):
+        root = CancelToken(token_id="root")
+        child = CancelToken(token_id="child", parent=root, initially_cancelled=True)
+        assert child.is_cancelled is True
+        assert root.children_count == 1
+        assert root.children[0] is child
+
+    def test_constructor_creates_three_level_tree(self):
+        root = CancelToken(token_id="root")
+        level1 = CancelToken(token_id="l1", parent=root)
+        level2 = CancelToken(token_id="l2", parent=level1)
+        assert root.children_count == 1
+        assert level1.children_count == 1
+        assert root.children[0] is level1
+        assert level1.children[0] is level2
+        assert level2.parent is level1
+        assert level1.parent is root
+
+    def test_constructor_parent_registration_cancels_via_cascade(self):
+        root = CancelToken(token_id="root")
+        child1 = CancelToken(token_id="child1", parent=root)
+        child2 = CancelToken(token_id="child2", parent=root)
+        grandchild = CancelToken(token_id="grandchild", parent=child1)
+        root.cancel()
+        assert root.is_cancelled is True
+        assert child1.is_cancelled is True
+        assert child2.is_cancelled is True
+        assert grandchild.is_cancelled is True
+
+    def test_mixed_constructor_and_create_child(self):
+        root = CancelToken(token_id="root")
+        child_via_ctor = CancelToken(token_id="ctor-child", parent=root)
+        child_via_method = root.create_child(token_id="method-child")
+        assert root.children_count == 2
+        assert root.children[0] is child_via_ctor
+        assert root.children[1] is child_via_method
+        assert child_via_ctor.parent is root
+        assert child_via_method.parent is root

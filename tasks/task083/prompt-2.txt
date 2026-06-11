@@ -1,0 +1,6 @@
+你实现的倒计时栅栏模块存在一些缺陷，需要修复：
+1. countdown_latch.py 的 wait 方法中虽然通过 Clock 抽象接口支持了时间注入，但 `_event.wait(timeout=remaining)` 内部始终使用真实系统时钟来计算超时。用户在测试中推进 ManualClock 后仍需等待真实时间流逝才能观察到超时返回，Clock 注入只控制 deadline 计算而无法控制阻塞时长。需要让注入时钟真正决定等待的终止时机，例如使用 Condition 配合分步轮询或周期性唤醒。
+2. exceptions.py 中定义了 LatchTimeoutError 异常类并在 __init__.py 中导出，但 wait 方法在超时时返回布尔值 False 而非抛出此异常。这种定义与使用的不一致会让调用者困惑——看到导出的异常类却永远不会触发。需要统一超时的错误表示策略：要么删除未使用的异常类，要么改为在超时时抛出 LatchTimeoutError。
+3. wait 方法中先加锁检查 OPENED 状态再释放锁，随后再次加锁递增 _waiting_threads 计数器，两次加锁之间存在无锁窗口。若此时 count_down 刚好将计数归零，会导致 _waiting_threads 经历一次无意义的增删波动，get_stats 查询在瞬间可能观察到计数虚高。需要将状态快照与线程注册合并到一次临界区操作中。
+4. test_all_waiters_wake_up_simultaneously 用例断言 5 个等待线程的唤醒时间差小于 0.1 秒，这个断言依赖于操作系统线程调度的实时性，不是对代码功能正确性的验证，在 CI 环境或负载较高时可能产生不稳定的测试结果。需要修改该测试放宽时间阈值或改为仅验证所有等待者均已唤醒而非时间精度。
+5. 修复完成后重新运行 poetry run pytest tests/countdown_latch/ -q，确保所有测试通过。

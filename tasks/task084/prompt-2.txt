@@ -1,0 +1,5 @@
+你实现的 Future 组合器模块存在一些缺陷，需要修复：
+1. combinators.py 的 race_combinator 函数中，on_complete 回调使用 `settled.is_set()` 加 `settled.set()` 的检查-设置模式来判断是否已有 Future 完成，两个操作之间不是原子操作。当多个 Future 在不同线程中几乎同时完成时，线程调度而非真实完成时间可能决定最终胜出者，违反了"最先完成的 Future 作为结果"的需求语义。应使用 Lock 确保检查-设置的原子性。
+2. timeout.py 的 with_timeout 函数中，on_original_complete 和 on_timeout 两个回调同样使用了非原子的 `settled.is_set()` 后 `settled.set()` 模式。在超时时间点附近，如果原始 Future 也刚好完成，两个回调可能同时通过 is_set() 检查并都试图写入结果，行为完全不确定。应同样使用 Lock 确保结算的原子性。
+3. future.py 的 set_result、set_error、add_callback 三个方法以及 combinators.py 的 all、any、race 组合器中，多处使用 `except Exception: pass` 静默吞噬了所有异常。虽然设计意图是防止一个回调异常影响其他回调执行，但这会掩盖 TypeError、AttributeError 等编程错误。应仅捕获 FutureAlreadyCompletedError，对其他异常至少做日志记录。
+4. 修复完成后重新运行 poetry run pytest tests/future_combinator/ -q，确保所有测试通过。

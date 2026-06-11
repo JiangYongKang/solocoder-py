@@ -34,10 +34,6 @@ class SegmentedLog:
     next_logical_offset: int = 0
     active_segment_id: Optional[int] = None
 
-    def __post_init__(self) -> None:
-        if len(self.segments) == 0:
-            self._create_new_segment()
-
     def _create_new_segment(self) -> LogSegment:
         seg_id = self.next_segment_id
         self.next_segment_id += 1
@@ -67,20 +63,27 @@ class SegmentedLog:
             return self._create_new_segment()
         return seg
 
+    def _get_active_segment_for_flush(self, preferred_seg_id: int) -> Optional[LogSegment]:
+        if preferred_seg_id in self.segments:
+            seg = self.segments[preferred_seg_id]
+            if not seg.is_recycled and seg.count() < self.config.max_segment_entries:
+                return seg
+        return self._get_active_segment()
+
     def append(self, key: str, value: Any, tombstone: bool = False) -> int:
         if self.compactor.is_compacting:
+            placeholder_offset = self.next_logical_offset
+            self.next_logical_offset += 1
             entry = LogEntry(
                 key=key,
                 value=value,
-                logical_offset=0,
+                logical_offset=placeholder_offset,
                 physical_offset=0,
                 timestamp=time.time(),
                 tombstone=tombstone,
             )
             self.compactor.queue_write_during_compaction(self.active_segment_id or 0, entry)
-            logical_offset = self.next_logical_offset
-            self.next_logical_offset += 1
-            return logical_offset
+            return placeholder_offset
 
         segment = self._get_active_segment()
         entry = LogEntry(
@@ -99,23 +102,14 @@ class SegmentedLog:
         return logical_offset
 
     def read(self, logical_offset: int) -> Optional[LogEntry]:
+        resolved_offset = self.compactor.pending_offset_map.get(logical_offset, logical_offset)
         try:
-            segment_id, physical_offset = self.offset_mapper.resolve_logical(logical_offset)
+            segment_id, physical_offset = self.offset_mapper.resolve_logical(resolved_offset)
         except OffsetNotFoundError:
             return None
 
         if segment_id == -1:
-            for seg_id, seg in self.segments.items():
-                if seg.is_recycled:
-                    continue
-                if (
-                    seg.first_logical_offset() <= logical_offset
-                    <= seg.last_logical_offset()
-                ):
-                    segment_id = seg_id
-                    break
-            if segment_id == -1:
-                return None
+            return None
 
         if segment_id not in self.segments:
             return None
@@ -124,10 +118,9 @@ class SegmentedLog:
             return None
 
         try:
-            actual_physical = self.offset_mapper.get_physical(logical_offset, segment_id)
-            entry = segment.read_at(actual_physical)
+            entry = segment.read_at(physical_offset)
             return entry
-        except (OffsetNotFoundError, SegmentRecycledError):
+        except SegmentRecycledError:
             return None
 
     def compact(self) -> CompactionResult:
@@ -148,17 +141,17 @@ class SegmentedLog:
 
         pending = self.compactor.flush_pending_writes()
         for seg_id, entry in pending:
-            if seg_id in self.segments:
-                target_seg = self.segments[seg_id]
-                if not target_seg.is_recycled:
-                    entry.logical_offset = self.next_logical_offset
-                    self.next_logical_offset += 1
-                    logical = target_seg.append(entry)
-                    self.offset_mapper.add_entry(
-                        target_seg.segment_id,
-                        logical,
-                        entry.physical_offset,
-                    )
+            target_seg = self._get_active_segment_for_flush(seg_id)
+            if target_seg is not None and not target_seg.is_recycled:
+                original_offset = entry.logical_offset
+                logical = target_seg.append(entry)
+                self.offset_mapper.add_entry(
+                    target_seg.segment_id,
+                    logical,
+                    entry.physical_offset,
+                )
+                if original_offset != logical:
+                    self.compactor.pending_offset_map[original_offset] = logical
 
         return result
 

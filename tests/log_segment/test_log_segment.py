@@ -410,8 +410,10 @@ class TestSegmentedLogBoundary:
     def test_list_segment_ids(self, make_default_log):
         log = make_default_log()
         ids = log.list_segment_ids()
+        assert len(ids) == 0
+        log.append("k", "v")
+        ids = log.list_segment_ids()
         assert len(ids) >= 1
-        assert 0 in ids
 
 
 class TestSegmentedLogExceptions:

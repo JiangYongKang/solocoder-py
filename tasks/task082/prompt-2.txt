@@ -1,0 +1,5 @@
+你实现的公平读写锁模块存在一些缺陷，需要修复：
+1. _wake_waiters 方法在 release 释放锁后直接设置了锁模式、分配写者线程、设置 write_lock_count 并将 reader 预填，把锁状态的获取逻辑放在了 release 路径中。这导致 unpark 后重新调用 acquire_write 时会触发重入分支将写计数从 1 累加到 2，一次获取需要两次释放才能完全解锁。锁状态变更应该由 acquire 端负责，_wake_waiters 仅负责唤醒等待线程。
+2. acquire_read 和 acquire_write 方法使用了 except BaseException 捕获异常。BaseException 会覆盖 KeyboardInterrupt 和 SystemExit 等系统级信号，导致用户按 Ctrl+C 发出的中断信号被静默吞掉并触发等待队列误清理。应改用 except Exception，确保系统信号能正常向上传播。
+3. RWLock 构造函数签名声明 scheduler 为 Optional[Scheduler] = None，但函数体在 scheduler 为 None 时直接抛出 ValueError。类型注解暗示参数可选，运行时却要求必传，两者矛盾。应将 scheduler 改为必选参数，去掉 Optional 和 None 默认值。
+4. 修复完成后重新运行 poetry run pytest tests/rwlock/ -q，确保所有测试通过。

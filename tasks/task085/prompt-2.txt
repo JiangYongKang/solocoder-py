@@ -1,0 +1,6 @@
+你实现的工作窃取队列模块存在一些缺陷，需要修复：
+1. deque.py 的 __len__、size() 和 is_empty() 三个方法在读取队列状态时完全没有获取锁，直接访问内部 deque。Python 的 collections.deque 本身不是线程安全的，在多线程同时执行 push_bottom、pop_bottom 或 steal 时，并发调用这些查询方法可能导致读到中间态甚至内部数据不一致。需要为这三个查询方法添加锁保护。
+2. exceptions.py 中定义了 QueueEmptyError 异常类并在 __init__.py 中导出，但 deque.py 的 pop_bottom() 和 steal() 两个方法均未抛出该异常，而是统一返回 None 表示队列为空。定义与使用不一致会导致调用方对空队列的处理方式产生混淆。需要统一约定：要么全部抛出异常、要么全部返回 None 并移除未使用的异常类。
+3. worker_pool.py 的 _execute_task 方法中 try 块的 except Exception 静默捕获了 task_handler 抛出的所有异常，并在异常发生后仍然调用 task.mark_completed() 将任务标记为 COMPLETED 状态。这导致任务执行失败与执行成功在状态上无法区分。需要在 TaskStatus 中增加 FAILED 状态，并在异常分支中将任务标记为失败而非完成。
+4. worker_pool.py 的 submit 方法中，当未指定 worker_id 时使用 _submitted_count 进行轮询分配，但 _submitted_count 在指定 worker_id 的提交路径下也会递增。如果交替调用指定和不指定 worker_id 的 submit，轮询起点会被指定提交的计数偏移。需要分离"提交计数统计"和"轮询位置追踪"为两个独立变量。
+5. 修复完成后重新运行 poetry run pytest tests/work_stealing_queue/ -q，确保所有测试通过。

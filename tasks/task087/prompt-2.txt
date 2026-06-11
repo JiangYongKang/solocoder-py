@@ -1,0 +1,4 @@
+你实现的微批聚合刷新模块存在一些缺陷，需要修复：
+1. batcher.py 的 submit 和 submit_many 方法只在 current_size >= max_size 时才调用 flush_if_needed，完全忽略了时间触发条件。如果使用方创建缓冲器后不调用 start 启动调度线程，即使距离上次刷写已远超 max_interval 时钟触发也不会生效。应改为每次 submit 后无条件调用 flush_if_needed，因为该方法内部已同时校验数量和时间两个条件且空缓冲会快速返回。
+2. batcher.py 的 _scheduler_loop 方法中 except Exception: pass 静默吞掉了 flush_if_needed 抛出的所有异常。如果 Writer 的 write_batch 方法中有 AttributeError 或 TypeError 等编程错误，后台线程将其无声丢弃，缓冲区数据永远堆积不被刷写且无法排查。需要至少使用 logging.exception 记录异常日志，而不是彻底忽略。
+3. 修复完成后重新运行 poetry run pytest tests/microbatch/ -q，确保所有测试通过。

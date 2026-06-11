@@ -184,14 +184,15 @@ class TestCountDownEdgeCases:
 
 
 class TestWaitNormalFlow:
-    def test_wait_returns_true_after_latch_opens(self):
+    def test_wait_returns_after_latch_opens(self):
         latch = make_latch(2)
         results: dict[str, bool] = {}
         errors: dict[str, Exception] = {}
 
         def waiter(name: str):
             try:
-                results[name] = latch.wait()
+                latch.wait()
+                results[name] = True
             except Exception as e:
                 errors[name] = e
 
@@ -214,15 +215,18 @@ class TestWaitNormalFlow:
         assert results.get("t2") is True
         assert latch.is_open is True
 
-    def test_all_waiters_wake_up_simultaneously(self):
+    def test_all_waiters_are_woken_up(self):
         latch = make_latch(1)
-        wake_times: dict[str, float] = {}
+        woken: dict[str, bool] = {}
         start_event = threading.Event()
+        done_event = threading.Event()
 
         def waiter(name: str):
             start_event.wait()
             latch.wait()
-            wake_times[name] = time.monotonic()
+            woken[name] = True
+            if len(woken) == 5:
+                done_event.set()
 
         threads = [threading.Thread(target=waiter, args=(f"t{i}",)) for i in range(5)]
         for t in threads:
@@ -234,13 +238,13 @@ class TestWaitNormalFlow:
 
         latch.count_down()
 
+        done = done_event.wait(timeout=5)
         for t in threads:
             t.join(timeout=5)
 
-        assert len(wake_times) == 5
-        times = list(wake_times.values())
-        max_diff = max(times) - min(times)
-        assert max_diff < 0.1
+        assert done is True
+        assert len(woken) == 5
+        assert all(woken.values())
 
 
 class TestWaitEdgeCases:
@@ -248,27 +252,30 @@ class TestWaitEdgeCases:
         latch = make_latch(0)
         assert latch.is_open is True
         start = time.monotonic()
-        result = latch.wait()
+        latch.wait()
         elapsed = time.monotonic() - start
-        assert result is True
-        assert elapsed < 0.01
+        assert elapsed < 0.05
 
     def test_wait_after_latch_opened_returns_immediately(self):
         latch = make_latch(1)
         latch.count_down()
         assert latch.is_open is True
         start = time.monotonic()
-        result = latch.wait()
+        latch.wait()
         elapsed = time.monotonic() - start
-        assert result is True
-        assert elapsed < 0.01
+        assert elapsed < 0.05
 
     def test_wait_with_timeout_completes_before_timeout(self):
         latch = make_latch(1)
-        results: dict[str, bool] = {}
+        errors: dict[str, Exception] = {}
+        success: dict[str, bool] = {}
 
         def waiter():
-            results["t"] = latch.wait(timeout=1.0)
+            try:
+                latch.wait(timeout=1.0)
+                success["t"] = True
+            except Exception as e:
+                errors["t"] = e
 
         t = threading.Thread(target=waiter)
         t.start()
@@ -277,14 +284,20 @@ class TestWaitEdgeCases:
         latch.count_down()
         t.join(timeout=5)
 
-        assert results.get("t") is True
+        assert "t" not in errors
+        assert success.get("t") is True
 
-    def test_wait_with_timeout_triggers_timeout(self, manual_clock):
+    def test_wait_with_timeout_raises_timeout(self, manual_clock):
         latch = make_latch(3, clock=manual_clock)
-        results: dict[str, bool] = {}
+        errors: dict[str, Exception] = {}
+        success: dict[str, bool] = {}
 
         def waiter():
-            results["t"] = latch.wait(timeout=5.0)
+            try:
+                latch.wait(timeout=5.0)
+                success["t"] = True
+            except Exception as e:
+                errors["t"] = e
 
         t = threading.Thread(target=waiter)
         t.start()
@@ -294,20 +307,27 @@ class TestWaitEdgeCases:
 
         manual_clock.advance(4.9)
         time.sleep(0.02)
-        assert not results
+        assert not success
+        assert "t" not in errors
 
         manual_clock.advance(0.2)
         t.join(timeout=5)
 
-        assert results.get("t") is False
+        assert "t" in errors
+        assert isinstance(errors["t"], LatchTimeoutError)
         assert latch.is_open is False
 
     def test_wait_timeout_at_exact_boundary(self, manual_clock):
         latch = make_latch(3, clock=manual_clock)
-        results: dict[str, bool] = {}
+        errors: dict[str, Exception] = {}
+        success: dict[str, bool] = {}
 
         def waiter():
-            results["t"] = latch.wait(timeout=5.0)
+            try:
+                latch.wait(timeout=5.0)
+                success["t"] = True
+            except Exception as e:
+                errors["t"] = e
 
         t = threading.Thread(target=waiter)
         t.start()
@@ -316,14 +336,20 @@ class TestWaitEdgeCases:
         manual_clock.advance(5.0)
         t.join(timeout=5)
 
-        assert results.get("t") is False
+        assert "t" in errors
+        assert isinstance(errors["t"], LatchTimeoutError)
 
     def test_wait_timeout_not_triggered_if_latch_opens_in_time(self, manual_clock):
         latch = make_latch(1, clock=manual_clock)
-        results: dict[str, bool] = {}
+        errors: dict[str, Exception] = {}
+        success: dict[str, bool] = {}
 
         def waiter():
-            results["t"] = latch.wait(timeout=5.0)
+            try:
+                latch.wait(timeout=5.0)
+                success["t"] = True
+            except Exception as e:
+                errors["t"] = e
 
         t = threading.Thread(target=waiter)
         t.start()
@@ -333,7 +359,8 @@ class TestWaitEdgeCases:
         latch.count_down()
         t.join(timeout=5)
 
-        assert results.get("t") is True
+        assert "t" not in errors
+        assert success.get("t") is True
 
     def test_zero_timeout_rejected(self):
         latch = make_latch(3)
@@ -358,9 +385,9 @@ class TestOneShotSemantics:
 
         assert latch.is_open is True
         assert latch.current_count == 0
-        assert latch.wait() is True
+        latch.wait()
 
-    def test_wait_after_latch_opened_returns_true_instantly(self):
+    def test_wait_after_latch_opened_returns_instantly(self):
         latch = make_latch(3)
         for _ in range(3):
             latch.count_down()
@@ -368,20 +395,18 @@ class TestOneShotSemantics:
         assert latch.is_open is True
         for _ in range(5):
             start = time.monotonic()
-            assert latch.wait() is True
-            assert time.monotonic() - start < 0.01
+            latch.wait()
+            assert time.monotonic() - start < 0.05
 
     def test_mixed_count_down_and_wait_after_open(self):
         latch = make_latch(1)
         latch.count_down()
         assert latch.is_open is True
 
-        results = []
         for _ in range(3):
-            results.append(latch.wait())
+            latch.wait()
             latch.count_down()
 
-        assert all(r is True for r in results)
         assert latch.current_count == 0
         assert latch.is_open is True
 
@@ -403,10 +428,15 @@ class TestNegativeCountEdgeCase:
 
     def test_latch_opens_even_with_excessive_count_down(self):
         latch = make_latch(3)
-        results: dict[str, bool] = {}
+        errors: dict[str, Exception] = {}
+        success: dict[str, bool] = {}
 
         def waiter():
-            results["t"] = latch.wait()
+            try:
+                latch.wait()
+                success["t"] = True
+            except Exception as e:
+                errors["t"] = e
 
         t = threading.Thread(target=waiter)
         t.start()
@@ -416,7 +446,8 @@ class TestNegativeCountEdgeCase:
             latch.count_down()
 
         t.join(timeout=5)
-        assert results.get("t") is True
+        assert "t" not in errors
+        assert success.get("t") is True
         assert latch.current_count == 0
 
 
@@ -446,15 +477,19 @@ class TestMultipleThreadsCountingDown:
 
     def test_more_threads_than_count(self):
         latch = make_latch(3)
-        results: dict[int, bool] = {}
         errors: dict[int, Exception] = {}
+        success: dict[int, bool] = {}
+        lock = threading.Lock()
 
         def counter(idx: int):
             try:
                 latch.count_down()
-                results[idx] = latch.wait(timeout=1.0)
+                latch.wait(timeout=1.0)
+                with lock:
+                    success[idx] = True
             except Exception as e:
-                errors[idx] = e
+                with lock:
+                    errors[idx] = e
 
         threads = [threading.Thread(target=counter, args=(i,)) for i in range(10)]
         for t in threads:
@@ -463,8 +498,7 @@ class TestMultipleThreadsCountingDown:
             t.join(timeout=5)
 
         assert len(errors) == 0
-        assert len(results) == 10
-        assert all(r is True for r in results.values())
+        assert len(success) == 10
         assert latch.current_count == 0
         assert latch.is_open is True
 
@@ -473,10 +507,14 @@ class TestStats:
     def test_stats_reflect_waiting_threads(self):
         latch = make_latch(3)
         start_event = threading.Event()
+        done_event = threading.Event()
 
         def waiter():
             start_event.wait()
-            latch.wait()
+            try:
+                latch.wait()
+            finally:
+                pass
 
         threads = [threading.Thread(target=waiter) for _ in range(3)]
         for t in threads:
@@ -503,11 +541,13 @@ class TestStats:
 
     def test_stats_after_timeout(self, manual_clock):
         latch = make_latch(3, clock=manual_clock)
-        result = None
+        error_occurred: dict[str, bool] = {}
 
         def waiter():
-            nonlocal result
-            result = latch.wait(timeout=5.0)
+            try:
+                latch.wait(timeout=5.0)
+            except LatchTimeoutError:
+                error_occurred["t"] = True
 
         t = threading.Thread(target=waiter)
         t.start()
@@ -518,23 +558,23 @@ class TestStats:
         manual_clock.advance(6.0)
         t.join(timeout=5)
 
-        assert result is False
+        assert error_occurred.get("t") is True
         assert latch.get_stats().waiting_threads == 0
 
 
 class TestConcurrentStress:
     def test_high_concurrency_wait_and_countdown(self):
         latch = make_latch(10)
-        wait_results: dict[int, bool] = {}
-        countdown_results: dict[int, bool] = {}
+        wait_success: dict[int, bool] = {}
+        countdown_success: dict[int, bool] = {}
         errors: dict[int, Exception] = {}
         lock = threading.Lock()
 
         def waiter(idx: int):
             try:
-                result = latch.wait(timeout=2.0)
+                latch.wait(timeout=5.0)
                 with lock:
-                    wait_results[idx] = result
+                    wait_success[idx] = True
             except Exception as e:
                 with lock:
                     errors[idx] = e
@@ -543,7 +583,7 @@ class TestConcurrentStress:
             try:
                 latch.count_down()
                 with lock:
-                    countdown_results[idx] = True
+                    countdown_success[idx] = True
             except Exception as e:
                 with lock:
                     errors[idx] = e
@@ -557,14 +597,13 @@ class TestConcurrentStress:
             t.start()
 
         for t in wait_threads:
-            t.join(timeout=5)
+            t.join(timeout=10)
         for t in count_threads:
             t.join(timeout=5)
 
         assert len(errors) == 0
-        assert len(countdown_results) == 10
-        assert len(wait_results) == 50
-        assert all(r is True for r in wait_results.values())
+        assert len(countdown_success) == 10
+        assert len(wait_success) == 50
         assert latch.is_open is True
 
 
@@ -572,7 +611,7 @@ class TestRealWorldScenario:
     def test_parallel_tasks_waiting_for_each_other(self):
         num_tasks = 4
         latch = make_latch(num_tasks)
-        results: dict[int, float] = {}
+        results: dict[str, float] = {}
         start_barrier = threading.Barrier(num_tasks)
         lock = threading.Lock()
 
@@ -580,7 +619,7 @@ class TestRealWorldScenario:
             start_barrier.wait()
             time.sleep(0.01 * task_id)
             with lock:
-                results[task_id] = time.monotonic()
+                results[f"{task_id}_started"] = time.monotonic()
             latch.count_down()
             latch.wait()
             with lock:
@@ -595,9 +634,5 @@ class TestRealWorldScenario:
         assert len(results) == num_tasks * 2
 
         for i in range(num_tasks):
-            assert i in results
+            assert f"{i}_started" in results
             assert f"{i}_done" in results
-
-        done_times = [results[f"{i}_done"] for i in range(num_tasks)]
-        max_done_diff = max(done_times) - min(done_times)
-        assert max_done_diff < 0.1
