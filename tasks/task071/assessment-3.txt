@@ -1,5 +1,5 @@
 产物不满意：
-1. evaluator.py 的 `_factor` 方法中新增的空括号检查实现正确，在消费 LPAREN 之后调用 `_expression` 之前插入对 RPAREN 的检测，抛出 `ParseError("Empty parentheses at position ...")` 使得 `()` 不再被误报为 `MismatchedParenthesisError`。test_evaluator.py 中 `test_empty_parentheses` 也同步更新为 `pytest.raises(ParseError, match="Empty parentheses")`，异常消息已可被调用方精确匹配区分。本次修复范围小且针对性强，代码变更无缺陷。
+1. evaluator.py 的 _factor 方法新增空括号检查，在消费 LPAREN 后调用 _expression 前插入对 RPAREN 的检测，抛出 ParseError 使 () 不再被误报为 MismatchedParenthesisError。test_evaluator.py 中 test_empty_parentheses 同步更新匹配 Empty parentheses 消息，调用方可精确区分。修复范围小且针对性强，代码变更无缺陷。
 
 过程不满意：
 1. 模型在收到提示词后第一步就调用了 `todo_write` 创建了 3 项子任务计划，然后才开始读取 evaluator.py 的代码，这属于先规划后分析的流程倒置。正确做法是先阅读 `_factor` 方法中当前的 RPAREN 处理逻辑，分析空括号的解析流程，确认问题根因后再制定执行计划。

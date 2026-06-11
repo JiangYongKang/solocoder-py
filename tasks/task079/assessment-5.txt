@@ -1,7 +1,7 @@
 产物不满意：
-1. 本轮两个核心修复——补充类型注解和统一生成器行为——均正确完成。`_iter_running_segments` 方法补充了 `-> Iterator[Tuple[datetime, Optional[datetime]]]` 的返回类型注解，明确表达了产出 `(segment_start, segment_end)` 元组的语义。生成器尾部逻辑从仅处理 `end_time is not None` 的闭合段调整为对称处理两种模式：`end_time is not None` 时产出 `(current_time, end_time)`，`end_time is None` 时产出 `(current_time, None)` 表示开放结尾。`_calculate_actual_deadline` 中增加了对 `segment_end is None` 的前置判断，直接从 `segment_start` 加剩余时长返回，末尾的 `raise SlaTimerStateError` 退化为纯粹的防御性兜底，不再承担计算职责。全部 81 个测试通过，无回归问题。
-2. 生成器行为统一后，`_calculate_actual_deadline` 中的旧 fallback 被正确移除，但该 fallback 所调用的 `_get_last_resume_time` 和 `_get_effective_start_time` 两个方法并未同步清理。这两个方法在当前代码中已无任何调用方——`_get_effective_start_time` 只在已删除的旧 fallback 中被调用，`_get_last_resume_time` 也仅被 `_get_effective_start_time` 内部使用——形成了死代码残留。虽然不影响功能正确性，但维护者在后续阅读代码时会被这两个无调用入口的方法误导，需要额外排查其用途。正确做法是在移除调用方的同时将死代码一并删除，保持代码库整洁。
+1. 本轮两个核心修复——补充类型注解和统一生成器行为——均正确完成。_iter_running_segments 补充了 -> Iterator[Tuple[datetime, Optional[datetime]]] 的返回类型注解。生成器尾部逻辑调整为对称处理两种模式，_calculate_actual_deadline 增加了对 segment_end is None 的前置判断，末尾 raise SlaTimerStateError 退化为纯粹防御性兜底。全部 81 个测试通过。
+2. 生成器行为统一后，_calculate_actual_deadline 中的旧 fallback 被正确移除，但该 fallback 所调用的 _get_last_resume_time 和 _get_effective_start_time 两个方法未同步清理。这两个方法在当前代码中已无任何调用方，形成了死代码残留。虽不影响功能但维护者会被这两个无调用入口的方法误导。正确做法是在移除调用方的同时将死代码一并删除，保持代码库整洁。
 
 过程不满意：
-1. 本轮过程整体高效，模型在收到提示词后先读取 sla_timer.py 确认当前代码状态，然后通过两次定向编辑完成修复：第一次修改导入语句和生成器方法签名，第二次重构尾部逻辑和 `_calculate_actual_deadline` 的调用侧。模型对问题的理解准确——类型注解部分选择了 `Iterator[Tuple[datetime, Optional[datetime]]]` 而非更冗长的 `Generator` 类型，生成器尾部用 if-else 双分支替代单条件判断，设计选择合理。整个过程没有试错式反复、没有重复阅读同一段代码、没有虚假声称完成，约 7 次工具调用的执行路径清晰紧凑。
+1. 本轮过程整体高效，模型先读取 sla_timer.py 确认当前状态，然后通过两次定向编辑完成修复。类型注解选择了 Iterator[Tuple[datetime, Optional[datetime]]] 而非更冗长的 Generator 类型，生成器尾部用 if-else 双分支替代单条件判断，设计合理。整个过程无试错式反复、无重复阅读同一段代码、无虚假声称完成，约 7 次工具调用执行路径清晰紧凑。
 2. 模型在编辑完成后未对 sla_timer.py 做全文回顾检查以确认是否遗留了死代码。`_get_effective_start_time` 和 `_get_last_resume_time` 两个方法的无引用状态是一个典型的"移除调用方后忘记清理被调用方"问题，如果模型在执行最后一步的测试验证前对修改区域做一次文本搜索——比如搜索这两个方法名在文件内的出现位置——就能当场发现死代码并顺手清理。正确做法是在完成功能修改后做一次受影响的符号引用检查，确认没有遗留孤立的方法或变量。

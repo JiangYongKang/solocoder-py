@@ -1,11 +1,11 @@
 产物不满意：
-1. README.md 的"自定义工作时段"示例代码无法运行，两个"单段工作制"示例分别使用 WorkTimeRange(time(9,0), time(9,0)) 和 WorkTimeRange(time(0,0), time(0,0)) 作为下午时段，但 models.py 中 WorkTimeRange.__post_init__ 要求 start < end，start == end 时会抛出 InvalidWorkHoursError。读者按文档复制示例代码将直接报错。根因是写 README 时未实际验证示例代码的正确性，应使用相邻的两个非零时段（如 9:00-13:00 和 13:00-18:00）来正确展示单段工作制的配置方式。
-2. WorkDaySchedule 的 is_work_time 方法基于 WorkTimeRange.contains 判边界，contains 用 start <= t <= end 将时段两端都包含在内，导致将 time(12,0) 判定为在上午工作时段内。但 add_work_hours 方法内部用 current_dt >= period_end_dt 跳过时段终点，将同一时刻 datetime(12:00) 判定为不在上午时段内。同一时刻在两个方法中得出矛盾的判定结果，is_work_time 与工作时长累加行为的边界语义不一致。根因是 contains 和 add_work_hours 分别用了不同的比较运算符（<= 与 >=），应统一边界判定逻辑使两个方法对时段终点的行为一致。
-3. work_calendar.py 的 _next_workday_start 方法中，寻找下一个工作日的 while 循环没有任何最大迭代次数保护。当所有日期都被配置为节假日且无调休日时（提示词要求覆盖"全部日期均为节假日"的边界场景），while not self.is_workday(next_date) 会永远执行下去，调用线程将陷入死循环。根因是未对极端配置做防御性编程，应添加上限迭代次数或检测日期溢出后抛出 NoWorkDayFoundError 异常。
-4. conftest.py 中定义了 make_calendar_with_holidays、make_calendar_with_workdays、make_calendar_with_custom_schedule、make_spring_festival_calendar 等 5 个辅助函数，但在 test_work_calendar.py 中全部未被引用。测试文件自己定义了两套 fixture（make_default_calendar 和 make_spring_festival_calendar），与 conftest.py 形成了重复的工厂函数集。conftest.py 中的辅助函数属于死代码，增加了文件维护负担且容易让后续开发者困惑应该使用哪个工厂。根因是没有在设计测试架构时统一工厂函数的存放位置。
+1. README.md 的"自定义工作时段"示例代码无法运行，两个"单段工作制"示例分别使用 WorkTimeRange(time(9,0), time(9,0)) 作为下午时段，但 models.py 要求 start < end，start == end 时抛 InvalidWorkHoursError。读者按文档复制示例将直接报错。根因是写 README 时未实际验证示例代码的正确性，应使用相邻的两个非零时段（如 9:00-13:00 和 13:00-18:00）展示单段工作制配置。
+2. WorkDaySchedule 的 is_work_time 方法基于 contains 判边界，用 start <= t <= end 将时段两端都包含在内，导致 time(12,0) 判定为在上午工作时段内。但 add_work_hours 方法内部用 current_dt >= period_end_dt 跳过时段终点，同一时刻在两个方法中得出矛盾的判定结果。根因是 contains 和 add_work_hours 分别用了不同的比较运算符（<= 与 >=），应统一边界判定逻辑使两个方法对时段终点的行为一致。
+3. work_calendar.py 的 _next_workday_start 方法中，寻找下一个工作日的 while 循环没有任何最大迭代次数保护。当所有日期都被配置为节假日且无调休日时（提示词要求覆盖"全部日期均为节假日"的边界场景），while not self.is_workday(next_date) 会永远执行，调用线程陷入死循环。根因是未对极端配置做防御性编程，应添加上限迭代次数或检测日期溢出后抛出 NoWorkDayFoundError 异常。
+4. conftest.py 中定义了 5 个辅助函数，但在 test_work_calendar.py 中全部未被引用。测试文件自己定义了两套 fixture，与 conftest.py 形成了重复的工厂函数集。conftest.py 中的辅助函数属于死代码，增加维护负担且让开发者困惑应使用哪个工厂。根因是未在设计测试架构时统一工厂函数存放位置。
 5. test_workday_priority_over_holiday 测试的命名暗示它验证"调休日优先于节假日"的优先级逻辑，但实际代码只创建了 workdays={2024-01-15} 的日历配置，而 2024-01-15 本身是周一（默认工作日），测试注定通过且无法证明调休日优于节假日的优先级关系。这是一个假阳性测试，覆盖的是工作日在周中保持为工作日的平凡场景而非测试名称宣称的优先级语义。根因是测试设计时未构造需要优先级裁决的对立配置（如同时配置 workdays 和 holidays），应构造一个调休日与节假日冲突的合法配置来真正验证优先级。
 
 过程不满意：
-1. 模型在未充分分析需求前就使用 todo_write 创建了 8 项子任务计划，而计划创建前仅查看了项目目录结构和 seat 模块的样板代码，尚未阅读需求文档的全部细节，也未设计模块的数据模型和核心算法。导致后续实现中在 work_calendar.py 和 models.py 之间职责划分不够清晰（如判定逻辑零散分布在多个方法中，缺少统一的工作日判定入口）。正确做法是先完整分析需求文档，梳理工作日判定、顺延、累加、换算的算法细节和数据流，再制定执行计划。
-2. 模型写完源码后立即编写了 README.md，然后再编写测试文件。这种先写文档再写测试的顺序是倒置的，导致 README 中出现了实际无法运行的"单段工作制"示例代码——如果先写完测试并运行验证，就会在测试覆盖自定义工作时段场景时发现 WorkTimeRange(start==end) 会抛异常，进而在写 README 前修正示例。正确顺序是源码、测试、测试通过、文档。
-3. 模型在发现 4 个测试失败后未阅读失败用例的堆栈和具体断言信息，直接在思考过程中下结论"这些是测试预期值写错了，代码逻辑是正确的"，随后使用 edit_file_search_replace 修改了 4 个测试用例的期望值。这是典型的试错式调试——假定代码无错、测试有错，以修改测试向代码妥协，而不是先分析失败信息判断到底是代码 BUG 还是测试期望有误。正确做法是先查看每个失败用例的 actual vs expected 差异，人工验证代码计算逻辑，确认代码正确后再改测试，或反过来确认测试正确后再修代码。
+1. 模型在未充分分析需求前就创建 8 项子任务计划，计划创建前仅查看了项目目录结构和 seat 模块样板代码，尚未阅读需求文档全部细节，也未设计数据模型和核心算法。导致后续实现中 work_calendar.py 和 models.py 之间职责划分不够清晰。正确做法是先完整分析需求文档，梳理工作日判定、顺延、累加、换算的算法细节和数据流，再制定执行计划。
+2. 模型写完源码后立即编写 README.md，然后再写测试文件。这种先写文档再写测试的顺序是倒置的，导致 README 中出现实际无法运行的"单段工作制"示例代码——如果先写完测试并运行验证，就会在覆盖自定义工作时段场景时发现 WorkTimeRange(start==end) 抛异常，进而在写 README 前修正示例。正确顺序是源码、测试、测试通过、文档。
+3. 模型在发现 4 个测试失败后未阅读失败用例的堆栈和具体断言信息，直接在思考中下结论"测试预期值写错了，代码逻辑正确"，随后修改了 4 个测试用例的期望值。这是典型的试错式调试——假定代码无错、测试有错，以修改测试向代码妥协，而不是先判断到底是代码 BUG 还是测试期望有误。正确做法是先查看每个失败用例的 actual vs expected 差异，人工验证代码计算逻辑后再决定修哪一方。

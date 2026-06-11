@@ -1,5 +1,5 @@
 产物不满意：
-1. 提示词要求的是"追加行号验证"，即在原有测试基础上补充 line_number 断言，但模型将 test_embedded_newline_with_crlf 整个测试方法重写了一遍。fixture 从 parser_no_header 换成了 parser，测试数据从无表头的 `'"a\r\nb",c'` 替换为带表头的 `'name,desc\n"Alice","line1\r\nline2"\n"Bob","simple"'`。重写后的测试与第 160 行已存在的 test_embedded_crlf_in_quoted_field_line_number 测试数据、断言完全一致，形成了一个冗余副本。同时原来无表头场景下引号内嵌 `\r\n` 的测试覆盖在该方法中丢失，该特定组合在 TestEmbeddedNewlines 类中无其他测试覆盖。根因是模型将"追加"理解为可以自由重写，正确做法是保持原有 fixture 和测试数据不变，仅在 `assert result.data == [["a\r\nb", "c"]]` 之后追加一句 `assert result.rows[0].line_number == 1` 即可。
+1. 提示词要求"追加行号验证"即在原有测试基础上补充 line_number 断言，但模型将 test_embedded_newline_with_crlf 整个重写。fixture 被换，测试数据被替换，重写后与已有测试完全一致成为冗余副本，同时无表头场景下引号内嵌 \r\n 的测试覆盖丢失。根因是将"追加"理解为可以自由重写，正确做法是保持原有 fixture 和数据不变，仅在断言末尾追加一行行号断言。
 
 过程不满意：
 1. 模型收到提示词后没有先做分析就直接读取 test_parser.py 并一次性重写了目标测试。整个过程中没有创建 TodoList，也没有仔细理解提示词中"追加行号验证"这一核心要求。从思考过程可见模型在第 14 行自行决定"让它使用 has_header=True"，这是一个提示词从未提及的自发设计决策。这导致它用一个需要修改 fixture、替换测试数据、重写所有断言的完全重写方案，替代了只需在原有测试末尾追加一行断言的简单修改。正确做法是先确认提示词要求的修改范围仅限于"追加"，再审视当前测试已有哪些断言，最后只补充缺失的 line_number 校验，保持其余代码完全不动。

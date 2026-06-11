@@ -1,5 +1,5 @@
 产物不满意：
-1. create_child_context 方法在第 167 行将已过期父上下文和已取消父上下文统一为抛出 ContextAlreadyCancelledError，但该异常类型的英文语义仅指向"已取消"一种终态。当父上下文因超时过期而非取消到达终态时，调用方捕获到 ContextAlreadyCancelledError 会产生误导——异常名暗示"被取消了"，实际却是"过期了"。虽然错误消息补偿性地给出了 `terminal state (cancelled or expired)` 但异常类型名才是 except 分支判断的第一依据。更合理的做法是使用 ContextTerminatedError 之类能同时涵盖取消和过期两种终态的通用名称，使异常类型与业务语义保持一致。
+1. create_child_context 方法在第 167 行将已过期父上下文和已取消父上下文统一抛 ContextAlreadyCancelledError，但该异常类型的英文语义仅指向"已取消"。当父上下文因超时过期而非取消到达终态时，调用方捕获到该异常会误导——异常名暗示"被取消"实际却是"过期"。虽然错误消息有补偿性说明但异常类型名才是 except 判断的第一依据。更合理的做法是使用 ContextTerminatedError 之类能同时涵盖两种终态的通用名称，使异常类型与业务语义保持一致。
 2. 修复完成后 ContextCancelledError 在 exceptions.py 中仍有定义、在 __init__.py 中仍有导出、在 timeout_manager.py 和测试文件中都有 import，但没有任何地方实际抛出或捕获它。模型替换了所有原本抛出 ContextCancelledError 的位置，却没有清理残留的导入和导出声明，导致模块公开 API 中悬挂着一个永不生效的僵尸异常类型。如果调用方按 __init__.py 的导出去使用 ContextCancelledError，会发现永远捕获不到这个异常，造成调试困惑。
 过程不满意：
 1. 模型在收到提示词后第一项操作就是 todo_write 创建了 7 项子任务计划，此时尚未阅读任何源文件。这违反了标注规范中"不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划"的要求。7 项 todo 虽然最终与执行路径吻合，但这种先规划后分析的顺序存在理解偏差的风险。
