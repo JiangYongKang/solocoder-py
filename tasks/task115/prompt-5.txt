@@ -1,0 +1,5 @@
+你实现的 auditlog 模块验证逻辑中 verify_chain 和 verify_entry 对锚定检测执行状态的处理不一致，需要修复：
+1. verify_chain 方法在循环入口处将 anchor_check_done 设置为 True，只要 anchor_hashes 不为 None 就将该标记置为真，然后才进入具体检查分支。当某条目因 previous_hash 不匹配或内容哈希不匹配在前置分支中失败时，锚定检测实际未执行，但 anchor_check_performed 字段被传入此处的 anchor_check_done 值误报为 True。verify_entry 方法正确地在锚定哈希分支实际执行时才将 anchor_check_done 设为 True，前置错误分支保持为 False。需要统一 verify_chain 的行为使其与 verify_entry 一致：anchor_check_performed 仅在锚定哈希检测分支被实际执行时才为 True。
+2. verify_chain 方法在 previous_hash 或内容哈希不匹配的分支中，fail_message 未在提供锚定哈希时追加 "(anchor check skipped)" 标注，而 verify_entry 在对应分支中正确添加了该标注。需要在 verify_chain 对应分支中也追加相同标注，使两条验证路径的输出一致。
+3. 修复后需要补充测试用例覆盖 verify_chain 在有锚定哈希但前置检查失败（如 previous_hash 不匹配）的场景，验证 anchor_check_performed 为 False 且 message 中包含 "(anchor check skipped)" 标注。
+修复后重新运行 poetry run pytest tests/auditlog/ -q，需要让所有测试通过。

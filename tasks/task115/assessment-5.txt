@@ -1,0 +1,7 @@
+产物不满意：
+本轮修复正确解决了提示词中的三个问题：verify_chain 移除了循环入口处无条件设置 anchor_check_done 的逻辑，将其移至锚定哈希检测分支实际到达时才置位；四个前置失败分支均按提示词要求追加了 "(anchor check skipped)" 标注；新增 5 个测试用例覆盖了有锚定时有前置错误的跳过场景和传播路径下内部一致条目的锚定执行场景。61 个测试全部通过，anchor_check_performed 字段在 verify_chain 和 verify_entry 中的语义已完全一致。
+
+过程不满意：
+1. 模型在收到提示词后的第一个动作是 view_files 查看 validator.py，直接跳过了前四轮反复出现的"先 todo_write 再分析"模式。这是一种值得肯定的行为改进，表明模型开始按照先分析代码现状再动手的原则工作。不过模型只查看了 validator.py 就立即开始编辑，未先查看 tests/auditlog/test_auditlog.py 中已有的测试覆盖情况，导致后续编写新测试时对代码路径的行为理解不足。
+
+2. 模型首次添加测试后运行 pytest 时出现测试失败，原因是模型最初对新测试的断言期望与 verify_chain 的实际执行路径不匹配——模型未意识到传播路径中内部哈希自洽的条目（previous_hash 和内容哈希都匹配）仍会实际到达锚定检测分支，因此这些条目的 anchor_check_performed 应为 True 而非 False。模型通过一轮修正更正了测试期望并重新通过，诊断过程准确。但如果在编写测试之前先对 validator.py 的各分支路径和行为矩阵做纸上推演，找出每个条件组合下的预期 anchor_check_performed 值，就能避免这一轮测试试错。

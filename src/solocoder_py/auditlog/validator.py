@@ -94,26 +94,31 @@ class AuditLogValidator:
             valid = True
             result_expected_hash = expected_hash
 
-            if anchor_hashes is not None:
-                anchor_check_done = True
-
             if not is_propagated:
                 if i > start and entry.previous_hash != previous_hash:
                     valid = False
                     failure_type = "previous_hash"
                     fail_message = f"Previous hash mismatch: expected {previous_hash}, got {entry.previous_hash}"
+                    if anchor_hashes is not None:
+                        fail_message += " (anchor check skipped)"
                 elif actual_hash != expected_hash:
                     valid = False
                     failure_type = "content_hash"
                     fail_message = f"Hash mismatch for entry {entry.index}"
-                elif anchor_hashes is not None and actual_hash != anchor_hashes[entry.index]:
-                    valid = False
-                    failure_type = "anchor_hash"
-                    fail_message = (
-                        f"Systemic overwrite detected: entry {entry.index} hash "
-                        f"does not match anchor hash from chain state"
-                    )
-                    result_expected_hash = anchor_hashes[entry.index]
+                    if anchor_hashes is not None:
+                        fail_message += " (anchor check skipped)"
+                elif anchor_hashes is not None:
+                    anchor_check_done = True
+                    if actual_hash != anchor_hashes[entry.index]:
+                        valid = False
+                        failure_type = "anchor_hash"
+                        fail_message = (
+                            f"Systemic overwrite detected: entry {entry.index} hash "
+                            f"does not match anchor hash from chain state"
+                        )
+                        result_expected_hash = anchor_hashes[entry.index]
+                    else:
+                        anchor_check_done = True
             else:
                 valid = False
                 if i > start and entry.previous_hash != previous_hash:
@@ -123,12 +128,16 @@ class AuditLogValidator:
                         f"got {entry.previous_hash}. "
                         f"Chain already broken at index {first_tampered}, entry {entry.index} cannot be trusted."
                     )
+                    if anchor_hashes is not None:
+                        fail_message += " (anchor check skipped)"
                 elif actual_hash != expected_hash:
                     failure_type = "content_hash"
                     fail_message = (
                         f"[PROPAGATED] Hash mismatch for entry {entry.index}. "
                         f"Chain already broken at index {first_tampered}, entry {entry.index} cannot be trusted."
                     )
+                    if anchor_hashes is not None:
+                        fail_message += " (anchor check skipped)"
                 elif anchor_hashes is not None:
                     anchor_check_done = True
                     if actual_hash != anchor_hashes[entry.index]:

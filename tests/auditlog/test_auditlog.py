@@ -770,6 +770,124 @@ class TestAnchorCheckPerformed:
         for r in report.results:
             assert r.anchor_check_performed is True
 
+    def test_chain_previous_hash_mismatch_anchor_not_performed(self, store, validator, manual_clock):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered = replace(entries[2], event_type="TAMPERED")
+        store._unsafe_replace_entry(2, tampered)
+
+        entries = store.get_all_entries()
+        state = store.get_chain_state()
+        report = validator.verify_chain(entries, anchor_hashes=state.hashes)
+
+        assert report.results[2].valid is False
+        assert report.results[2].anchor_check_performed is False
+        assert "anchor check skipped" in report.results[2].message
+
+    def test_chain_content_hash_mismatch_anchor_not_performed(self, store, validator, manual_clock):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered = replace(entries[0], event_type="TAMPERED_GENESIS")
+        store._unsafe_replace_entry(0, tampered)
+
+        entries = store.get_all_entries()
+        state = store.get_chain_state()
+        report = validator.verify_chain(entries, anchor_hashes=state.hashes)
+
+        assert report.results[0].valid is False
+        assert report.results[0].anchor_check_performed is False
+        assert "anchor check skipped" in report.results[0].message
+
+    def test_chain_propagated_previous_hash_mismatch_anchor_not_performed(self, store, validator, manual_clock):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered1 = replace(entries[1], event_type="TAMPERED")
+        store._unsafe_replace_entry(1, tampered1)
+
+        tampered2 = replace(entries[2], event_type="TAMPERED_2")
+        store._unsafe_replace_entry(2, tampered2)
+
+        entries = store.get_all_entries()
+        state = store.get_chain_state()
+        report = validator.verify_chain(entries, anchor_hashes=state.hashes)
+
+        assert report.results[1].valid is False
+        assert report.results[1].is_propagated_failure is False
+        assert report.results[1].anchor_check_performed is False
+        assert "anchor check skipped" in report.results[1].message
+
+        assert report.results[2].valid is False
+        assert report.results[2].is_propagated_failure is True
+        assert report.results[2].anchor_check_performed is False
+        assert "anchor check skipped" in report.results[2].message
+
+        for idx in [3, 4]:
+            assert report.results[idx].is_propagated_failure is True
+
+    def test_chain_propagated_internally_consistent_anchor_performed(self, store, validator, manual_clock):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered = replace(entries[1], event_type="TAMPERED")
+        store._unsafe_replace_entry(1, tampered)
+
+        entries = store.get_all_entries()
+        state = store.get_chain_state()
+        report = validator.verify_chain(entries, anchor_hashes=state.hashes)
+
+        assert report.results[1].valid is False
+        assert report.results[1].anchor_check_performed is False
+
+        for idx in [2, 3, 4]:
+            assert report.results[idx].is_propagated_failure is True
+            assert report.results[idx].anchor_check_performed is True
+
+    def test_chain_no_anchor_no_skip_message(self, store, validator, manual_clock):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered = replace(entries[2], event_type="TAMPERED")
+        store._unsafe_replace_entry(2, tampered)
+
+        entries = store.get_all_entries()
+        report = validator.verify_chain(entries)
+
+        for r in report.results:
+            assert "anchor check skipped" not in r.message
+
     def test_verify_entry_no_anchor_not_performed(self, store, validator):
         entry = store.append(event_type="CREATE", subject="admin", target="user:alice")
         result = validator.verify_entry(entry, previous_hash="")
