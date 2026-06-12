@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import threading
-import warnings
-from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Deque, Optional, Set
 from collections import deque
 
@@ -75,8 +74,6 @@ class ConnectionPool:
                 return_count=self._stats.return_count,
                 evicted_count=self._stats.evicted_count,
                 health_check_failed_count=self._stats.health_check_failed_count,
-                health_check_timeout_count=self._stats.health_check_timeout_count,
-                eviction_error_count=self._stats.eviction_error_count,
             )
 
     @property
@@ -98,57 +95,61 @@ class ConnectionPool:
 
     def borrow(self, timeout: Optional[float] = None) -> MockTCPConnection:
         wait_timeout = timeout if timeout is not None else self._config.wait_timeout
-        deadline = None
 
-        while True:
-            with self._lock:
+        with self._lock:
+            if self._closed:
+                raise PoolClosedError("Connection pool is closed")
+
+            conn = self._try_borrow_idle()
+            if conn is not None:
+                return conn
+
+            if len(self._all_conns) < self._config.max_size:
+                conn = self._create_connection()
+                self._borrowed_conns.add(conn)
+                self._stats.borrow_count += 1
+                conn.state = ConnectionState.BORROWED
+                conn.last_borrowed_at = self._clock.now()
+                conn.borrow_count += 1
+                return conn
+
+            if self._config.wait_strategy == PoolWaitStrategy.FAIL:
+                raise PoolExhaustedError(
+                    f"Pool exhausted, max_size={self._config.max_size}"
+                )
+
+            deadline = self._clock.now() + wait_timeout
+            while True:
+                remaining = deadline - self._clock.now()
+                if remaining <= 0:
+                    raise PoolExhaustedError(
+                        f"Pool exhausted after waiting {wait_timeout}s, "
+                        f"max_size={self._config.max_size}"
+                    )
+
+                self._not_empty.wait(timeout=remaining)
+
                 if self._closed:
                     raise PoolClosedError("Connection pool is closed")
 
-                if self._idle_conns:
-                    conn = self._idle_conns.popleft()
-                    self._all_conns.discard(conn)
-                else:
-                    conn = None
-
-                if conn is None:
-                    if len(self._all_conns) < self._config.max_size:
-                        conn = self._create_connection()
-                        self._borrowed_conns.add(conn)
-                        self._stats.borrow_count += 1
-                        conn.state = ConnectionState.BORROWED
-                        conn.last_borrowed_at = self._clock.now()
-                        conn.borrow_count += 1
-                        return conn
-
-                    if self._config.wait_strategy == PoolWaitStrategy.FAIL:
-                        raise PoolExhaustedError(
-                            f"Pool exhausted, max_size={self._config.max_size}"
-                        )
-
-                    if deadline is None:
-                        deadline = self._clock.now() + wait_timeout
-                    remaining = deadline - self._clock.now()
-                    if remaining <= 0:
-                        raise PoolExhaustedError(
-                            f"Pool exhausted after waiting {wait_timeout}s, "
-                            f"max_size={self._config.max_size}"
-                        )
-                    self._not_empty.wait(timeout=remaining)
-                    continue
-
-            if not self._config.health_check_on_borrow:
-                with self._lock:
-                    self._all_conns.add(conn)
-                    self._borrowed_conns.add(conn)
-                    self._stats.borrow_count += 1
-                    conn.state = ConnectionState.BORROWED
-                    conn.last_borrowed_at = self._clock.now()
-                    conn.borrow_count += 1
+                conn = self._try_borrow_idle()
+                if conn is not None:
                     return conn
 
+    def _try_borrow_idle(self) -> Optional[MockTCPConnection]:
+        while self._idle_conns:
+            conn = self._idle_conns.popleft()
+            self._all_conns.discard(conn)
+
+            if not self._config.health_check_on_borrow:
+                self._borrowed_conns.add(conn)
+                self._stats.borrow_count += 1
+                conn.state = ConnectionState.BORROWED
+                conn.last_borrowed_at = self._clock.now()
+                conn.borrow_count += 1
+                return conn
+
             healthy = False
-            timed_out = False
             hc_timeout = self._config.health_check_timeout
 
             try:
@@ -157,27 +158,23 @@ class ConnectionPool:
                 )
                 healthy = future.result(timeout=hc_timeout)
             except FuturesTimeoutError:
-                timed_out = True
                 future.cancel()
             except Exception:
                 healthy = False
 
-            with self._lock:
-                if not healthy:
-                    if timed_out:
-                        self._stats.health_check_timeout_count += 1
-                    else:
-                        self._stats.health_check_failed_count += 1
-                    self._destroy_connection(conn)
-                    continue
+            if not healthy:
+                self._stats.health_check_failed_count += 1
+                self._destroy_connection(conn)
+                continue
 
-                self._all_conns.add(conn)
-                self._borrowed_conns.add(conn)
-                self._stats.borrow_count += 1
-                conn.state = ConnectionState.BORROWED
-                conn.last_borrowed_at = self._clock.now()
-                conn.borrow_count += 1
-                return conn
+            self._borrowed_conns.add(conn)
+            self._stats.borrow_count += 1
+            conn.state = ConnectionState.BORROWED
+            conn.last_borrowed_at = self._clock.now()
+            conn.borrow_count += 1
+            return conn
+
+        return None
 
     def _create_connection(self) -> MockTCPConnection:
         now = self._clock.now()
@@ -243,16 +240,7 @@ class ConnectionPool:
             self._eviction_stop_event.wait(self._config.eviction_interval)
             if self._eviction_stop_event.is_set():
                 break
-            try:
-                self._evict_idle_connections()
-            except Exception as e:
-                with self._lock:
-                    self._stats.eviction_error_count += 1
-                warnings.warn(
-                    f"Eviction error: {e}. Eviction thread will continue running.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+            self._evict_idle_connections()
 
     def _evict_idle_connections(self) -> None:
         with self._lock:

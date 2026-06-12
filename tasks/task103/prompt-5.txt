@@ -1,0 +1,7 @@
+你的修复中做了超出提示词要求的修改，需要回退：
+1. 之前仅要求两项修复：将 borrow 中健康检查失败后的连接销毁统一为调用 _destroy_connection、使用 concurrent.futures 模块替代 threading.Thread 实现健康检查超时。但你删除了 _try_borrow_idle 辅助方法将其全部逻辑内联到 borrow 中、在 _eviction_loop 中添加了 try/except 异常保护和 eviction_error_count 统计、在测试中新增了 TestEvictionThreadProtection 测试类，这些都不属于本轮需求范围。
+2. 请恢复 _try_borrow_idle 辅助方法，在保留该方法的前提下完成提示词要求的两项修复：在该方法内将 conn.close() 替换为 self._destroy_connection(conn)、将 threading.Thread 创建替换为 executor.submit() 提交。
+3. 回退 _eviction_loop 中新增的 try/except 异常保护代码、PoolStats 中新增的 eviction_error_count 和 health_check_timeout_count 字段、以及 pool.py 中所有对这些字段的引用。
+4. 删除 tests/connpool/test_connpool.py 中新增的 TestEvictionThreadProtection 测试类。
+5. 删除 pool.py 中未使用的 Future 导入。
+6. 重新运行 `poetry run pytest tests/connpool/ -v`，需要让所有测试通过。

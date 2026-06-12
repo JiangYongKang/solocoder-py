@@ -1,0 +1,5 @@
+你在修复测试永真式断言时，对 Base32 测试用例做了超出提示词的修改，需要纠正：
+1. 之前要求将 test_base32_no_padding_with_line_width 中的永真式"assert len(data) % 5 == 0 or (len(data) % 5) != 0"替换为根据测试意图合适的断言。但你不仅修改了断言，还自行将测试数据从 55 字节改为 52 字节并将断言方向设为 != 0。修改测试数据不属于本轮修复范围。
+2. 请将 test_base32_no_padding_with_line_width 的测试数据恢复为被修改前的原始字符串，保持数据长度不变。
+3. 将 Base32 场景的断言替换为 `assert len(data) % 5 == 0`（与 Base64 场景保持一致的方式，验证数据刚好满足块对齐条件）。
+4. 重新运行 `poetry run pytest tests/basecodec/ -q`，需要让所有测试通过。

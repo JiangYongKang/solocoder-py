@@ -1,0 +1,8 @@
+产物不满意：
+1. pool.py 的 _try_borrow_idle 方法在从空闲队列取出连接并通过健康检查后，没有将连接重新加回 `_all_conns` 集合。对比上一轮提交的 borrow 方法，原逻辑在弹出空闲连接时执行 `self._all_conns.discard(conn)`，然后在健康检查通过和跳过健康检查两个成功分支中都显式调用了 `self._all_conns.add(conn)` 完成对称操作。本轮恢复的 _try_borrow_idle 只保留了 discard，两条成功路径均遗漏了 add。后果是经过 borrow-from-idle 的连接会永久从 `_all_conns` 中消失，导致 `len(self._all_conns) < max_size` 检查在重复借还后失真，池的实际连接数可能超出限制；同时 return_conn 中依赖 `conn in self._all_conns` 的重复归还静默忽略逻辑也会对这类连接失效，引发错误的 `ConnectionNotFoundError` 异常。根因是恢复辅助方法时未完整复制原方法中 _all_conns 的管理语义，应在 _try_borrow_idle 的两条成功返回路径中均补上 `self._all_conns.add(conn)`。
+2. pool.py 第 4 行删除了 `import warnings`，该导入仅在被删除的 _eviction_loop 的 try/except 异常保护代码中用于 `warnings.warn` 调用，移除后不再需要。这一清理行为是多余的，虽不影响功能正确性且可从"消除未使用导入"的角度理解为合理的连带清理，但严格超出了提示词第 3 条"回退 try/except 异常保护代码"和第 5 条"删除未使用的 Future 导入"的显式范围，属于自发的范围蔓延。
+
+过程不满意：
+1. 模型在刚收到提示词后第一个动作就是调用 todo_write 创建了 6 项子任务计划，然后才开始并行读取 models.py、pool.py 和 test_connpool.py 三个文件的当前状态。这是典型的"先定计划再看代码"模式，虽然本轮提示词以清单形式列出了需要回退和修复的条目、todolist 的粒度与提示词吻合度较高，但行为模式本身仍然违反了正确流程：正确做法应当是先阅读现有代码状态和修改目标，分析改动范围和模块依赖关系之后再制定执行计划。幸运的是本轮需求足够明确，这个不当顺序没有导致计划与实际执行脱节。
+2. 模型在恢复 `_try_borrow_idle` 方法时，仅关注了提示词要求的两项修复（destroy_connection 统一和 executor.submit 替换），却没有系统性地对比上一轮 borrow 方法的完整逻辑来确保回退的语义保真。这导致了产物中 _all_conns 跟踪缺失的回归缺陷，模型在总结中声称"恢复了 _try_borrow_idle 辅助方法"，但实际恢复的是不完整版本。正确做法是在恢复辅助方法后逐行对比旧实现的语义，确保所有状态变更（特别是 _all_conns 的增删操作）与原逻辑一致。
+3. 模型在运行测试通过 46 个用例后立即在总结中声称"回退和修复完成"，并将测试通过等同于代码正确。但 _all_conns 的跟踪缺失缺陷并未被现有测试捕获（现有测试没有覆盖重复 borrow-from-idle 后检查 max_size 的场景），属于以测试通过替代逻辑正确性验证的虚假完成信号。模型应当在测试通过后额外进行自检，确认修改前后的逻辑语义是否完全对等，而不是仅依赖测试结果作为完成的唯一证据。

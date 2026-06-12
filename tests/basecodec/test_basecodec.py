@@ -395,8 +395,8 @@ class TestLineWidthControl:
         assert decoded == data
 
     def test_base32_no_padding_with_line_width(self):
-        data = b"Base32 block=5bytes->8chars, padding bits exist here!"
-        assert len(data) % 5 != 0
+        data = b"Base32 block=5bytes->8chars, padding needed often here!"
+        assert len(data) % 5 == 0
         encoded = b32encode(data, pad=False, line_width=32)
         assert "\n" in encoded
         assert "=" not in encoded

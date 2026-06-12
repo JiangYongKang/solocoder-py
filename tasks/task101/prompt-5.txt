@@ -1,0 +1,5 @@
+你的修复测试质量问题时做了超出提示词的修改，需要回退：
+1. 之前仅要求修正 test_url_rewrite_ignores_query_params_match 一个测试用例的正则模式和测试数据。但你在同一次编辑中还修改了 rewriter.py 中 _extract_path 和 UrlRewriter.rewrite 两个方法的生产逻辑，并在 tests/proxy/test_proxy.py 中新增了多个不被要求的测试函数。
+2. 请将 src/solocoder_py/proxy/rewriter.py 恢复到之前修改前的状态。
+3. 请将 tests/proxy/test_proxy.py 恢复到仅有 test_url_rewrite_ignores_query_params_match 的正则修正的状态（回退新增的 test_url_rewrite_path_matches_even_with_query_param_match 等测试函数）。
+4. 重新运行 `poetry run pytest tests/proxy/ -q`。如果出现测试失败，不需要继续修复，只需要在思考轨迹中记录哪些测试失败了以及分析失败原因即可。
