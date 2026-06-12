@@ -1,0 +1,10 @@
+产物不满意：
+1. watcher.py 的 _handle_directory_event 方法使用了字符串字面量 "created" 与 ChangeType 枚举做相等比较而非使用 ChangeType.CREATED，这种写法依赖 ChangeType 同时继承 str 和 Enum 的实现细节，枚举值一旦变更就会静默失效。同时用路径末尾斜杠辅助判断目录是不可靠的启发式规则。最严重的是 try 块使用 except Exception: pass 吞掉所有异常，如果 is_directory 或 add_watch 调用失败不会有任何错误信息，目录自动注册失败时完全无法排查。
+2. watcher.py 的 _on_raw_event 方法在处理重命名事件的 Glob 过滤时存在死代码：先通过 if not self._filter.matches(event.path) 过滤当前路径，随后对 old_path 调用 self._filter.matches 检查但使用 pass 空语句，既没有 return 拦截事件也没有产生任何副作用。这意味着重命名事件的 old_path Glob 过滤逻辑是未完成的占位代码，如果 old_path 匹配排除模式而 new_path 在监控范围外，重命名事件仍会被错误放行，导致不符合过滤规则的事件进入去抖队列。
+3. glob_filter.py 的 _match_double_star 方法中存在死代码分支：在解析 ** 前后缀后，若前缀不为空且路径不以该前缀开头，方法仅调用了 fnmatch 但不使用返回值也不返回，之后无条件进入 _match_path_parts 递归匹配。同时 _validate_glob_syntax 方法对 ** 前后不是斜杠分隔符的情况也仅写了 pass，不做任何校验或报错。这些死代码表明 Glob 匹配逻辑没有一次设计完成而是留下了未清理的半成品分支，增加了代码维护和调试的难度。
+4. debouncer.py 的 EventDebouncer.add_event 方法在 is_running 为 False 时直接 return 静默丢弃事件，既不抛异常也不记录日志，调用方完全感知不到事件丢失。同时在 _on_debounced_events 回调中 watcher 对已经过 _on_raw_event 阶段过滤的事件再次执行 Glob 匹配，属于冗余过滤逻辑，增加了不必要的计算开销且暴露了过滤器职责边界划分不清晰的问题——过滤应在事件生成阶段一次完成而非在两个环节重复执行。
+
+过程不满意：
+1. 模型在收到提示词后仅快速浏览了 rwlock 包的 __init__.py 和 models.py 两个文件，就立即用 todo_write 创建了包含 13 项子任务的计划列表，随后才开始编写代码。这属于标注规范中描述的典型问题——在充分分析需求文档和设计模块架构之前就先制定执行计划。提示词明确列出了递归监控、去抖合并、Glob 过滤三大功能需求以及详细的测试要求，合理做法是先理清各组件之间的数据流和职责边界，确定事件源到过滤器到去抖器再到回调的处理链路后再规划分步实施。
+2. 模型首轮运行测试发现 8 个失败用例后，未逐个阅读失败用例的堆栈和具体断言差异，仅笼统描述了"去抖合并导致事件被合并""Glob模式匹配逻辑需要调整"等四类问题后就直接修改代码。更严重的是模型同时编辑了 glob_filter.py 生产代码和 test_edge_cases.py、test_error_branches.py、test_normal_flows.py 三个测试文件，这意味着在不确定是生产代码缺陷还是测试用例写法有误的情况下同时对两端做了改动，存在为让测试通过而修改测试断言适应实现行为的风险。正确做法是先分析每个失败用例的断言差异，定位确切缺陷后再做最小范围修复。
+3. 模型在 glob_filter.py 和 watcher.py 中留下了多处 pass 空语句的死代码分支，包括 _validate_glob_syntax 中的 ** 分隔符校验 pass、_match_double_star 中的前缀不匹配分支 pass 以及 _on_raw_event 中的重命名 old_path 过滤 pass。这些未清理的占位代码表明模型在首轮编码时采用了先搭框架再逐步填充的方式，但在后续修复轮次中只关注了让 59 个测试全部通过而忽略了对无用代码的清理。说明模型缺乏代码自审意识，把测试通过等同于代码质量达标，没有检查是否存在冗余逻辑和未完成分支。
