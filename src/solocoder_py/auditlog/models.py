@@ -43,6 +43,8 @@ class VerificationResult:
     expected_hash: str = ""
     actual_hash: str = ""
     message: str = ""
+    is_propagated_failure: bool = False
+    anchor_check_performed: bool = False
 
 
 @dataclass

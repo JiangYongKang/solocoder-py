@@ -647,6 +647,181 @@ class TestChainState:
         assert len(store.get_chain_state().hashes) == 3
 
 
+class TestPropagatedFailure:
+    def test_first_failure_not_propagated(self, store, validator, manual_clock):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered = replace(entries[2], event_type="TAMPERED")
+        store._unsafe_replace_entry(2, tampered)
+
+        entries = store.get_all_entries()
+        report = validator.verify_chain(entries)
+
+        assert report.results[2].is_propagated_failure is False
+        assert "PROPAGATED" not in report.results[2].message
+
+    def test_subsequent_failures_marked_propagated(self, store, validator, manual_clock):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered = replace(entries[2], event_type="TAMPERED")
+        store._unsafe_replace_entry(2, tampered)
+
+        entries = store.get_all_entries()
+        report = validator.verify_chain(entries)
+
+        assert report.results[2].is_propagated_failure is False
+        for idx in [3, 4]:
+            assert report.results[idx].is_propagated_failure is True
+            assert "[PROPAGATED]" in report.results[idx].message
+            assert "index 2" in report.results[idx].message
+
+    def test_propagated_failure_with_content_hash_mismatch(
+        self, store, validator, manual_clock
+    ):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered = replace(entries[2], event_type="TAMPERED_2")
+        store._unsafe_replace_entry(2, tampered)
+
+        also_tampered = replace(entries[4], event_type="TAMPERED_4")
+        store._unsafe_replace_entry(4, also_tampered)
+
+        entries = store.get_all_entries()
+        report = validator.verify_chain(entries)
+
+        assert report.results[2].is_propagated_failure is False
+        assert report.results[4].is_propagated_failure is True
+        assert "[PROPAGATED]" in report.results[4].message
+
+    def test_propagated_failure_with_anchor(
+        self, store, validator, manual_clock
+    ):
+        for i in range(5):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        tampered = replace(entries[1], event_type="TAMPERED")
+        store._unsafe_replace_entry(1, tampered)
+
+        entries = store.get_all_entries()
+        state = store.get_chain_state()
+        report = validator.verify_chain(entries, anchor_hashes=state.hashes)
+
+        assert report.results[1].is_propagated_failure is False
+        for idx in [2, 3, 4]:
+            assert report.results[idx].is_propagated_failure is True
+
+
+class TestAnchorCheckPerformed:
+    def test_no_anchor_provided_check_not_performed_chain(self, store, validator, manual_clock):
+        for i in range(3):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        report = validator.verify_chain(entries)
+
+        for r in report.results:
+            assert r.anchor_check_performed is False
+
+    def test_anchor_provided_check_performed_chain(self, store, validator, manual_clock):
+        for i in range(3):
+            manual_clock.advance(5)
+            store.append(
+                event_type=f"EVENT_{i}",
+                subject=f"user_{i}",
+                target=f"resource_{i}",
+            )
+
+        entries = store.get_all_entries()
+        state = store.get_chain_state()
+        report = validator.verify_chain(entries, anchor_hashes=state.hashes)
+
+        for r in report.results:
+            assert r.anchor_check_performed is True
+
+    def test_verify_entry_no_anchor_not_performed(self, store, validator):
+        entry = store.append(event_type="CREATE", subject="admin", target="user:alice")
+        result = validator.verify_entry(entry, previous_hash="")
+        assert result.anchor_check_performed is False
+
+    def test_verify_entry_anchor_provided_check_performed_pass(self, store, validator):
+        entry = store.append(event_type="CREATE", subject="admin", target="user:alice")
+        state = store.get_chain_state()
+        result = validator.verify_entry(
+            entry, previous_hash="", anchor_hash=state.hashes[0]
+        )
+        assert result.valid is True
+        assert result.anchor_check_performed is True
+
+    def test_verify_entry_anchor_provided_check_performed_fail(self, store, validator):
+        entry = store.append(event_type="CREATE", subject="admin", target="user:alice")
+        result = validator.verify_entry(
+            entry, previous_hash="", anchor_hash="completely_wrong_anchor"
+        )
+        assert result.valid is False
+        assert result.anchor_check_performed is True
+        assert "Systemic overwrite detected" in result.message
+
+    def test_verify_entry_previous_hash_mismatch_anchor_skipped(self, store, validator):
+        entry = store.append(event_type="CREATE", subject="admin", target="user:alice")
+        state = store.get_chain_state()
+        result = validator.verify_entry(
+            entry, previous_hash="wrong_prev", anchor_hash=state.hashes[0]
+        )
+        assert result.valid is False
+        assert "Previous hash mismatch" in result.message
+        assert "anchor check skipped" in result.message
+        assert result.anchor_check_performed is False
+
+    def test_verify_entry_content_hash_mismatch_anchor_skipped(self, store, validator):
+        entry = store.append(event_type="CREATE", subject="admin", target="user:alice")
+        tampered = replace(entry, event_type="TAMPERED")
+        state = store.get_chain_state()
+        result = validator.verify_entry(
+            tampered, previous_hash="", anchor_hash=state.hashes[0]
+        )
+        assert result.valid is False
+        assert "Hash mismatch" in result.message
+        assert "anchor check skipped" in result.message
+        assert result.anchor_check_performed is False
+
+    def test_verify_entry_no_anchor_no_skip_message(self, store, validator):
+        entry = store.append(event_type="CREATE", subject="admin", target="user:alice")
+        result = validator.verify_entry(entry, previous_hash="wrong_prev")
+        assert "anchor check skipped" not in result.message
+
+
 class TestModels:
     def test_compute_hash_deterministic(self):
         content1 = "test|content|123"

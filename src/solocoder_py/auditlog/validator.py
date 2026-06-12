@@ -87,37 +87,70 @@ class AuditLogValidator:
             expected_hash = expected_content.compute_hash()
 
             actual_hash = entry.hash
-            valid = True
-            fail_message = ""
+            is_propagated = bool(chain_broken)
+            anchor_check_done = False
             failure_type = ""
+            fail_message = ""
+            valid = True
+            result_expected_hash = expected_hash
 
-            if i > start and entry.previous_hash != previous_hash:
-                valid = False
-                fail_message = f"Previous hash mismatch: expected {previous_hash}, got {entry.previous_hash}"
-                failure_type = "previous_hash"
-            elif actual_hash != expected_hash:
-                valid = False
-                fail_message = f"Hash mismatch for entry {entry.index}"
-                failure_type = "content_hash"
-            elif (
-                anchor_hashes is not None
-                and actual_hash != anchor_hashes[entry.index]
-            ):
-                valid = False
-                fail_message = (
-                    f"Systemic overwrite detected: entry {entry.index} hash "
-                    f"does not match anchor hash from chain state"
-                )
-                failure_type = "anchor_hash"
-            elif chain_broken:
-                valid = False
-                fail_message = f"Chain already broken at index {first_tampered}, entry {entry.index} cannot be trusted"
-                failure_type = "chain_broken"
+            if anchor_hashes is not None:
+                anchor_check_done = True
 
-            if failure_type == "anchor_hash":
-                result_expected_hash = anchor_hashes[entry.index]
+            if not is_propagated:
+                if i > start and entry.previous_hash != previous_hash:
+                    valid = False
+                    failure_type = "previous_hash"
+                    fail_message = f"Previous hash mismatch: expected {previous_hash}, got {entry.previous_hash}"
+                elif actual_hash != expected_hash:
+                    valid = False
+                    failure_type = "content_hash"
+                    fail_message = f"Hash mismatch for entry {entry.index}"
+                elif anchor_hashes is not None and actual_hash != anchor_hashes[entry.index]:
+                    valid = False
+                    failure_type = "anchor_hash"
+                    fail_message = (
+                        f"Systemic overwrite detected: entry {entry.index} hash "
+                        f"does not match anchor hash from chain state"
+                    )
+                    result_expected_hash = anchor_hashes[entry.index]
             else:
-                result_expected_hash = expected_hash
+                valid = False
+                if i > start and entry.previous_hash != previous_hash:
+                    failure_type = "previous_hash"
+                    fail_message = (
+                        f"[PROPAGATED] Previous hash mismatch: expected {previous_hash}, "
+                        f"got {entry.previous_hash}. "
+                        f"Chain already broken at index {first_tampered}, entry {entry.index} cannot be trusted."
+                    )
+                elif actual_hash != expected_hash:
+                    failure_type = "content_hash"
+                    fail_message = (
+                        f"[PROPAGATED] Hash mismatch for entry {entry.index}. "
+                        f"Chain already broken at index {first_tampered}, entry {entry.index} cannot be trusted."
+                    )
+                elif anchor_hashes is not None:
+                    anchor_check_done = True
+                    if actual_hash != anchor_hashes[entry.index]:
+                        failure_type = "anchor_hash"
+                        fail_message = (
+                            f"[PROPAGATED] Systemic overwrite detected: entry {entry.index} hash "
+                            f"does not match anchor hash from chain state. "
+                            f"Chain already broken at index {first_tampered}, entry {entry.index} cannot be trusted."
+                        )
+                        result_expected_hash = anchor_hashes[entry.index]
+                    else:
+                        failure_type = "chain_broken"
+                        fail_message = (
+                            f"[PROPAGATED] Chain already broken at index {first_tampered}, "
+                            f"entry {entry.index} cannot be trusted"
+                        )
+                else:
+                    failure_type = "chain_broken"
+                    fail_message = (
+                        f"[PROPAGATED] Chain already broken at index {first_tampered}, "
+                        f"entry {entry.index} cannot be trusted"
+                    )
 
             if not valid:
                 results.append(
@@ -127,6 +160,8 @@ class AuditLogValidator:
                         expected_hash=result_expected_hash,
                         actual_hash=actual_hash,
                         message=fail_message,
+                        is_propagated_failure=is_propagated,
+                        anchor_check_performed=anchor_check_done,
                     )
                 )
                 if first_tampered is None and not chain_broken:
@@ -141,6 +176,8 @@ class AuditLogValidator:
                         expected_hash=expected_hash,
                         actual_hash=actual_hash,
                         message=f"Entry {entry.index} verified successfully",
+                        is_propagated_failure=False,
+                        anchor_check_performed=anchor_check_done,
                     )
                 )
 
@@ -178,33 +215,48 @@ class AuditLogValidator:
         )
         expected_hash = expected_content.compute_hash()
         actual_hash = entry.hash
+        anchor_check_done = False
 
         if entry.previous_hash != previous_hash:
+            message = f"Previous hash mismatch: expected {previous_hash}, got {entry.previous_hash}"
+            if anchor_hash is not None:
+                message += " (anchor check skipped)"
             return VerificationResult(
                 index=entry.index,
                 valid=False,
                 expected_hash=expected_hash,
                 actual_hash=actual_hash,
-                message=f"Previous hash mismatch: expected {previous_hash}, got {entry.previous_hash}",
+                message=message,
+                is_propagated_failure=False,
+                anchor_check_performed=anchor_check_done,
             )
 
         if actual_hash != expected_hash:
+            message = f"Hash mismatch for entry {entry.index}"
+            if anchor_hash is not None:
+                message += " (anchor check skipped)"
             return VerificationResult(
                 index=entry.index,
                 valid=False,
                 expected_hash=expected_hash,
                 actual_hash=actual_hash,
-                message=f"Hash mismatch for entry {entry.index}",
+                message=message,
+                is_propagated_failure=False,
+                anchor_check_performed=anchor_check_done,
             )
 
-        if anchor_hash is not None and actual_hash != anchor_hash:
-            return VerificationResult(
-                index=entry.index,
-                valid=False,
-                expected_hash=anchor_hash,
-                actual_hash=actual_hash,
-                message=f"Systemic overwrite detected: entry {entry.index} hash does not match anchor hash from chain state",
-            )
+        if anchor_hash is not None:
+            anchor_check_done = True
+            if actual_hash != anchor_hash:
+                return VerificationResult(
+                    index=entry.index,
+                    valid=False,
+                    expected_hash=anchor_hash,
+                    actual_hash=actual_hash,
+                    message=f"Systemic overwrite detected: entry {entry.index} hash does not match anchor hash from chain state",
+                    is_propagated_failure=False,
+                    anchor_check_performed=anchor_check_done,
+                )
 
         return VerificationResult(
             index=entry.index,
@@ -212,6 +264,8 @@ class AuditLogValidator:
             expected_hash=expected_hash,
             actual_hash=actual_hash,
             message=f"Entry {entry.index} verified successfully",
+            is_propagated_failure=False,
+            anchor_check_performed=anchor_check_done,
         )
 
     def _compute_ranges(

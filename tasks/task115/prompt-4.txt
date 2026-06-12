@@ -1,0 +1,4 @@
+你实现的 auditlog 模块引入了一些新的验证逻辑缺陷，需要继续修复：
+1. verify_chain 方法中的 chain_broken 检测被放在 if/elif 链的最后一个分支（即排在 previous_hash、内容哈希和锚定哈希检查之后），当某条目同时存在 previous_hash 不匹配且链已断裂时，failure_type 被赋值为 "previous_hash" 而非 "chain_broken"。用户看到验证报告中多个后序条目都是孤立的哈希错误，无法判断它们是独立篡改还是由首个篡改点传播而来。需要将 chain_broken 检查从 elif 链中调整为独立的 if 判断，使其作为链状态上下文与具体哈希不匹配分支同时生效，让验证报告能区分"传播性断裂"和"独立篡改"。
+2. verify_entry 方法的三个检查分支按 previous_hash、内容哈希、锚定哈希的顺序串行执行，当前两个分支命中时方法直接返回，锚定哈希检测被静默跳过。当用户同时传入 previous_hash 不匹配和锚定哈希值时，方法返回 previous_hash 不匹配错误，但调用者无法区分"锚定检测通过"和"锚定检测被跳过"这两种不同情形。需要在 VerificationResult 中增加一个字段指示锚定检测是否被执行，或在 message 中明确标注锚定检测的执行状态。
+修复后重新运行 poetry run pytest tests/auditlog/ -q，需要让所有测试通过。
