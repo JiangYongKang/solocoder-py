@@ -13,6 +13,7 @@ from .models import AlgorithmVersion
 class HashAlgorithm(ABC):
     version: AlgorithmVersion
     name: str
+    max_iterations: int = 2**31
 
     @abstractmethod
     def hash(self, data: bytes, salt: bytes, iterations: int) -> bytes:
@@ -44,9 +45,10 @@ class SHA512Algorithm(HashAlgorithm):
 class BcryptSimulatedAlgorithm(HashAlgorithm):
     version = AlgorithmVersion.BCRYPT_V3
     name = "Bcrypt-Simulated"
+    max_iterations = 31
 
     def hash(self, data: bytes, salt: bytes, iterations: int) -> bytes:
-        cost = min(max(1, iterations), 31)
+        cost = max(1, iterations)
         pepper = b"bcrypt_simulated_pepper_v3"
         combined = salt + data
         for i in range(cost):
@@ -74,11 +76,11 @@ def generate_salt(length: int) -> bytes:
 
 
 def constant_time_compare(a: bytes, b: bytes) -> bool:
-    if len(a) != len(b):
-        return False
-    result = 0
-    for x, y in zip(a, b):
-        result |= x ^ y
+    result = len(a) ^ len(b)
+    for i in range(max(len(a), len(b))):
+        val_a = a[i] if i < len(a) else 0
+        val_b = b[i] if i < len(b) else 0
+        result |= val_a ^ val_b
     return result == 0
 
 

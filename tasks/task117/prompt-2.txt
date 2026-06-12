@@ -1,0 +1,6 @@
+你实现的内存虚拟文件系统模块存在一些问题，需要修复：
+1. filesystem.py 的 mkdir 方法和 create_file 方法对权限检查与父目录查找的调用顺序不一致。mkdir 把权限检查放在父目录查找之后，而 create_file 放在之前，两个创建操作的前置权限校验逻辑不对称，这是修复 DirectoryNotFoundError 时的补丁式修改导致的，应统一顺序。
+2. filesystem.py 的 _check_path_permissions 方法和 _lookup_node 方法各自独立实现了一套路径遍历和符号链接解析逻辑，代码重复度高。两个方法对循环符号链接检测时 visited 集合和深度计数器的初始化与累积策略也不同，增加了维护成本，未来修改路径解析语义时需在两处同步变更。
+3. filesystem.py 的 _lookup_node 方法在 resolve_symlinks=False 时遇到路径中间组件是符号链接就直接停止遍历剩余组件，导致 chmod、get_mode、stat 等方法在处理经过符号链接的多组件路径时会操作到错误的节点上。例如对 /link/file.txt 执行 chmod 且 /link 为符号链接时，实际修改的是 /link 符号链接自身的权限而非目标文件 /real/file.txt 的权限，resolve_symlinks=False 应只影响路径终点的处理而不应中断中间组件的解析。
+4. 上述三个问题有潜在关联：如果先提取公共路径遍历方法，则权限检查顺序不一致和 resolve_symlinks=False 的中断问题可以一并被修复，请避免打补丁式修改。
+修复后重新运行 poetry run pytest tests/memfs/ -q，需要让所有测试通过。

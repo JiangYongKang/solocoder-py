@@ -1,0 +1,3 @@
+你实现的目录树差异比对引擎模块存在一些问题，需要修复：
+1. engine.py 的 _handle_symlink_node 方法对 "follow" 策略没有对应的处理逻辑。当用户在 DiffConfig 中设置 symlink_strategy="follow" 时，代码在未命中 "error"、"ignore"、"detect" 三个 if 分支后落入方法末尾的 return []，导致所有符号链接的 create、delete、modify 变更被静默忽略，实际行为等同于 "ignore" 策略。而 README.md 文档声明该策略 "预留策略，当前与 detect 行为一致"，文档描述与代码实际行为矛盾。需要为 "follow" 策略补齐处理逻辑，使其与 "detect" 策略行为一致，或在校验阶段明确拒绝该策略。
+修复后重新运行 poetry run pytest tests/dirtreediff/ -q，需要让所有测试通过。

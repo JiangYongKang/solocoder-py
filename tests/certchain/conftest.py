@@ -4,7 +4,6 @@ from typing import Optional, Callable
 
 import pytest
 
-from solocoder_py.seat.clock import ManualClock
 from solocoder_py.certchain import (
     Certificate,
     CertificateBuilder,
@@ -16,6 +15,7 @@ from solocoder_py.certchain import (
     CertificateStore,
     CRLStore,
     TrustAnchorStore,
+    ManualClock,
 )
 
 

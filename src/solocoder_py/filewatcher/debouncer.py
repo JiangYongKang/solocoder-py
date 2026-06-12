@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from .exceptions import DebouncerNotRunningError
 from .models import ChangeType, FileEvent
 
 
@@ -125,7 +126,9 @@ class EventDebouncer:
 
     def add_event(self, event: FileEvent) -> None:
         if not self._is_running:
-            return
+            raise DebouncerNotRunningError(
+                "Cannot add event: debouncer is not running"
+            )
 
         path = event.path
         if path not in self._path_first_seen:

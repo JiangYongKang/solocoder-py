@@ -5,6 +5,7 @@ import pytest
 from solocoder_py.credential import (
     CredentialVersion,
     InvalidTrafficPercentageError,
+    RotationAlreadyExistsError,
     RotationNotFoundError,
     StableHashBucketer,
     TrafficRouter,
@@ -53,7 +54,7 @@ class TestTrafficRouterRegistration:
 
     def test_register_duplicate_raises(self):
         self.router.register_rotation("rot1", "old", "new")
-        with pytest.raises(RotationNotFoundError, match="already registered"):
+        with pytest.raises(RotationAlreadyExistsError, match="already registered"):
             self.router.register_rotation("rot1", "old2", "new2")
 
     def test_register_empty_name_raises(self):
@@ -212,11 +213,25 @@ class TestTrafficRouterMetrics:
         stats = self.router.get_stats("test")
         assert stats.new_consecutive_failures == 0
 
-    def test_old_metrics_reset_consecutive_failures(self):
+    def test_old_metrics_do_not_reset_consecutive_failures(self):
         for _ in range(5):
             self.router.route("test", "r")
             self.router.record_new_metrics("test", is_error=True)
+        stats_before = self.router.get_stats("test")
+        assert stats_before.new_consecutive_failures == 5
+
         self.router.record_old_metrics("test", is_error=True)
+        stats = self.router.get_stats("test")
+        assert stats.new_consecutive_failures == 5
+
+    def test_new_success_resets_consecutive_failures(self):
+        for _ in range(5):
+            self.router.route("test", "r")
+            self.router.record_new_metrics("test", is_error=True)
+        stats_before = self.router.get_stats("test")
+        assert stats_before.new_consecutive_failures == 5
+
+        self.router.record_new_metrics("test", is_error=False)
         stats = self.router.get_stats("test")
         assert stats.new_consecutive_failures == 0
 

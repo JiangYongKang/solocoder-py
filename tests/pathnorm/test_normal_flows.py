@@ -102,30 +102,30 @@ class TestTrailingSlashHandling:
 
 class TestSymlinkResolution:
     def test_single_symlink_resolution(self):
-        r = make_resolver(symlinks={"/a": "/x"}, directories={"/x/b"})
+        r = make_resolver(symlinks={"/a": "/x"}, directories={"/a", "/x", "/x/b"})
         assert r.resolve("/a/b/c") == "/x/b/c"
 
     def test_symlink_at_middle_level(self):
-        r = make_resolver(symlinks={"/a/b": "/m/n"}, directories={"/a", "/m/n"})
+        r = make_resolver(symlinks={"/a/b": "/m/n"}, directories={"/a", "/a/b", "/m", "/m/n", "/m/n/c"})
         assert r.resolve("/a/b/c/d") == "/m/n/c/d"
 
     def test_chained_symlinks(self):
         r = make_resolver(
             symlinks={"/a": "/b", "/b": "/c", "/c": "/d"},
-            directories={"/d/e"},
+            directories={"/a", "/b", "/c", "/d", "/d/e"},
         )
         assert r.resolve("/a/e/f") == "/d/e/f"
 
     def test_relative_symlink_target(self):
         r = make_resolver(
             symlinks={"/a/b": "../x/y"},
-            directories={"/a", "/x/y"},
+            directories={"/a", "/a/b", "/x", "/x/y"},
         )
         result = r.resolve("/a/b/c")
         assert result == "/x/y/c"
 
     def test_symlink_no_resolve_option(self):
-        r = make_resolver(symlinks={"/a": "/x"}, directories={"/x/b"})
+        r = make_resolver(symlinks={"/a": "/x"}, directories={"/a", "/x", "/x/b"})
         assert r.resolve("/a/b/c", resolve_symlinks=False) == "/a/b/c"
 
 
@@ -155,7 +155,7 @@ class TestResolverEquivalence:
     def test_equivalent_with_symlinks(self):
         r = make_resolver(
             symlinks={"/a": "/x/y"},
-            directories={"/x/y/b"},
+            directories={"/a", "/x", "/x/y", "/x/y/b"},
             case_sensitive=True,
         )
         assert r.are_equivalent("/a/b/c", "/x/y/b/c") is True
@@ -163,7 +163,7 @@ class TestResolverEquivalence:
     def test_equivalent_case_insensitive(self):
         r = make_resolver(
             symlinks={"/A": "/x/y"},
-            directories={"/x/y/b"},
+            directories={"/A", "/x", "/x/y", "/x/y/b"},
             case_sensitive=False,
         )
         assert r.are_equivalent("/a/b/c", "/X/Y/B/c") is True

@@ -236,8 +236,7 @@ else:
 ### 使用可注入时钟（测试场景）
 
 ```python
-from solocoder_py.seat.clock import ManualClock
-from solocoder_py.certchain import CertChainClock, CertificateExpiredError
+from solocoder_py.certchain import ManualClock, CertChainClock, CertificateExpiredError
 
 base_time = 1718150400.0
 manual = ManualClock(start_time=base_time)

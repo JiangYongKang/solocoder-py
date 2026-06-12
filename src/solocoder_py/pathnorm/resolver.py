@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Optional, Set
 
-from .exceptions import InvalidPathError, PathNotFoundError, SymlinkLoopError
+from .exceptions import (
+    InvalidPathError,
+    MaxSymlinkFollowsError,
+    PathNotFoundError,
+    SymlinkLoopError,
+)
 from .models import SymlinkResolver
 from .normalizer import PathNormalizer
 
@@ -59,10 +64,14 @@ class PathResolver:
         follow_count: int,
     ) -> str:
         components = self._split_path(path)
-        current_path = "/" if is_absolute else "."
         result_components = []
+        total_components = len(components)
+        component_index = 0
 
         for component in components:
+            component_index += 1
+            is_last_component = component_index == total_components
+
             if component == "." or component == "":
                 continue
             if component == "..":
@@ -82,7 +91,7 @@ class PathResolver:
             candidate = self._normalizer.normalize(candidate)
 
             if follow_count >= self._max_symlink_follows:
-                raise SymlinkLoopError(path, f"exceeded {self._max_symlink_follows} symlink follows")
+                raise MaxSymlinkFollowsError(path, self._max_symlink_follows)
 
             path_info = self._symlink_resolver.get_path_info(candidate)
 
@@ -127,7 +136,6 @@ class PathResolver:
                 if resolved_target.startswith("/"):
                     is_absolute = True
                     result_components = []
-                    current_path = "/"
 
                 for rc in resolved_components:
                     if rc == ".." and result_components:
@@ -138,6 +146,8 @@ class PathResolver:
             elif path_info.exists:
                 result_components.append(component)
             else:
+                if not is_last_component:
+                    raise PathNotFoundError(path, component)
                 result_components.append(component)
 
         if is_absolute:
@@ -160,7 +170,7 @@ class PathResolver:
         try:
             resolved = self.resolve(path, resolve_symlinks=True)
             return self._symlink_resolver.exists(resolved)
-        except (SymlinkLoopError, PathNotFoundError, InvalidPathError):
+        except (SymlinkLoopError, MaxSymlinkFollowsError, PathNotFoundError, InvalidPathError):
             return False
 
     def are_equivalent(
@@ -177,5 +187,5 @@ class PathResolver:
                 resolved1 = self._normalizer.normalize(path1)
                 resolved2 = self._normalizer.normalize(path2)
             return self._normalizer.are_equal(resolved1, resolved2)
-        except (SymlinkLoopError, PathNotFoundError, InvalidPathError):
+        except (SymlinkLoopError, MaxSymlinkFollowsError, PathNotFoundError, InvalidPathError):
             return False

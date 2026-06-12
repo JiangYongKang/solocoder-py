@@ -62,21 +62,87 @@ class MemoryFileSystem:
             parts.append(part)
         return "/" + "/".join(parts)
 
-    def _resolve_symlink(
+    def _resolve_single_symlink(
         self,
-        target: str,
-        current_path: str,
+        symlink: Symlink,
+        link_path: str,
         visited: set[str],
-        depth: int = 0,
-    ) -> Tuple[str, INode]:
+        depth: int,
+    ) -> Tuple[str, INode, int, list[Directory]]:
         depth += 1
         if depth >= MAX_SYMLINK_DEPTH:
-            raise SymlinkLoopError(f"Symlink loop detected after {MAX_SYMLINK_DEPTH} hops")
-        abs_target = self._normalize_path(target, current_path.rsplit("/", 1)[0] or "/")
+            raise SymlinkLoopError(
+                f"Symlink loop detected after {MAX_SYMLINK_DEPTH} hops"
+            )
+        base_dir = link_path.rsplit("/", 1)[0] or "/"
+        abs_target = self._normalize_path(symlink.target, base_dir)
         if abs_target in visited:
             raise SymlinkLoopError(f"Symlink loop detected at {abs_target}")
         visited.add(abs_target)
-        return self._lookup_node(abs_target, visited, depth + 1)
+        resolved_path, resolved_node, new_depth, traversed = self._walk_path_components(
+            abs_target,
+            visited=visited,
+            depth=depth,
+            resolve_final_symlink=True,
+            allow_missing_last=False,
+        )
+        return resolved_path, resolved_node, new_depth, traversed
+
+    def _walk_path_components(
+        self,
+        path: str,
+        visited: Optional[set[str]] = None,
+        depth: int = 0,
+        resolve_final_symlink: bool = True,
+        allow_missing_last: bool = False,
+    ) -> Tuple[str, INode, int, list[Directory]]:
+        path = self._normalize_path(path)
+        if visited is None:
+            visited = set()
+
+        traversed: list[Directory] = []
+
+        if path == "/":
+            traversed.append(self.root)
+            return "/", self.root, depth, traversed
+
+        parts = path.lstrip("/").split("/")
+        current: INode = self.root
+        current_path = "/"
+        total_parts = len(parts)
+
+        for idx, part in enumerate(parts):
+            is_last = idx == total_parts - 1
+
+            if isinstance(current, Symlink):
+                current_path, current, depth, sym_traversed = self._resolve_single_symlink(
+                    current, current_path, visited, depth
+                )
+                traversed.extend(sym_traversed[:-1])
+
+            if not isinstance(current, Directory):
+                raise NotADirectoryError(f"{current_path} is not a directory")
+
+            traversed.append(current)
+
+            child = current.get_child(part)
+            if child is None:
+                if allow_missing_last and is_last:
+                    return current_path, current, depth, traversed
+                raise PathNotFoundError(f"Path not found: {path}")
+
+            current = child
+            current_path = current_path.rstrip("/") + "/" + part
+
+        if isinstance(current, Symlink) and resolve_final_symlink:
+            current_path, current, depth, sym_traversed = self._resolve_single_symlink(
+                current, current_path, visited, depth
+            )
+            traversed.extend(sym_traversed[:-1])
+            if isinstance(current, Directory):
+                traversed.append(current)
+
+        return current_path, current, depth, traversed
 
     def _lookup_node(
         self,
@@ -85,33 +151,14 @@ class MemoryFileSystem:
         depth: int = 0,
         resolve_symlinks: bool = True,
     ) -> Tuple[str, INode]:
-        path = self._normalize_path(path)
-        if visited is None:
-            visited = set()
-        if path == "/":
-            return "/", self.root
-        parts = path.lstrip("/").split("/")
-        current: INode = self.root
-        current_path = "/"
-        for part in parts:
-            if isinstance(current, Symlink):
-                if not resolve_symlinks:
-                    break
-                current_path, current = self._resolve_symlink(
-                    current.target, current_path, visited, depth
-                )
-            if not isinstance(current, Directory):
-                raise NotADirectoryError(f"{current_path} is not a directory")
-            child = current.get_child(part)
-            if child is None:
-                raise PathNotFoundError(f"Path not found: {path}")
-            current = child
-            current_path = current_path.rstrip("/") + "/" + part
-        if isinstance(current, Symlink) and resolve_symlinks:
-            current_path, current = self._resolve_symlink(
-                current.target, current_path, visited, depth
-            )
-        return current_path, current
+        resolved_path, node, _, _ = self._walk_path_components(
+            path,
+            visited=visited,
+            depth=depth,
+            resolve_final_symlink=resolve_symlinks,
+            allow_missing_last=False,
+        )
+        return resolved_path, node
 
     def _lookup_parent(self, path: str) -> Tuple[str, Directory, str]:
         path = self._normalize_path(path)
@@ -131,36 +178,35 @@ class MemoryFileSystem:
             )
 
     def _check_path_permissions(self, path: str, perm: Permission) -> None:
-        parts = path.lstrip("/").split("/")
-        current = self.root
-        current_path = "/"
-        for i, part in enumerate(parts):
-            if isinstance(current, Symlink):
-                _, current = self._resolve_symlink(
-                    current.target, current_path, set()
-                )
-            if not isinstance(current, Directory):
-                raise NotADirectoryError(f"{current_path} is not a directory")
-            self._check_permission(current, Permission.EXECUTE)
-            child = current.get_child(part)
-            if child is None:
-                if i == len(parts) - 1:
-                    return
-                raise PathNotFoundError(f"Path not found: {path}")
-            current = child
-            current_path = current_path.rstrip("/") + "/" + part
+        path = self._normalize_path(path)
+        if path == "/":
+            return
+
+        _, _, _, traversed = self._walk_path_components(
+            path,
+            visited=None,
+            depth=0,
+            resolve_final_symlink=False,
+            allow_missing_last=True,
+        )
+
+        for dir_node in traversed:
+            self._check_permission(dir_node, Permission.EXECUTE)
 
     def mkdir(self, path: str, mode: int = 0o755) -> None:
         path = self._normalize_path(path)
         if path == "/":
             raise DirectoryExistsError("Directory already exists: /")
         try:
+            self._check_path_permissions(path, Permission.WRITE)
+        except PathNotFoundError:
+            raise DirectoryNotFoundError(f"Parent directory not found: {path}")
+        try:
             _, parent, name = self._lookup_parent(path)
         except PathNotFoundError:
             raise DirectoryNotFoundError(f"Parent directory not found: {path}")
         if parent.get_child(name) is not None:
             raise DirectoryExistsError(f"Directory already exists: {path}")
-        self._check_path_permissions(path, Permission.WRITE)
         self._check_permission(parent, Permission.WRITE)
         dir_node = Directory(
             name=name,
@@ -200,14 +246,18 @@ class MemoryFileSystem:
                 self._check_permission(child, Permission.EXECUTE)
                 current = child
             elif isinstance(child, Symlink):
-                resolved_path, resolved_node = self._resolve_symlink(
-                    child.target, current_path, set()
+                _, resolved, _, _ = self._resolve_single_symlink(
+                    child, current_path, set(), 0
                 )
-                if not isinstance(resolved_node, Directory):
-                    raise NotADirectoryError(f"{resolved_path} is not a directory")
-                current = resolved_node
+                if not isinstance(resolved, Directory):
+                    raise NotADirectoryError(
+                        f"{current_path.rstrip('/') + '/' + part} is not a directory"
+                    )
+                current = resolved
             else:
-                raise FileExistsError(f"File exists: {current_path}/{part}")
+                raise FileExistsError(
+                    f"File exists: {current_path.rstrip('/') + '/' + part}"
+                )
             current_path = current_path.rstrip("/") + "/" + part
 
     def create_file(self, path: str, content: bytes = b"", mode: int = 0o644) -> None:
@@ -233,7 +283,7 @@ class MemoryFileSystem:
             raise IsADirectoryError(f"{path} is a directory")
         self._check_permission(node, Permission.WRITE)
         if isinstance(node, Symlink):
-            _, resolved = self._resolve_symlink(node.target, path, set())
+            _, resolved, _, _ = self._resolve_single_symlink(node, path, set(), 0)
             if isinstance(resolved, Directory):
                 raise IsADirectoryError(f"{path} resolves to a directory")
             if not isinstance(resolved, File):
@@ -253,7 +303,7 @@ class MemoryFileSystem:
             raise IsADirectoryError(f"{path} is a directory")
         self._check_permission(node, Permission.READ)
         if isinstance(node, Symlink):
-            _, resolved = self._resolve_symlink(node.target, path, set())
+            _, resolved, _, _ = self._resolve_single_symlink(node, path, set(), 0)
             if isinstance(resolved, Directory):
                 raise IsADirectoryError(f"{path} resolves to a directory")
             if not isinstance(resolved, File):
@@ -270,7 +320,7 @@ class MemoryFileSystem:
         self._check_path_permissions(path, Permission.READ)
         _, node = self._lookup_node(path)
         if isinstance(node, Symlink):
-            _, resolved = self._resolve_symlink(node.target, path, set())
+            _, resolved, _, _ = self._resolve_single_symlink(node, path, set(), 0)
             if not isinstance(resolved, Directory):
                 raise NotADirectoryError(f"{path} is not a directory")
             self._check_permission(resolved, Permission.READ)

@@ -120,6 +120,35 @@ class TestScopeRegistry:
 
 
 class TestKeyPermissions:
+    def test_create_key_with_scope_objects(self):
+        from solocoder_py.apikey import Scope
+        manager = make_manager()
+        scope1 = Scope(name="read:docs")
+        scope2 = Scope(name="write:docs")
+        result = manager.create_key("user-1", [scope1, scope2])
+        info = manager.get_key(result.key_id)
+        assert info.scopes == frozenset(["read:docs", "write:docs"])
+        assert manager.check_permission(result.key_secret, "read:docs") is True
+        assert manager.check_permission(result.key_secret, "write:docs") is True
+
+    def test_create_key_with_mixed_scope_types(self):
+        from solocoder_py.apikey import Scope
+        manager = make_manager()
+        scope_obj = Scope(name="read:docs")
+        result = manager.create_key("user-1", [scope_obj, "write:files"])
+        info = manager.get_key(result.key_id)
+        assert info.scopes == frozenset(["read:docs", "write:files"])
+
+    def test_create_key_with_invalid_scope_type_rejected(self):
+        manager = make_manager()
+        with pytest.raises(ValueError, match="scope must be str or Scope"):
+            manager.create_key("user-1", [123])
+
+    def test_create_key_rejects_wildcard_in_middle(self):
+        manager = make_manager()
+        with pytest.raises(ValueError, match="wildcard"):
+            manager.create_key("user-1", ["a:*:c"])
+
     def test_verify_key_success(self):
         manager = make_manager()
         result = manager.create_key("user-1", ["read:docs"])

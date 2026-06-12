@@ -18,6 +18,7 @@ from .models import (
     APIKeyCreateResult,
     APIKeyInfo,
     Clock,
+    Scope,
     ScopeRegistry,
     UsageStats,
     generate_key_id,
@@ -99,69 +100,130 @@ class APIKeyManager:
         with self._lock:
             self._scope_registry.register_scope(scope, implies)
 
+    def _normalize_scopes(self, scopes: List) -> List[str]:
+        normalized = []
+        for s in scopes:
+            if isinstance(s, Scope):
+                normalized.append(s.name)
+            elif isinstance(s, str):
+                scope_obj = Scope(name=s)
+                normalized.append(scope_obj.name)
+            else:
+                raise ValueError(
+                    f"scope must be str or Scope, got {type(s).__name__}"
+                )
+        return normalized
+
+    def _create_key_internal(
+        self,
+        subject: str,
+        scope_names: List[str],
+        key_length: int,
+        key_secret_override: Optional[str] = None,
+    ) -> APIKeyCreateResult:
+        for _ in range(100):
+            key_id = generate_key_id()
+            if key_id not in self._keys_by_id:
+                break
+        else:
+            raise APIKeyError("failed to generate unique key id")
+
+        if key_secret_override is not None:
+            key_secret = key_secret_override
+            if len(key_secret) < 32:
+                raise ValueError("key_secret_override must be at least 32 chars")
+        else:
+            key_secret = generate_key_secret(key_length)
+
+        key_hash = hash_key_secret(key_secret)
+        prefix = get_key_prefix(key_secret, self._prefix_length)
+
+        if key_hash in self._keys_by_hash:
+            raise APIKeyError("key hash collision detected")
+
+        if prefix in self._prefix_index:
+            existing_ids = self._prefix_index[prefix]
+            for existing_id in existing_ids:
+                existing_record = self._keys_by_id.get(existing_id)
+                if existing_record and not existing_record.key.revoked:
+                    raise APIKeyPrefixCollisionError(
+                        f"key prefix collision: {prefix}"
+                    )
+
+        key = APIKey(
+            key_id=key_id,
+            subject=subject,
+            scopes=frozenset(scope_names),
+            prefix=prefix,
+            created_at=self._clock.now(),
+            revoked=False,
+            revoked_at=None,
+        )
+
+        record = _KeyRecord(
+            key=key,
+            key_hash=key_hash,
+            usage_window=_UsageWindow(window_seconds=self._window_seconds),
+        )
+
+        self._keys_by_id[key_id] = record
+        self._keys_by_hash[key_hash] = key_id
+        self._keys_by_subject.setdefault(subject, set()).add(key_id)
+        self._prefix_index.setdefault(prefix, set()).add(key_id)
+
+        return APIKeyCreateResult(
+            key_id=key_id,
+            subject=subject,
+            scopes=frozenset(scope_names),
+            key_secret=key_secret,
+            prefix=prefix,
+            created_at=key.created_at,
+        )
+
     def create_key(
         self,
         subject: str,
-        scopes: List[str],
+        scopes: List,
         key_length: int = 48,
     ) -> APIKeyCreateResult:
         if not subject:
             raise ValueError("subject cannot be empty")
         if scopes is None:
             raise ValueError("scopes cannot be None")
+        if key_length < 32:
+            raise ValueError("key_length must be at least 32")
+
+        scope_names = self._normalize_scopes(scopes)
 
         with self._lock:
-            for _ in range(100):
-                key_id = generate_key_id()
-                if key_id not in self._keys_by_id:
-                    break
-            else:
-                raise APIKeyError("failed to generate unique key id")
-
-            key_secret = generate_key_secret(key_length)
-            key_hash = hash_key_secret(key_secret)
-            prefix = get_key_prefix(key_secret, self._prefix_length)
-
-            if key_hash in self._keys_by_hash:
-                raise APIKeyError("key hash collision detected")
-
-            if prefix in self._prefix_index:
-                existing_ids = self._prefix_index[prefix]
-                for existing_id in existing_ids:
-                    existing_record = self._keys_by_id.get(existing_id)
-                    if existing_record and not existing_record.key.revoked:
-                        raise APIKeyPrefixCollisionError(
-                            f"key prefix collision: {prefix}"
-                        )
-
-            key = APIKey(
-                key_id=key_id,
+            return self._create_key_internal(
                 subject=subject,
-                scopes=frozenset(scopes),
-                prefix=prefix,
-                created_at=self._clock.now(),
-                revoked=False,
-                revoked_at=None,
+                scope_names=scope_names,
+                key_length=key_length,
+                key_secret_override=None,
             )
 
-            record = _KeyRecord(
-                key=key,
-                key_hash=key_hash,
-                usage_window=_UsageWindow(window_seconds=self._window_seconds),
-            )
+    def create_key_with_secret(
+        self,
+        subject: str,
+        scopes: List,
+        key_secret: str,
+    ) -> APIKeyCreateResult:
+        if not subject:
+            raise ValueError("subject cannot be empty")
+        if scopes is None:
+            raise ValueError("scopes cannot be None")
+        if not key_secret or len(key_secret) < 32:
+            raise ValueError("key_secret must be at least 32 characters")
 
-            self._keys_by_id[key_id] = record
-            self._keys_by_hash[key_hash] = key_id
-            self._keys_by_subject.setdefault(subject, set()).add(key_id)
-            self._prefix_index.setdefault(prefix, set()).add(key_id)
+        scope_names = self._normalize_scopes(scopes)
 
-            return APIKeyCreateResult(
-                key_id=key_id,
+        with self._lock:
+            return self._create_key_internal(
                 subject=subject,
-                scopes=frozenset(scopes),
-                key_secret=key_secret,
-                prefix=prefix,
-                created_at=key.created_at,
+                scope_names=scope_names,
+                key_length=len(key_secret),
+                key_secret_override=key_secret,
             )
 
     def get_key(self, key_id: str) -> APIKeyInfo:
@@ -200,27 +262,31 @@ class APIKeyManager:
                     result.append(self._make_key_info(record))
             return result
 
+    def _validate_key(self, key_secret: str) -> _KeyRecord:
+        key_hash = hash_key_secret(key_secret)
+        key_id = self._keys_by_hash.get(key_hash)
+        if key_id is None:
+            raise InvalidAPIKeyError("invalid api key")
+        record = self._keys_by_id[key_id]
+        if record.key.revoked:
+            raise APIKeyRevokedError(
+                f"api key has been revoked: {record.key.key_id}"
+            )
+        return record
+
+    def _record_usage(self, record: _KeyRecord) -> None:
+        now = self._clock.now()
+        record.total_uses += 1
+        record.last_used_at = now
+        record.usage_window.record(now)
+
     def verify_key(self, key_secret: str) -> APIKeyInfo:
         if not key_secret:
             raise ValueError("key_secret cannot be empty")
 
         with self._lock:
-            key_hash = hash_key_secret(key_secret)
-            key_id = self._keys_by_hash.get(key_hash)
-            if key_id is None:
-                raise InvalidAPIKeyError("invalid api key")
-
-            record = self._keys_by_id[key_id]
-            if record.key.revoked:
-                raise APIKeyRevokedError(
-                    f"api key has been revoked: {record.key.key_id}"
-                )
-
-            now = self._clock.now()
-            record.total_uses += 1
-            record.last_used_at = now
-            record.usage_window.record(now)
-
+            record = self._validate_key(key_secret)
+            self._record_usage(record)
             return self._make_key_info(record)
 
     def check_permission(self, key_secret: str, required_scope: str) -> bool:
@@ -230,9 +296,9 @@ class APIKeyManager:
             raise ValueError("required_scope cannot be empty")
 
         with self._lock:
-            key_info = self.verify_key(key_secret)
+            record = self._validate_key(key_secret)
             return self._scope_registry.has_scope(
-                set(key_info.scopes), required_scope
+                set(record.key.scopes), required_scope
             )
 
     def require_permission(self, key_secret: str, required_scope: str) -> APIKeyInfo:
@@ -242,14 +308,14 @@ class APIKeyManager:
             raise ValueError("required_scope cannot be empty")
 
         with self._lock:
-            key_info = self.verify_key(key_secret)
+            record = self._validate_key(key_secret)
             if not self._scope_registry.has_scope(
-                set(key_info.scopes), required_scope
+                set(record.key.scopes), required_scope
             ):
                 raise APIKeyPermissionDeniedError(
                     f"insufficient permissions: requires '{required_scope}'"
                 )
-            return key_info
+            return self._make_key_info(record)
 
     def revoke_key(self, key_id: str) -> bool:
         if not key_id:

@@ -36,7 +36,6 @@ class PathNormalizer:
             return "."
 
         is_absolute = path.startswith("/")
-        trailing_slash = path.endswith("/") and len(path) > 1
 
         parts = self._split_into_components(path)
         normalized_parts = self._process_components(parts, is_absolute)
@@ -91,11 +90,6 @@ class PathNormalizer:
             return "/" + "/".join(components) if components else "/"
         else:
             return "/".join(components) if components else "."
-
-    def normalize_case(self, path: str) -> str:
-        if not self._case_sensitive:
-            return path.lower()
-        return path
 
     def are_equal(self, path1: str, path2: str) -> bool:
         norm1 = self.normalize(path1)

@@ -1,0 +1,5 @@
+你实现的凭据轮换编排器功能模块实现存在一些问题，需要修复：
+1. router.py 的 record_metrics 方法在记录旧凭据指标时，会无条件将新凭据的连续失败计数器清零。在灰度切流期间，被路由到旧凭据的请求会意外抹除新凭据的故障计数，导致连续失败阈值永远达不到从而无法触发自动回退。
+2. router.py 的 register_rotation 方法在校验轮换名称已存在时抛出了 RotationNotFoundError 异常，但实际原因是"轮换已存在"而非"轮换不存在"，异常语义与实际错误原因矛盾。
+3. orchestrator.py 的 perform_write 方法在不需要写入某一侧时（如 COMPLETED 阶段不写旧侧），会将对应 success 标志置为 False 返回，但实际并未发生写入失败。WriteResult 没有区分"未尝试写入"和"写入失败"两种状态，导致业务监控误报。
+修复后重新运行 poetry run pytest tests/credential/ -q，需要让所有测试通过。

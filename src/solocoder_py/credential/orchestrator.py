@@ -377,8 +377,8 @@ class CredentialRotator:
             state = self._get_state_or_raise(name)
             now = self._clock.now()
 
-            old_success = True
-            new_success = True
+            old_success: Optional[bool] = None
+            new_success: Optional[bool] = None
             old_error: Optional[str] = None
             new_error: Optional[str] = None
 
@@ -397,6 +397,7 @@ class CredentialRotator:
             )
 
             if should_write_old:
+                old_success = True
                 try:
                     self._write_target.write_old(state.config.old_credential, data)
                 except Exception as e:
@@ -410,6 +411,7 @@ class CredentialRotator:
                     state.write_failure_records.append(record)
 
             if should_write_new:
+                new_success = True
                 try:
                     self._write_target.write_new(state.config.new_credential, data)
                 except Exception as e:
@@ -422,14 +424,11 @@ class CredentialRotator:
                     )
                     state.write_failure_records.append(record)
 
-            if not should_write_old:
-                old_success = False
-            if not should_write_new:
-                new_success = False
-
             self._store.save(state)
 
             return WriteResult(
+                old_attempted=should_write_old,
+                new_attempted=should_write_new,
                 old_success=old_success,
                 new_success=new_success,
                 old_error=old_error,

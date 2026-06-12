@@ -3,7 +3,9 @@ import pytest
 from solocoder_py.pathnorm import (
     InMemorySymlinkResolver,
     InvalidPathError,
+    MaxSymlinkFollowsError,
     PathNormalizer,
+    PathNotFoundError,
     PathResolver,
     SymlinkLoopError,
 )
@@ -12,13 +14,14 @@ from .conftest import make_normalizer, make_resolver
 
 class TestSymlinkLoopDetection:
     def test_direct_self_loop(self):
-        r = make_resolver(symlinks={"/a": "/a"})
+        r = make_resolver(symlinks={"/a": "/a"}, directories={"/a"})
         with pytest.raises(SymlinkLoopError):
             r.resolve("/a")
 
     def test_two_element_loop(self):
         r = make_resolver(
             symlinks={"/a": "/b", "/b": "/a"},
+            directories={"/a", "/b"},
         )
         with pytest.raises(SymlinkLoopError):
             r.resolve("/a/c")
@@ -26,6 +29,7 @@ class TestSymlinkLoopDetection:
     def test_three_element_loop(self):
         r = make_resolver(
             symlinks={"/a": "/b", "/b": "/c", "/c": "/a"},
+            directories={"/a", "/b", "/c"},
         )
         with pytest.raises(SymlinkLoopError):
             r.resolve("/a/x")
@@ -38,20 +42,37 @@ class TestSymlinkLoopDetection:
                 "/c": "/d",
                 "/d": "/b",
             },
+            directories={"/a", "/b", "/c", "/d"},
         )
         with pytest.raises(SymlinkLoopError):
             r.resolve("/a/e")
 
     def test_exceed_max_symlink_follows(self):
         symlinks = {}
+        directories = set()
         for i in range(50):
             symlinks[f"/link{i}"] = f"/link{i + 1}"
-        r = make_resolver(symlinks=symlinks)
-        with pytest.raises(SymlinkLoopError):
+            directories.add(f"/link{i}")
+        directories.add("/link50")
+        r = make_resolver(symlinks=symlinks, directories=directories)
+        with pytest.raises(MaxSymlinkFollowsError):
             r.resolve("/link0")
 
+    def test_max_symlink_follows_error_contains_info(self):
+        symlinks = {}
+        directories = set()
+        for i in range(50):
+            symlinks[f"/link{i}"] = f"/link{i + 1}"
+            directories.add(f"/link{i}")
+        directories.add("/link50")
+        r = make_resolver(symlinks=symlinks, directories=directories)
+        with pytest.raises(MaxSymlinkFollowsError) as exc_info:
+            r.resolve("/link0")
+        assert "40" in str(exc_info.value)
+        assert exc_info.value.max_follows == 40
+
     def test_loop_error_contains_path_info(self):
-        r = make_resolver(symlinks={"/loop": "/loop"})
+        r = make_resolver(symlinks={"/loop": "/loop"}, directories={"/loop"})
         with pytest.raises(SymlinkLoopError) as exc_info:
             r.resolve("/loop/test")
         assert "/loop" in str(exc_info.value)
@@ -78,24 +99,63 @@ class TestIllegalCharacterHandling:
 
 
 class TestMissingComponentInSymlinkResolve:
-    def test_missing_intermediate_component(self):
-        r = make_resolver()
+    def test_missing_intermediate_component_raises(self):
+        r = make_resolver(directories={"/a"})
+        with pytest.raises(PathNotFoundError) as exc_info:
+            r.resolve("/a/b/c/d")
+        assert exc_info.value.component == "b"
+        assert "b" in str(exc_info.value)
+
+    def test_last_component_missing_is_allowed(self):
+        r = make_resolver(directories={"/a", "/a/b", "/a/b/c"})
         result = r.resolve("/a/b/c/d")
         assert result == "/a/b/c/d"
 
-    def test_symlink_in_nonexistent_parent(self):
+    def test_symlink_with_existing_parent(self):
         r = make_resolver(
-            symlinks={"/a/b": "/x"},
+            symlinks={"/a/b": "/x/y"},
+            directories={"/a", "/x", "/x/y"},
         )
         result = r.resolve("/a/b/c")
-        assert "/x" in result or result.endswith("/c")
+        assert result == "/x/y/c"
 
-    def test_resolver_with_nonexistent_symlink_target(self):
+    def test_resolver_with_nonexistent_symlink_target_intermediate(self):
         r = make_resolver(
             symlinks={"/a": "/nonexistent/target"},
+            directories={"/a"},
         )
-        result = r.resolve("/a/b")
-        assert result == "/nonexistent/target/b"
+        with pytest.raises(PathNotFoundError) as exc_info:
+            r.resolve("/a/b")
+        assert exc_info.value.component == "nonexistent"
+
+    def test_symlink_target_last_component_missing_allowed(self):
+        r = make_resolver(
+            symlinks={"/a": "/x/y"},
+            directories={"/a", "/x"},
+        )
+        result = r.resolve("/a")
+        assert result == "/x/y"
+
+
+class TestPathNotFoundErrorScenarios:
+    def test_absolute_path_first_component_missing(self):
+        r = make_resolver()
+        with pytest.raises(PathNotFoundError):
+            r.resolve("/a/b")
+
+    def test_relative_path_intermediate_missing(self):
+        r = make_resolver(directories={"a"})
+        with pytest.raises(PathNotFoundError):
+            r.resolve("a/b/c/d")
+
+    def test_relative_path_all_components_exist_but_last(self):
+        r = make_resolver(directories={"a", "a/b", "a/b/c"})
+        result = r.resolve("a/b/c/d")
+        assert result == "a/b/c/d"
+
+    def test_exists_returns_false_on_missing_component(self):
+        r = make_resolver(directories={"/a"})
+        assert r.exists("/a/b/c") is False
 
 
 class TestCaseSensitiveDifferentPaths:

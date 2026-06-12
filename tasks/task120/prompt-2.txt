@@ -1,0 +1,7 @@
+你实现的 pathnorm 路径规范化工具模块存在一些代码质量问题需要修复：
+1. normalizer.py 的 normalize 方法中存在一个计算了但从未被使用的 trailing_slash 变量，该变量是死代码，没有接入结果构造流程，需清理或接入。
+2. resolver.py 的 _resolve_component_by_component 方法中存在一个定义了但从未被读取或写入的 current_path 变量，属于死代码，需清理。
+3. resolver.py 在符号链接跟随次数超过上限时抛出的是 SymlinkLoopError 异常，但"超过最大跟随次数"与"检测到符号链接循环"是两个不同的终止原因，一条 50 级非循环的链式符号链接不应被误报为循环，需区分这两种场景。
+4. exceptions.py 中定义了 PathNotFoundError 异常，但在整个 pathnorm 包的生产代码中从未有任何路径实际抛出该异常。提示词要求考虑"路径中某个中间组件不存在时符号链接解析如何处理"，当前实现在遇到不存在的组件时既不报错也不标记缺失，需要让 PathNotFoundError 在其应有的场景中被实际抛出。
+5. normalizer.py 定义了 normalize_case 公共方法，但该方法既未被包内任何生产代码调用，也未被任何测试覆盖，属于未使用的多余 API，需移除或接入实际调用路径。
+修复后重新运行 poetry run pytest tests/pathnorm/ -q，需要让所有测试通过。

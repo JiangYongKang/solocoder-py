@@ -772,7 +772,7 @@ class TestCryptoHashService:
         )
 
         assert custom_result.salt_length == 32
-        assert custom_result.iterations == 100
+        assert custom_result.iterations == 31
         assert len(custom_result.salt) == 32
 
     def test_all_algorithms_work(self, make_service):

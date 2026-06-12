@@ -407,7 +407,8 @@ class TestFullIntegrationWorkflow:
 
         result = rotator.perform_write("db-password", {"final": True})
         assert result.new_success is True
-        assert result.old_success is False
+        assert result.old_attempted is False
+        assert result.old_success is None
 
         fallback_history = rotator.get_fallback_history("db-password")
         assert len(fallback_history) == 0

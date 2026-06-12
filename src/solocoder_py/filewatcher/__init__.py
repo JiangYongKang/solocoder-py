@@ -1,4 +1,6 @@
 from .exceptions import (
+    DebouncerError,
+    DebouncerNotRunningError,
     EventSourceError,
     FileWatcherAlreadyRunningError,
     FileWatcherError,
@@ -19,6 +21,8 @@ __all__ = [
     "InvalidGlobPatternError",
     "InvalidPathError",
     "EventSourceError",
+    "DebouncerError",
+    "DebouncerNotRunningError",
     "ChangeType",
     "FileEvent",
     "MemoryEventSource",

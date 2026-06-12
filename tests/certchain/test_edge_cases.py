@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from solocoder_py.seat.clock import ManualClock
 from solocoder_py.certchain import (
     Certificate,
     CertificateBuilder,
@@ -14,6 +13,7 @@ from solocoder_py.certchain import (
     TrustAnchorStore,
     EmptyTrustAnchorError,
     CRLExpiredError,
+    ManualClock,
 )
 from .conftest import MemoryCRLFetcher
 

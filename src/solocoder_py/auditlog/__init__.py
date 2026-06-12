@@ -6,6 +6,7 @@ from .exceptions import (
 )
 from .models import (
     AuditLogEntry,
+    ChainState,
     VerificationResult,
     VerificationReport,
     compute_hash,
@@ -19,6 +20,7 @@ __all__ = [
     "TimestampRegressionError",
     "InvalidIndexError",
     "AuditLogEntry",
+    "ChainState",
     "VerificationResult",
     "VerificationReport",
     "compute_hash",

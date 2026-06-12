@@ -143,7 +143,7 @@ class TestComplexPaths:
     def test_symlink_with_dotdot(self):
         r = make_resolver(
             symlinks={"/a/b": "/x/y/../z"},
-            directories={"/x/z"},
+            directories={"/a", "/a/b", "/x", "/x/z"},
         )
         result = r.resolve("/a/b/c")
         assert result == "/x/z/c"
@@ -151,7 +151,7 @@ class TestComplexPaths:
     def test_symlink_with_many_slashes(self):
         r = make_resolver(
             symlinks={"/a": "/x"},
-            directories={"/x/b"},
+            directories={"/a", "/x", "/x/b"},
         )
         assert r.resolve("///a//b///c") == "/x/b/c"
 
@@ -172,7 +172,7 @@ class TestResolverEdgeCases:
     def test_resolve_symlink_to_root(self):
         r = make_resolver(
             symlinks={"/a": "/"},
-            directories={"/"},
+            directories={"/a", "/", "/b"},
         )
         assert r.resolve("/a/b/c") == "/b/c"
 

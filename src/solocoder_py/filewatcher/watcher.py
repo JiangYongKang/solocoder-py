@@ -13,7 +13,7 @@ from .exceptions import (
     InvalidPathError,
 )
 from .glob_filter import GlobFilter
-from .models import FileEvent
+from .models import ChangeType, FileEvent
 
 
 class FileWatcher:
@@ -91,18 +91,22 @@ class FileWatcher:
             return
 
         if not self._is_path_under_root(event.path):
-            return
+            if not (event.is_rename and event.old_path is not None and self._is_path_under_root(event.old_path)):
+                return
 
         if event.is_rename and event.old_path is not None:
             if not self._is_path_under_root(event.old_path):
-                return
-
-        if not self._filter.matches(event.path):
-            return
+                if not self._is_path_under_root(event.path):
+                    return
 
         if event.is_rename and event.old_path is not None:
-            if not self._filter.matches(event.old_path):
-                pass
+            new_path_passes = self._filter.matches(event.path)
+            old_path_passes = self._filter.matches(event.old_path)
+            if not new_path_passes and not old_path_passes:
+                return
+        else:
+            if not self._filter.matches(event.path):
+                return
 
         self._debouncer.add_event(event)
 
@@ -116,25 +120,25 @@ class FileWatcher:
             return False
 
     def _handle_directory_event(self, event: FileEvent) -> None:
-        if event.change_type == "created":
-            path_str = str(event.path)
-            try:
-                if self._event_source.is_directory(event.path) or path_str.endswith("/") or path_str.endswith("\\"):
-                    self._event_source.add_watch(event.path, is_dir=True, exists=True)
-            except Exception:
-                pass
+        if event.change_type != ChangeType.CREATED:
+            return
+
+        if not self._event_source.is_directory(event.path):
+            return
+
+        try:
+            self._event_source.add_watch(event.path, is_dir=True, exists=True)
+        except Exception as e:
+            raise FileWatcherError(
+                f"Failed to add watch for new directory {event.path}: {e}"
+            ) from e
 
     def _on_debounced_events(self, events: List[FileEvent]) -> None:
         if not self._is_running:
             return
 
-        filtered_events: List[FileEvent] = []
-        for event in events:
-            if self._filter.matches(event.path):
-                filtered_events.append(event)
-
-        if filtered_events:
-            self._callback(filtered_events)
+        if events:
+            self._callback(events)
 
     def tick(self, current_time: Optional[datetime] = None) -> None:
         if not self._is_running:

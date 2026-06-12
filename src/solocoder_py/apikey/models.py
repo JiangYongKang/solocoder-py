@@ -8,16 +8,35 @@ from dataclasses import dataclass, field
 from typing import FrozenSet, List, Optional, Set
 
 
+def _validate_scope_pattern(name: str) -> None:
+    if not name:
+        raise ValueError("scope name cannot be empty")
+    if name == "*":
+        return
+    parts = name.split(":")
+    for i, p in enumerate(parts):
+        if p == "*" and i != len(parts) - 1:
+            raise ValueError(
+                f"wildcard '*' is only allowed at the end of a scope pattern, "
+                f"got '{name}'"
+            )
+        if p == "":
+            raise ValueError(
+                f"scope pattern cannot contain empty segments, got '{name}'"
+            )
+
+
 def _match_scope_pattern(pattern: str, scope: str) -> bool:
+    _validate_scope_pattern(pattern)
+    if not scope:
+        return False
     if pattern == "*":
         return True
     pattern_parts = pattern.split(":")
     scope_parts = scope.split(":")
     for i, p in enumerate(pattern_parts):
         if p == "*":
-            if i == len(pattern_parts) - 1:
-                return True
-            continue
+            return True
         if i >= len(scope_parts):
             return False
         if p != scope_parts[i]:
@@ -30,8 +49,7 @@ class Scope:
     name: str
 
     def __post_init__(self) -> None:
-        if not self.name:
-            raise ValueError("scope name cannot be empty")
+        _validate_scope_pattern(self.name)
 
     @classmethod
     def parse(cls, spec: str) -> "Scope":
@@ -57,6 +75,10 @@ class ScopeRegistry:
     def register_scope(self, scope: str, implies: Optional[List[str]] = None) -> None:
         if not scope:
             raise ValueError("scope cannot be empty")
+        Scope(name=scope)
+        if implies:
+            for imp in implies:
+                Scope(name=imp)
         self._scopes.add(scope)
         if scope not in self._implications:
             self._implications[scope] = set()
@@ -79,7 +101,8 @@ class ScopeRegistry:
     def has_scope(self, granted_scopes: Set[str], required_scope: str) -> bool:
         effective = self.get_effective_scopes(granted_scopes)
         for granted in effective:
-            if _match_scope_pattern(granted, required_scope):
+            scope_obj = Scope(name=granted)
+            if scope_obj.matches(required_scope):
                 return True
         return False
 

@@ -88,18 +88,32 @@ class WriteFailureRecord:
 
 @dataclass
 class WriteResult:
-    old_success: bool
-    new_success: bool
+    old_attempted: bool
+    new_attempted: bool
+    old_success: Optional[bool]
+    new_success: Optional[bool]
     old_error: Optional[str] = None
     new_error: Optional[str] = None
 
     @property
     def all_succeeded(self) -> bool:
-        return self.old_success and self.new_success
+        if self.old_attempted and self.old_success is not True:
+            return False
+        if self.new_attempted and self.new_success is not True:
+            return False
+        return True
 
     @property
     def any_failed(self) -> bool:
-        return not self.all_succeeded
+        if self.old_attempted and self.old_success is False:
+            return True
+        if self.new_attempted and self.new_success is False:
+            return True
+        return False
+
+    @property
+    def any_attempted(self) -> bool:
+        return self.old_attempted or self.new_attempted
 
 
 @dataclass

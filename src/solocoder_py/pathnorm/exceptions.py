@@ -22,6 +22,17 @@ class SymlinkLoopError(PathNormError):
         super().__init__(msg)
 
 
+class MaxSymlinkFollowsError(PathNormError):
+    def __init__(self, path: str, max_follows: int):
+        self.path = path
+        self.max_follows = max_follows
+        msg = (
+            f"Maximum number of symlink follows ({max_follows}) exceeded "
+            f"while resolving path: {path!r}"
+        )
+        super().__init__(msg)
+
+
 class PathNotFoundError(PathNormError):
     def __init__(self, path: str, component: str = ""):
         self.path = path

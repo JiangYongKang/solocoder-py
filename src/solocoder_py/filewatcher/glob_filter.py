@@ -1,37 +1,37 @@
 from __future__ import annotations
 
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 from .exceptions import InvalidGlobPatternError
 
-try:
-    from fnmatch import fnmatch
-except ImportError:
-    pass
-
 
 def _validate_glob_syntax(pattern: str) -> None:
-    depth = 0
+    bracket_depth = 0
     in_bracket = False
     i = 0
     while i < len(pattern):
         c = pattern[i]
         if c == '[' and not in_bracket:
             in_bracket = True
-            depth += 1
+            bracket_depth += 1
         elif c == ']' and in_bracket:
             in_bracket = False
-            depth -= 1
+            bracket_depth -= 1
         elif c == '*' and i + 1 < len(pattern) and pattern[i + 1] == '*':
-            if i > 0 and pattern[i - 1] != '/':
-                pass
-            if i + 2 < len(pattern) and pattern[i + 2] != '/':
-                pass
+            if i > 0 and pattern[i - 1] not in ('/', '\\'):
+                raise InvalidGlobPatternError(
+                    f"Invalid glob pattern '{pattern}': '**' must be preceded by '/' or at start"
+                )
+            if i + 2 < len(pattern) and pattern[i + 2] not in ('/', '\\'):
+                raise InvalidGlobPatternError(
+                    f"Invalid glob pattern '{pattern}': '**' must be followed by '/' or at end"
+                )
             i += 1
         i += 1
 
-    if depth != 0:
+    if bracket_depth != 0:
         raise InvalidGlobPatternError(
             f"Invalid glob pattern '{pattern}': unmatched bracket"
         )
@@ -98,19 +98,8 @@ class GlobFilter:
         return fnmatch(path_str, pattern) or fnmatch(Path(path_str).name, pattern)
 
     def _match_double_star(self, path_str: str, pattern: str) -> bool:
-        parts = pattern.split("**")
-        if len(parts) != 2:
-            return fnmatch(path_str, pattern)
-
-        prefix, suffix = parts[0], parts[1]
-        prefix = prefix.rstrip("/")
-        suffix = suffix.lstrip("/")
-
-        if prefix and not path_str.startswith(prefix.replace("/", "\\") if "\\" in path_str else prefix):
-            if not fnmatch(path_str, pattern):
-                pass
-
-        path_parts = path_str.replace("\\", "/").split("/")
+        normalized_path = path_str.replace("\\", "/")
+        path_parts = normalized_path.split("/")
         pattern_parts = pattern.split("/")
 
         return self._match_path_parts(path_parts, pattern_parts)

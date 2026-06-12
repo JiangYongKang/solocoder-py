@@ -3,10 +3,63 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import struct
+import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Protocol, Optional
 
-from ..seat.clock import Clock, SystemClock
+
+class Clock(ABC):
+    @abstractmethod
+    def now(self) -> float:
+        ...
+
+    def sleep(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError("Cannot sleep for negative seconds")
+        self._do_sleep(seconds)
+
+    @abstractmethod
+    def _do_sleep(self, seconds: float) -> None:
+        ...
+
+
+class SystemClock(Clock):
+    def now(self) -> float:
+        return time.monotonic()
+
+    def _do_sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+class ManualClock(Clock):
+    def __init__(self, start_time: float = 0.0) -> None:
+        self._current_time: float = start_time
+        self._sleep_history: list[float] = []
+
+    def now(self) -> float:
+        return self._current_time
+
+    def _do_sleep(self, seconds: float) -> None:
+        self._sleep_history.append(seconds)
+        self._current_time += seconds
+
+    def advance(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError("Cannot advance by negative seconds")
+        self._current_time += seconds
+
+    def set(self, time_value: float) -> None:
+        self._current_time = time_value
+
+    @property
+    def sleep_history(self) -> list[float]:
+        return list(self._sleep_history)
+
+
+def _float_to_bytes(value: float) -> bytes:
+    return struct.pack("!d", value)
 
 
 def _generate_serial() -> int:
@@ -34,8 +87,8 @@ def _cert_tbs_bytes(
         subject.encode("utf-8"),
         issuer.encode("utf-8"),
         serial_number.to_bytes(16, "big"),
-        int(not_before).to_bytes(8, "big"),
-        int(not_after).to_bytes(8, "big"),
+        _float_to_bytes(not_before),
+        _float_to_bytes(not_after),
         public_key_id.encode("utf-8"),
     ]
     return b"|".join(parts)
@@ -49,8 +102,8 @@ def _crl_tbs_bytes(
 ) -> bytes:
     parts = [
         issuer.encode("utf-8"),
-        int(this_update).to_bytes(8, "big"),
-        int(next_update).to_bytes(8, "big"),
+        _float_to_bytes(this_update),
+        _float_to_bytes(next_update),
     ]
     for s in sorted(revoked_serials):
         parts.append(s.to_bytes(16, "big"))
@@ -69,7 +122,7 @@ class Certificate:
     signing_secret: bytes = field(repr=False)
 
     def is_valid_at(self, time_sec: float) -> bool:
-        return self.not_before <= time_sec <= self.not_after
+        return int(self.not_before) <= int(time_sec) <= int(self.not_after)
 
     def is_self_signed(self) -> bool:
         return self.subject == self.issuer
@@ -154,7 +207,7 @@ class CRL:
     issuer_signing_secret: bytes = field(repr=False)
 
     def is_valid_at(self, time_sec: float) -> bool:
-        return self.this_update <= time_sec <= self.next_update
+        return int(self.this_update) <= int(time_sec) <= int(self.next_update)
 
     def is_revoked(self, serial_number: int) -> bool:
         return serial_number in self.revoked_serials
@@ -245,6 +298,9 @@ class ValidationResult:
 
 
 __all__ = [
+    "Clock",
+    "SystemClock",
+    "ManualClock",
     "Certificate",
     "CertificateBuilder",
     "CRL",
@@ -252,7 +308,4 @@ __all__ = [
     "CRLFetcher",
     "CertChainClock",
     "ValidationResult",
-    "_generate_serial",
-    "_sign_data",
-    "_verify_signature",
 ]

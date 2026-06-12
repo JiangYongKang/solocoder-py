@@ -116,7 +116,16 @@ class TestEdgeCases:
         assert stats2.total_uses == 7
         assert stats3.total_uses == 0
 
-        assert stats1.scopes if hasattr(stats1, 'scopes') else True
+        info1 = manager.get_key(result1.key_id)
+        info2 = manager.get_key(result2.key_id)
+        info3 = manager.get_key(result3.key_id)
+
+        assert info1.scopes == frozenset(["read"])
+        assert info2.scopes == frozenset(["write"])
+        assert info3.scopes == frozenset(["admin"])
+        assert info1.scopes != info2.scopes
+        assert info2.scopes != info3.scopes
+        assert info1.scopes != info3.scopes
 
     def test_revoking_one_key_does_not_affect_others(self):
         manager = make_manager()
@@ -162,36 +171,44 @@ class TestExceptionBranches:
             manager.require_permission(result.key_secret, "read:files")
 
     def test_key_prefix_collision_detection(self):
-        clock = FakeClock(start_time=1000000.0)
-
-        class CollisionManager(APIKeyManager):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self._generate_calls = 0
-                self._fixed_prefix = "abcdefgh"
-
-            def _make_fixed_key(self, prefix: str, suffix: str) -> str:
-                return prefix + suffix[len(prefix):]
-
         manager = APIKeyManager(prefix_length=8)
 
-        prefix = "abcdefgh"
-        suffix = "x" * 40
-        key = prefix + suffix
-        key_hash = hash_key_secret(key)
+        fixed_prefix = "abcdefgh"
+        suffix1 = "a" * 40
+        suffix2 = "b" * 40
+        key_secret1 = fixed_prefix + suffix1
+        key_secret2 = fixed_prefix + suffix2
 
-        result = manager.create_key("user-1", ["read"])
-        real_prefix = result.prefix
+        result1 = manager.create_key_with_secret(
+            "user-1", ["read"], key_secret1
+        )
+        assert result1.prefix == fixed_prefix
 
-        found_collision = False
-        for _ in range(1000):
-            test_key = generate_key_secret(48)
-            test_prefix = test_key[:8]
-            if test_prefix == real_prefix:
-                found_collision = True
-                break
+        with pytest.raises(
+            APIKeyPrefixCollisionError, match="key prefix collision"
+        ):
+            manager.create_key_with_secret(
+                "user-2", ["write"], key_secret2
+            )
 
-        assert not found_collision or True
+    def test_revoked_prefix_can_be_reused(self):
+        manager = APIKeyManager(prefix_length=8)
+
+        fixed_prefix = "a1b2c3d4"
+        suffix1 = "x" * 40
+        suffix2 = "y" * 40
+        key_secret1 = fixed_prefix + suffix1
+        key_secret2 = fixed_prefix + suffix2
+
+        result1 = manager.create_key_with_secret(
+            "user-1", ["read"], key_secret1
+        )
+        manager.revoke_key(result1.key_id)
+
+        result2 = manager.create_key_with_secret(
+            "user-2", ["write"], key_secret2
+        )
+        assert result2.prefix == fixed_prefix
 
     def test_key_content_only_returned_once(self):
         manager = make_manager()

@@ -46,6 +46,14 @@ class VerificationResult:
 
 
 @dataclass
+class ChainState:
+    length: int
+    genesis_hash: str
+    chain_tip_hash: str
+    hashes: List[str] = field(default_factory=list)
+
+
+@dataclass
 class VerificationReport:
     is_valid: bool
     total_entries: int

@@ -1,0 +1,7 @@
+你实现的 API 密钥管理器功能模块存在一些问题，需要修复：
+1. models.py 中通配符 * 出现在模式非末尾位置时（如 a:*:c）没有拒绝非法输入，continue 逻辑导致通配符段被跳过，使得 a:*:c 可以错误匹配 a:b:c。应约束通配符只能出现在模式末尾，非末尾通配符需要抛出 ValueError。
+2. test_edge_cases.py 的 test_key_prefix_collision_detection 测试没有真正验证前缀碰撞检测逻辑。当前测试只生成一个密钥后随机尝试撞前缀，最后断言 `assert not found_collision or True` 是一个恒真式，APIKeyPrefixCollisionError 从未被触发。提示词要求测试"密钥前缀碰撞的处理"，这个测试需要真实构造两个前缀相同且均未吊销的密钥来验证碰撞异常被正确抛出。
+3. manager.py 的 check_permission 和 require_permission 方法内部调用了 verify_key，verify_key 会递增使用计数。如果业务代码在单次请求中先调用 verify_key 验证密钥再调用 check_permission 检查权限，同一请求会被重复计数两次，导致使用统计失真。权限检查方法不应把权限验证本身计为一次新的使用事件。
+4. models.py 中定义的 Scope 类在核心管理器 APIKeyManager 中从未被使用。create_key 接收字符串列表而非 Scope 对象，check_permission 也直接传递原始字符串，权限匹配完全绕过了 Scope.matches 方法。README.md 将 Scope 列为独立核心类，但实际上它只是一个装饰性的包装类，暴露给用户的接口与文档描述不一致。
+5. test_edge_cases.py 的 test_multiple_keys_same_subject_independent 测试中第 119 行断言 `assert stats1.scopes if hasattr(stats1, 'scopes') else True` 是无效断言。UsageStats 数据类没有 scopes 属性，hasattr 始终返回 False，断言退化为恒真式。需要替换为有意义的断言，验证三个密钥的作用域是否各自独立。
+修复后重新运行 poetry run pytest tests/apikey/ -q，需要让所有测试通过。

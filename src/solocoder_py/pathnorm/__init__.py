@@ -1,5 +1,6 @@
 from .exceptions import (
     InvalidPathError,
+    MaxSymlinkFollowsError,
     PathNotFoundError,
     PathNormError,
     SymlinkLoopError,
@@ -19,6 +20,7 @@ __all__ = [
     "InvalidPathError",
     "PathNotFoundError",
     "SymlinkLoopError",
+    "MaxSymlinkFollowsError",
     "CaseSensitivity",
     "PathType",
     "PathInfo",

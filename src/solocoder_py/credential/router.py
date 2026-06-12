@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 from .enums import CredentialVersion
-from .exceptions import InvalidTrafficPercentageError, RotationNotFoundError
+from .exceptions import (
+    InvalidTrafficPercentageError,
+    RotationAlreadyExistsError,
+    RotationNotFoundError,
+)
 from .models import TrafficStats
 
 
@@ -52,7 +56,9 @@ class TrafficRouter:
 
         with self._lock:
             if rotation_name in self._rotations:
-                raise RotationNotFoundError(f"rotation '{rotation_name}' already registered")
+                raise RotationAlreadyExistsError(
+                    f"rotation '{rotation_name}' already registered"
+                )
             self._rotations[rotation_name] = _RotationRoutingState(
                 old_credential=old_credential,
                 new_credential=new_credential,
@@ -120,8 +126,7 @@ class TrafficRouter:
             if version == CredentialVersion.OLD:
                 if is_error:
                     state.stats.old_errors += 1
-                state.stats.new_consecutive_failures = 0
-            else:
+            elif version == CredentialVersion.NEW:
                 if is_error:
                     state.stats.new_errors += 1
                     state.stats.new_consecutive_failures += 1

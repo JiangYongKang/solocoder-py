@@ -8,6 +8,41 @@ from .conftest import FakeClock, make_manager
 
 
 class TestUsageTrackingBasics:
+    def test_check_permission_does_not_increment_usage(self):
+        manager = make_manager()
+        result = manager.create_key("user-1", ["read:x", "write:x"])
+
+        for _ in range(5):
+            manager.check_permission(result.key_secret, "read:x")
+        manager.require_permission(result.key_secret, "write:x")
+
+        stats = manager.get_usage_stats(result.key_id)
+        assert stats.total_uses == 0
+        assert stats.last_used_at is None
+
+    def test_verify_key_increments_usage(self):
+        manager = make_manager()
+        result = manager.create_key("user-1", ["read"])
+
+        for _ in range(3):
+            manager.verify_key(result.key_secret)
+
+        stats = manager.get_usage_stats(result.key_id)
+        assert stats.total_uses == 3
+
+    def test_mixed_calls_only_verify_counts(self):
+        manager = make_manager()
+        result = manager.create_key("user-1", ["read", "write"])
+
+        manager.verify_key(result.key_secret)
+        manager.check_permission(result.key_secret, "read")
+        manager.require_permission(result.key_secret, "write")
+        manager.verify_key(result.key_secret)
+        manager.check_permission(result.key_secret, "read")
+
+        stats = manager.get_usage_stats(result.key_id)
+        assert stats.total_uses == 2
+
     def test_verify_key_increments_total_uses(self):
         manager = make_manager()
         result = manager.create_key("user-1", ["read"])

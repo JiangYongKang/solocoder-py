@@ -7,6 +7,7 @@ import pytest
 
 from solocoder_py.filewatcher import (
     ChangeType,
+    DebouncerNotRunningError,
     EventDebouncer,
     EventSourceError,
     FileEvent,
@@ -289,7 +290,8 @@ class TestDebouncerErrors:
     def test_add_event_when_not_running(self, event_callback) -> None:
         debouncer = make_debouncer(event_callback)
         event = FileEvent.created(Path("test.txt"), make_timestamp(0))
-        debouncer.add_event(event)
+        with pytest.raises(DebouncerNotRunningError, match="debouncer is not running"):
+            debouncer.add_event(event)
         assert debouncer.pending_count() == 0
 
     def test_stop_when_not_running(self, event_callback) -> None:

@@ -216,7 +216,7 @@ class DirTreeDiffEngine:
         if strategy == "ignore":
             return []
 
-        if strategy == "detect":
+        if strategy in ("detect", "follow"):
             operations: List[DiffOperation] = []
             if node_a is None and node_b is not None:
                 operations.append(

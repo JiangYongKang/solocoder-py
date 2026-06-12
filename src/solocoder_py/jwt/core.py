@@ -168,8 +168,7 @@ class JWTService:
             if opts.expire_seconds is not None
             else self._config.default_expire_seconds
         )
-        if expire_seconds > 0:
-            payload["exp"] = now + expire_seconds
+        payload["exp"] = now + expire_seconds
 
         if opts.include_iat:
             payload["iat"] = now
@@ -265,10 +264,10 @@ class JWTService:
         aud = payload["aud"]
 
         expected = self._config.current_service_id
-        if expected is None and self._config.audiences:
-            expected = self._config.audiences[0]
         if expected is None:
-            raise JWTError("Cannot verify aud: no current_service_id or audiences configured")
+            raise JWTError(
+                "Cannot verify aud: current_service_id must be configured for verification"
+            )
 
         if isinstance(aud, str):
             aud_list = [aud]

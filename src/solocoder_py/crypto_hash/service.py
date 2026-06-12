@@ -89,6 +89,7 @@ class CryptoHashService:
                 )
 
         algorithm = get_algorithm(algo_version)
+        effective_iterations = min(effective_iterations, algorithm.max_iterations)
         hash_value = algorithm.hash(data, salt, effective_iterations)
 
         return HashResult(
@@ -115,8 +116,9 @@ class CryptoHashService:
                 f"Stored salt length {len(stored_hash.salt)} does not match recorded {stored_hash.salt_length}"
             )
 
+        clamped_iterations = min(stored_hash.iterations, algorithm.max_iterations)
         computed_hash = algorithm.hash(
-            data, stored_hash.salt, stored_hash.iterations
+            data, stored_hash.salt, clamped_iterations
         )
         matches = constant_time_compare(computed_hash, stored_hash.hash_value)
 

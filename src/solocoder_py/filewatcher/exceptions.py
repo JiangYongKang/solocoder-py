@@ -23,3 +23,11 @@ class InvalidPathError(FileWatcherError):
 
 class EventSourceError(FileWatcherError):
     pass
+
+
+class DebouncerError(FileWatcherError):
+    pass
+
+
+class DebouncerNotRunningError(DebouncerError):
+    pass
