@@ -1,9 +1,9 @@
 产物不满意：
-1. rewriter.py 的 _extract_path 方法虽然引入了 urlparse 做结构化解析，避免了在 scheme、host 等组件上的误匹配，但返回值仍包含查询参数部分：`f"{path}?{parsed.query}"`。提示词第 3 点明确要求将匹配限定到路径部分以排除查询参数中的误匹配，当前实现并未做到。当 URL 为 `http://example.com/products?filter=api` 且改写规则为 `r"/api"` 时，_extract_path 返回 `/products?filter=api`，`self.pattern.search(path)` 仍会在 query string 中命中 "api" 而错误返回 True，同时 rewrite 方法中的 `rule.pattern.sub(rule.replacement, path_with_query)` 也会对查询参数执行替换。根因是模型只考虑了去掉 URL 中的协议和域名部分，未区分 path 和 query 的语义边界，应改为 `_extract_path` 只返回 `parsed.path`，matches 和 rewrite 中后续的匹配和替换也相应只作用于路径部分，查询参数保持原样透传。
+1. rewriter.py 的 _extract_path 方法虽然引入了 urlparse 做结构化解析，但返回值仍包含查询参数部分 `f"{path}?{parsed.query}"`。提示词第 3 点明确要求将匹配限定到路径部分以排除查询参数中的误匹配，当前实现并未做到。当 URL 为 `http://example.com/products?filter=api` 且改写规则为 `r"/api"` 时，_extract_path 返回 `/products?filter=api`，`self.pattern.search(path)` 仍会在 query string 中命中 "api" 而错误返回 True，rewrite 方法也会对查询参数执行替换。原因是没有区分 path 和 query 的语义边界，应改为 _extract_path 只返回 parsed.path，匹配和替换也相应只作用于路径部分。
 
 过程不满意：
-1. 模型在收到提示词后的第一步就调用了 `todo_write` 创建了 5 项子任务计划，然后才开始用 `view_files` 依次读取四个需要修复的源文件。提示词规范明确要求不能在刚收到任务时就创建 TodoList，应先分析问题再规划。先规划后阅读代码的做法导致模型对实际代码状态的认知滞后于计划，虽然本次任务中模型的计划项与提示词的 4 个问题一一对应偏差不大，但这种行为模式在更复杂的修复任务中容易导致计划粒度与实际代码结构不匹配。
+1. 模型在收到提示词后的第一步就调用了 todo_write 创建了 5 项子任务计划，然后才开始读取需要修复的源文件。规范要求不能一收到任务就创建 TodoList，应先分析问题再规划。虽然本次计划项与提示词吻合度较高，但这种模式在复杂任务中容易导致计划与实际不匹配。
 
-2. 模型在编辑 connection_pool.py 时首次替换操作失败（状态为 failed），随后换了一种替换方式才成功。首次失败说明模型在没有充分确认当前代码内容的情况下就提交了替换操作，属于"边改边试"的工作方式。正确做法是在编辑每个文件前先用 Read 确认要修改区域的精确代码内容，对照 diff 思路确认替换字符串与目标匹配后再执行一次性替换。
+2. 模型在编辑 connection_pool.py 时首次替换操作失败，随后换了一种方式才成功。这说明模型在没有充分确认当前代码内容的情况下就提交了替换操作。正确做法是在编辑每个文件前先用 Read 确认要修改区域的精确代码内容再执行一次性替换。
 
-3. 模型在完成所有修复后直接运行 `poetry run pytest` 看到 33 个测试全部通过，但未补充针对查询参数 URL 改写场景的回归测试。提示词第 3 点描述的缺陷场景是"查询参数中出现的匹配词也会错误触发改写"，修复后理应构造一条带查询参数且参数值恰好包含匹配词的测试用例来验证修复是否彻底。当前所有 URL 改写测试的请求 URL 均不包含查询参数，导致 _extract_path 仍将 query 纳入匹配范围的半修复状态未被任何测试发现，如果后续有人回退这个改动测试也完全感知不到。
+3. 模型在所有修复完成后直接运行 pytest 看到 33 个测试通过，但未补充针对查询参数 URL 改写场景的回归测试。提示词第 3 点描述的缺陷修复后，理应构造一条带查询参数且参数值恰好包含匹配词的测试用例来验证修复是否彻底，但当前所有 URL 改写测试均不包含查询参数，导致半修复状态未被任何测试发现。

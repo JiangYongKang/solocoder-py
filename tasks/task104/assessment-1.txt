@@ -1,12 +1,21 @@
 产物不满意：
-1. session.py 的 `_send_ping` 方法在每次发送第二次及以后的 Ping 帧时，无条件将 `missed_pongs` 加 1（第258-259行），同时 `_tick_heartbeat` 方法又在第247-248行根据 `time_since_pong >= ping_interval + pong_timeout` 对已经大于 0 的 missed_pongs 再次递增。两端同时计数导致 missed_pongs 增长速度为实际丢失数的两倍。当用户配置 `max_missed_pongs=3` 时，实际只需连续 2 次未收到 Pong 就会被判定心跳超时，与提示词"连续多次未收到 Pong 回复则判定连接已断开"的语义矛盾。根本原因是 missed_pongs 的递增逻辑分散在两个独立位置且缺乏互斥控制，应在 `_tick_heartbeat` 中统一管理 missed_pongs 的增减，`_send_ping` 只负责发送帧而不修改计数器。
-2. session.py 的 `_on_heartbeat_timeout` 方法在判定心跳超时后会抛出 `HeartbeatTimeoutError` 异常（第281行），而 `tick` 方法调用 `_tick_heartbeat` 后没有捕获该异常，导致 `tick` 方法中断，紧随其后的 `_tick_reconnect` 不会被调用到。这意味着心跳超时断开后，重连流程不会自动启动，需要外部再次调用 `tick` 才会进入重连，与提示词"主动关闭会话"后应自动衔接重连流程的预期脱节。根本原因是把异常当作控制流来终止 tick 但忽略了后续重连分支的衔接，应在 `_on_heartbeat_timeout` 中将状态设为 DISCONNECTED 后直接用 return 而不是抛异常，让 tick 自然走到 `_tick_reconnect`。
-3. session.py 的 `_tick_heartbeat` 方法在第247行使用 `last_ping_sent_at` 来计算 time_since_pong 的计时基准，但变量名和语义都是"自上次 Pong 以来的时间"，实际计算的是"自上次 Ping 以来的时间"。如果某个时间窗口内 ping_interval 较短而 pong_timeout 较长，会导致超时判定滞后：明明已经过了 pong_timeout 却因为距离上次 ping 不够 ping_interval + pong_timeout 而不会触发超时。根因是把 ping 的发送时间当作 pong 的等待起点，应改为使用 `last_pong_received_at` 作为超时计算的基准，让 pong_timeout 独立于 ping_interval 生效。
-4. manager.py 的 `tick_all` 方法在第88-90行用 try/except Exception: pass 静默吞掉了所有异常，包括 `HeartbeatTimeoutError` 和 `ReconnectionFailedError`。当某个会话因心跳超时或重连失败需要被上层感知时，这些关键状态变更事件被完全丢弃，调用者无法知道有会话已变为 PERMANENTLY_CLOSED 或被心跳踢出。提示词要求"连续多次未收到 Pong 回复则判定连接已断开"，但这里连判定结果都不可见。根本原因是过度宽泛的异常吞噬，应区分业务异常与系统异常，对 `HeartbeatTimeoutError` 和 `ReconnectionFailedError` 做日志记录或回调通知，而不是无条件 pass。
-5. session.py 的 `send` 方法在第161行直接引用 `self._reorder_buffer._config.max_sequence`，跨越了两个类的私有属性边界，破坏了 ReorderBuffer 的封装。如果 ReorderBuffer 的 _config 被替换或重命名，send 方法会意外失败。根本原因是 session 不应该知道 reorder_buffer 内部的 config 结构，应由 ReorderBuffer 提供一个公开方法或属性来暴露 max_sequence，或者在 session 创建时将其传入 ReorderConfig 并自行保存引用。
-6. src/solocoder_py/websocket/README.md 第147行声称 `ReorderConfig` 的默认 `max_sequence=65535`，但 models.py 第68行的实际默认值是 `2**32-1`（即 4294967295）。文档与代码不一致会导致使用者对序列号溢出时机产生错误预期，在 65535 处以为会环绕切换而实际要等到 42 亿才触发。根本原因是编写文档时未核对实际默认值，应确保文档中的配置参数默认值与 models.py 中的 `__post_init__` 或字段定义完全一致。
+1. session.py 的 _send_ping 方法在每次发送第二次及以后的 Ping 帧时，无条件将 missed_pongs 加 1，同时 _tick_heartbeat 方法又根据 time_since_pong >= ping_interval + pong_timeout 对已经大于 0 的 missed_pongs 再次递增。两端同时计数导致 missed_pongs 增长速度为实际丢失数的两倍。当用户配置 max_missed_pongs=3 时，实际只需连续 2 次未收到 Pong 就会被判定心跳超时。原因是 missed_pongs 的递增逻辑分散在两个独立位置且缺乏互斥控制，应在 _tick_heartbeat 中统一管理。
+
+2. session.py 的 _on_heartbeat_timeout 方法在判定心跳超时后抛出 HeartbeatTimeoutError 异常，而 tick 方法调用 _tick_heartbeat 后没有捕获该异常，导致紧随其后的 _tick_reconnect 不会被调用到。心跳超时断开后重连流程不会自动启动。原因是把异常当作控制流来终止 tick 但忽略了后续重连分支的衔接，应在 _on_heartbeat_timeout 中将状态设为 DISCONNECTED 后直接用 return 而不是抛异常。
+
+3. session.py 的 _tick_heartbeat 方法使用 last_ping_sent_at 来计算 time_since_pong 的计时基准，但变量名和语义都是"自上次 Pong 以来的时间"，实际计算的是"自上次 Ping 以来的时间"。如果 ping_interval 较短而 pong_timeout 较长，会导致超时判定滞后。原因是把 ping 的发送时间当作 pong 的等待起点，应改为使用 last_pong_received_at 作为超时计算的基准。
+
+4. manager.py 的 tick_all 方法用 try/except Exception: pass 静默吞掉了所有异常，包括 HeartbeatTimeoutError 和 ReconnectionFailedError。当某个会话因心跳超时或重连失败需要被上层感知时，这些关键状态变更事件被完全丢弃。应区分业务异常与系统异常，对关键事件做日志记录或回调通知。
+
+5. session.py 的 send 方法直接引用 self._reorder_buffer._config.max_sequence，跨越了两个类的私有属性边界，破坏了 ReorderBuffer 的封装。如果 ReorderBuffer 的 _config 被替换或重命名，send 会意外失败。应由 ReorderBuffer 提供一个公开方法或属性来暴露 max_sequence。
+
+6. README.md 声称 ReorderConfig 的默认 max_sequence=65535，但 models.py 实际默认值是 2**32-1（4294967295）。文档与代码不一致会导致使用者对序列号溢出时机产生错误预期。原因是编写文档时未核对实际默认值。
+
 过程不满意：
-1. 模型在刚收到提示词后（COT 第3行）直接就调用了 `todo_write` 创建了 7 项子任务计划，随即才去阅读 retry 包下的现有代码结构和文档。创建计划时尚未了解项目的代码风格、测试目录结构、已有的 clock 和 exceptions 等可复用设施，导致后续计划粒度与实际模块边界不匹配，多次在 todo_write 中调整为 10 项或 12 项。正确的做法是先分析需求文档和现有代码骨架，理清模块职责边界和复用机会后再制定执行计划。
-2. 从 COT 第540行到约第2200行（约占整个思考过程 60% 以上），模型反复尝试几十种方式来解决 Python 环境问题：切换 pyenv 版本、直接调用 poetry venv Python、安装 pip、检查目录结构、写临时调试脚本等。每次尝试都重复执行 `python --version` 和 `sys.prefix` 检查，但从未停下来分析报错的根本原因——`sys.base_prefix` 解析到了项目目录而非 Python 安装目录。这属于典型的试错式环境排查，正确做法是先阅读一次完整的错误信息（其中明确指出了 `stdlib dir = 'C:\Users\vince\GoletaLab\SoloCoder-3\solocoder-py\Lib'` 的异常路径），定位到是目录中存在干扰 Python 路径解析的文件（如 pyvenv.cfg）导致的问题，再一次性修复。
-3. 模型在完成 session.py、manager.py 等核心代码编写后未运行任何测试就直接继续编写测试代码，并且在 COT 第2191行运行完测试后立即在第2193行声称"所有 84 个测试都通过了"，直接跳过验证环节就更新 todo 和写 README。但在此之前的 COT 第557-607行区域，第一次运行测试就已经出现了多个失败用例（如 `test_reconnect_preserves_session_context` 等），模型被迫在第 608-612 行回头修改核心逻辑和测试文件。这是"写完即认为已完成"的幻觉行为，正确做法是每完成一个模块就立即运行对应测试，以测试结果驱动下一轮修复。
-4. 模型在发现测试失败后（COT 第608行），没有先阅读每个失败用例的错误信息和堆栈就直接总结出三个修复方向（重连逻辑、序列号环绕、max_attempts=0），然后对 session.py 的 `_tick_reconnect`、`disconnect`、`tick` 等多个方法进行了大范围修改（第794-858行区域使用了至少四次 edit_file_search_replace），同时还要修改测试文件来适配新的实现行为。这是典型的试错式调试——没有逐个分析失败用例的具体断言和堆栈，就直接动了核心逻辑中的多个方法，如果修改方向有偏差会引发更多连带问题。正确做法是依次分析每个失败用例指向的具体代码行，做最小范围的精确修正。
+1. 模型在刚收到提示词后直接就调用了 todo_write 创建了 7 项子任务计划，随即才去阅读 retry 包下的现有代码结构和文档。创建计划时尚未了解项目代码风格、测试目录结构、已有的可复用设施，导致后续计划粒度与实际模块边界不匹配，多次调整任务数。正确做法是先分析需求文档和现有代码骨架再制定执行计划。
+
+2. 从思考过程约 60% 以上篇幅，模型反复尝试几十种方式来解决 Python 环境问题：切换 pyenv 版本、直接调用 poetry venv Python、安装 pip、写临时调试脚本等。每次尝试都重复执行 python --version 等检查但从未停下来分析报错的根本原因——sys.base_prefix 解析到了项目目录而非 Python 安装目录。这属于典型的试错式环境排查，正确做法是先阅读错误信息定位异常路径再一次性修复。
+
+3. 模型在完成核心代码编写后未运行任何测试就直接继续编写测试代码，并在运行完测试后立即声称"所有 84 个测试都通过了"，直接跳过验证环节就更新 todo 和写 README。但此前的第一次运行测试就已经出现了多个失败用例，模型被迫回头修改核心逻辑。这是"写完即认为已完成"的幻觉行为，正确做法是每完成一个模块就立即运行对应测试以测试结果驱动下一轮修复。
+
+4. 模型在发现测试失败后没有先阅读每个失败用例的错误信息和堆栈就直接总结出修复方向，然后对 session.py 的多个方法进行了大范围修改。这是典型的试错式调试——没有逐个分析失败用例的具体断言和堆栈就直接动了核心逻辑中的多个方法。正确做法是依次分析每个失败用例指向的具体代码行做大最小范围的精确修正。

@@ -1,7 +1,9 @@
 产物不满意：
-1. README.md 中"循环检测与深度限制"小节第 96 行的深度限制说明仍然写的是"超过则抛出 `DNSCNAMELoopError`"，而提示词要求将深度超限与循环引用分离为两种独立异常类型，模型在 exceptions.py 中确实新增了 `DNSCNAMEChainTooLongError` 异常类并在异常职责表中正确更新了描述，但漏掉了正文中这一处对旧异常名的引用。这导致 README 文档内部不一致，读者在表格里看到深度超限归属 `DNSCNAMEChainTooLongError` 翻到正文又被告知抛的是 `DNSCNAMELoopError`，容易产生混淆。根本原因是模型更新文档时只替换了表格中一眼可见的那一行，没有搜索 README 全文确认所有提及旧异常名的地方是否都需要改动。正确做法是用搜索工具扫描整个 README 找到全部 `DNSCNAMELoopError` 出现位置，逐项判断是否需要替换为 `DNSCNAMEChainTooLongError`。
-2. test_resolver.py 的 TestStubResolverNormalFlow 类中新增的 `test_multi_level_cname_calls_upstream_for_each_level` 测试用例与 TestStubResolverBoundaryConditions 类中已有的 `test_multi_level_cname_chain` 测试用例构建了完全相同的四级 CNAME 链数据（a→b→c→final 带 A 记录），并重复验证最终解析结果。模型修复 MockUpstreamResolver 后为 `test_cname_chain_followed` 增加了 `assert upstream.call_count == 2` 以验证逐级跟踪不再被 Mock 打包返回，但未对 `test_multi_level_cname_chain` 做相同的 call_count 断言更新。如果 MockUpstreamResolver 未来意外回归重新引入 CNAME 跟随逻辑，这个旧测试会静默通过无法暴露问题，等于白费了此次修复的意义。应该将新增的调用次数和缓存验证逻辑合并到已有用例中并移除重复的测试，而不是新建一个近重复用例却放任旧用例缺乏关键断言。
+1. README.md 中"循环检测与深度限制"小节第 96 行仍然写的是"超过则抛出 DNSCNAMELoopError"，而提示词要求将深度超限与循环引用分离为两种独立异常类型，模型在 exceptions.py 中新增了 DNSCNAMEChainTooLongError 但 README 正文遗漏了这一处引用。这导致文档内部不一致——表格中深度超限归属新异常类型翻到正文又被告知抛旧异常名，容易产生混淆。原因是只替换了表格中一眼可见的那一行，没有搜索 README 全文确认所有提及旧异常名的地方。正确做法是扫描全部 DNSCNAMELoopError 出现位置并逐项判断是否需要替换。
+
+2. test_resolver.py 中新增的 test_multi_level_cname_calls_upstream_for_each_level 与已有的 test_multi_level_cname_chain 构建了完全相同的四级 CNAME 链数据并重复验证最终解析结果。模型为新增用例增加了 assert upstream.call_count == 2 的断言以验证逐级跟踪，但未对旧用例做相同的 call_count 更新。如果 MockUpstreamResolver 未来回归重新引入 CNAME 跟随逻辑，这个旧测试会静默通过无法暴露问题。应该将新增验证逻辑合并到已有用例中并移除重复测试。
 
 过程不满意：
-1. 模型在回复第一句说完"我来逐步修复这些问题。首先创建任务计划"后，立即调用 todo_write 创建了 7 项子任务，此时代码文件尚未打开阅读。之后才用 view_files 并行读取 exceptions.py、resolver.py、__init__.py、conftest.py 和 test_resolver.py。这违反了"先分析问题再规划"的原则，在未完整了解现有代码结构和异常类继承关系的情况下就制定了执行计划。虽然该任务提示词已明确列出三个修复点且最终执行结果总体正确，但跳过代码阅读直接写 todo 的习惯在更复杂场景下容易导致计划粒度与实际模块边界不匹配、遗漏隐藏的关联改动。正确做法是先用 view_files 或 grep 理解当前代码状态、确认所有受影响的文件和调用链，然后基于实际代码现状制定 todo 列表。
-2. 模型在步骤 5 中只读取了 README.md 一次并做了一处 edit_file_search_replace，但修改范围仅限异常职责表格中的一行旧描述替换为新描述，未对 README 全文做系统性扫描。模型后续在 GetDiagnostics 检查中也只验证了 Python 代码文件无 lint 错误，完全没有检查 README 中是否还存在指向旧异常名 `DNSCNAMELoopError` 的残留文本。这属于局部修补式的文档更新，视野限于表格而未扩展至正文，导致深度限制说明行仍然引用错误的异常类型名。正确做法是在文档更新步骤中，找到并替换文档中所有与改动相关的过时描述，而不只是其中一行。
+1. 模型在回复第一句说完"我来逐步修复这些问题。首先创建任务计划"后立即调用 todo_write 创建了 7 项子任务，此时代码文件尚未打开阅读。这违反了"先分析问题再规划"的原则，在未了解现有代码结构和异常类继承关系的情况下就制定计划。虽然提示词已列出三个修复点且执行结果总体正确，但跳过代码阅读直接写 todo 在更复杂场景下容易遗漏隐藏的关联改动。正确做法是先理解当前代码状态再制定计划。
+
+2. 模型在步骤 5 中只读取了 README.md 一次并做了一处编辑，修改范围仅限异常职责表格中的一行旧描述替换为新描述，未对 README 全文做系统性扫描。模型后续在 GetDiagnostics 检查中也只验证了 Python 代码文件无 lint 错误，完全没有检查 README 中是否还存在指向旧异常名的残留文本。正确做法是在文档更新步骤中找到并替换文档中所有与改动相关的过时描述。

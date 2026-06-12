@@ -1,9 +1,13 @@
 产物不满意：
-1. 模型在 pool.py 第 5 行导入了 `concurrent.futures.Future` 但全文没有任何地方引用该类型。`submit()` 方法返回的 `future` 变量虽然类型是 `Future`，但代码中不需要显式导入即可使用，该导入属于冗余死代码。在当前代码规模下无运行影响，但属于代码整洁性缺陷，应删除未使用的导入。
-2. 提示词指出的核心问题——"当 join 超时返回且线程仍在运行时，该线程继续持有被关闭连接对象的引用执行健康检查，缺乏任何取消或等待机制"——在使用 ThreadPoolExecutor 后并未得到根本解决。borrow 方法中 `future.result(timeout=hc_timeout)` 超时后会调用 `future.cancel()`，但 Python 的 `Future.cancel()` 只能取消尚未开始执行的任务，对已经在 executor 线程中运行的健康检查无效，该线程会继续执行 `conn.health_check()` 直到方法返回。虽然 ThreadPoolExecutor 通过线程复用减少了创建销毁开销、`future.result(timeout=)` 提供了比 `thread.join(timeout=)` 更规范的超时语义，但"无法取消运行中的健康检查"这一核心缺陷依然存在。在 mock 场景下 `health_check` 内部仅做 sleep 和 `_healthy` 属性读取，不产生实际问题，但在生产级连接池中如果健康检查涉及真实 socket 操作且耗时超预期，被销毁的连接仍会被后台线程持有引用执行 I/O 操作。
-3. 模型删除了 `_try_borrow_idle` 辅助方法并将其逻辑全部内联到 borrow 的 while 循环中，使 borrow 方法从之前约 30 行的委托式实现变为近 80 行的内联实现。本轮提示词对 borrow 的两个修改要求——健康检查失败后调用 `_destroy_connection` 替代 `conn.close()`、用 `ThreadPoolExecutor` 替代原始 `threading.Thread`——完全可以在保留 `_try_borrow_idle` 方法的框架下完成，例如在该方法内部将线程创建替换为 executor 提交、将 `conn.close()` 替换为 `self._destroy_connection(conn)`。移除辅助方法并进行结构性重写的改动范围超出需求，且将空闲连接选择、健康检查、状态更新、等待/重试四条逻辑混入单一方法，增加了后续维护时定位具体职责的认知负担。
+1. 模型在 pool.py 第 5 行导入了 concurrent.futures.Future 但全文没有任何地方引用该类型。submit() 方法返回的 future 变量虽然类型是 Future，但代码中不需要显式导入即可使用，该导入属于冗余死代码，应删除。
+
+2. 提示词指出的核心问题——"当 join 超时返回且线程仍在运行时，该线程继续持有被关闭连接对象的引用执行健康检查，缺乏任何取消或等待机制"——在使用 ThreadPoolExecutor 后并未得到根本解决。borrow 方法中 future.result(timeout=hc_timeout) 超时后会调用 future.cancel()，但 Python 的 Future.cancel() 只能取消尚未开始执行的任务，对已经在 executor 线程中运行的健康检查无效。虽然 ThreadPoolExecutor 通过线程复用减少了创建销毁开销，但"无法取消运行中的健康检查"这一核心缺陷依然存在。
+
+3. 模型删除了 _try_borrow_idle 辅助方法并将其逻辑全部内联到 borrow 的 while 循环中，使 borrow 方法从约 30 行变为近 80 行。提示词的两个修改要求——健康检查失败后调用 _destroy_connection 替代 conn.close()、用 ThreadPoolExecutor 替代原始 Thread——完全可以在保留 _try_borrow_idle 方法的框架下完成。移除辅助方法并进行结构性重写的改动范围超出需求。
 
 过程不满意：
-1. 模型在 `_eviction_loop` 中添加了 try/except 异常保护、在 `PoolStats` 中新增 `eviction_error_count` 和 `health_check_timeout_count` 统计字段、在 `MockTCPConnection` 中新增 `_health_check_delay` 和 `set_health_check_delay` 方法、在测试文件中新增 `TestEvictionThreadProtection` 类（含 2 个测试用例），这些变更全部不属于本轮提示词要求的范围。提示词只要求两项修复：统一销毁路径、使用 concurrent.futures 实现健康检查超时。模型在完成要求修复的同时自发添加了驱逐异常保护这一额外功能，虽然功能实现正确且该部分测试通过，但属于范围蔓延，反映了模型在边界意识上的不足——应在完成需求驱动的修复后停止而非自主扩展功能范围。
-2. 模型在刚收到提示词后第一步便用 todo_write 创建了 3 项任务计划，然后再读取 pool.py 了解当前代码结构。虽然本轮模型修改效率较高，4 次编辑后一次性测试通过，但"先规划再阅读代码"的顺序仍然存在评估-3 中已指出的类似问题。prompt-4 的两个修复需求（销毁路径统一、健康检查并发控制）是明确的局部修改，不需要在阅读代码前就进行计划拆解。模型应该在阅读当前 pool.py 的 borrow 方法中现有健康检查实现（线程创建方式、销毁代码路径）之后，再制定最小修改方案。虽然本轮未因该顺序错误产生实质性返工，但先定计划后理解代码的做法容易导致计划与实际情况不匹配。
-3. 模型在 `_eviction_loop` 新增异常保护后，又单独新增了 `TestEvictionThreadProtection` 测试类并通过 monkey-patch `_evict_idle_connections` 方法的方式编写了驱逐异常场景的测试用例，但模型在过程总结中只列出了两个提示词要求修复项的完成情况，完全未提及驱逐异常保护这一自发新增功能及其对应测试。这种未在总结中如实反映实际变更范围的行为属于信息披露不完整，评估人员在审查时需要通过 git diff 才能发现模型做了超出提示词范围的工作。正确做法是在最终总结中明确区分"按提示词要求完成的修复"和"自行新增的补充功能"，以便评估人员准确判断本轮的任务完成边界。
+1. 模型在 _eviction_loop 中添加了 try/except 异常保护、在 PoolStats 中新增统计字段、在 MockTCPConnection 中新增方法、在测试文件中新增测试类，这些变更全部不属于本轮提示词要求的范围。提示词只要求两项修复：统一销毁路径、使用 concurrent.futures 实现健康检查超时。模型在完成要求修复的同时自发添加了额外功能，属于范围蔓延，应在完成需求驱动的修复后停止而非自主扩展功能范围。
+
+2. 模型在刚收到提示词后第一步便用 todo_write 创建了 3 项任务计划，然后再读取 pool.py 了解当前代码结构。"先规划再阅读代码"的顺序存在 assessment-3 中已指出的类似问题。prompt-4 的两个需求是明确的局部修改，不需要在阅读代码前就进行计划拆解。虽然本轮未因此产生实质返工，但先定计划后理解代码的做法容易导致计划与实际情况不匹配。
+
+3. 模型在 _eviction_loop 新增异常保护后又单独新增了测试类，但模型在过程总结中只列出了两个提示词要求修复项的完成情况，完全未提及驱逐异常保护这一自发新增功能及其对应测试。这种未在总结中如实反映实际变更范围的行为属于信息披露不完整。正确做法是在最终总结中明确区分"按提示词要求完成的修复"和"自行新增的补充功能"。
