@@ -1,5 +1,5 @@
 产物不满意：
-1. watcher.py 的 _handle_directory_event 方法在捕获异常时使用了 `except Exception as e` 的宽泛捕获。当 MemoryEventSource.add_watch 内部因编程错误抛出 AttributeError 或 TypeError 等非预期异常时，这些严重错误也会被 logger.warning 静默吞掉，导致目录监控失败的原因被掩盖为普通日志而非触发告警。根因是模型在设计降级策略时未区分可恢复的运行时错误和不可恢复的编程错误，直接将所有异常一视同仁处理。正确做法是区分异常类型，对可恢复的环境异常（如 add_watch 因路径不存在或权限不足失败）用 logger.warning 记录继续执行，对不可恢复的编程错误仍应向上抛出或至少用 logger.error 记录。
+1. watcher.py 的 _handle_directory_event 方法在捕获异常时使用了 `except Exception as e` 的宽泛捕获。当 add_watch 内部因编程错误抛出 AttributeError 等非预期异常时，这些严重错误也会被 logger.warning 静默吞掉，目录监控失败的原因被掩盖为普通日志而非触发告警。根因是模型未区分可恢复运行时错误和不可恢复编程错误，将所有异常一视同仁。正确做法是区分异常类型，对环境异常用 logger.warning 记录继续执行，对编程错误仍应向上抛出或用 logger.error 记录。
 
 过程不满意：
 1. 模型在 session-cot-3 的第一步读取 watcher.py 和 models.py 后，直接声明"我已理解三个问题的本质"就开始修改代码，全程没有对原始三个条件块的具体结构做任何书面分析。模型没有说明三个块之间的逻辑依赖关系是什么、Block 1 的哪种检查导致 Block 2 成为死代码、合并方案如何保证与原有预期逻辑等价。这种"读完就改"的行为缺乏中间推理文档化，应先在思考过程中展开分析原始逻辑的布尔表达式推导，再设计合并方案，确保重构不引入新的逻辑漏洞。

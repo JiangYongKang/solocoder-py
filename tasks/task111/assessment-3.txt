@@ -1,6 +1,6 @@
 产物不满意：
-1. service.py 的 verify 方法在第 119 行新增了 `clamped_iterations = min(stored_hash.iterations, algorithm.max_iterations)` 对存储的迭代值做二次 min 限幅。提示词只要求修复 check_rehash_needed 的比较逻辑和恢复算法层防御性限幅，未要求修改 verify 中哈希重算的迭代值来源。hash 方法已通过 `effective_iterations = min(effective_iterations, algorithm.max_iterations)` 将限幅后的迭代值存入 HashResult，verify 中对已在此保护下的存储值再做 min 处理是冗余操作，且语义上修改了 verify 的契约——原本是"按存储的迭代数重新计算哈希"变为"按算法上限封顶后重新计算"，模型未评估如果存在绕过服务层 hash 方法生成的非标哈希时此改动会导致验证失败的场景。
-2. algorithms.py 的 `constant_time_compare` 函数在第 81-86 行被完全重写，从使用 `if len(a) != len(b): return False` 配合 `zip(a, b)` 异或比对的方式改为基于 `max(len(a), len(b))` 遍历的逐字节异或累积方式。这个改动不在提示词要求范围内，提示词要求的两项修复均不涉及该函数的修改。模型的 COT 中完全没有提到 constant_time_compare 的修改，既没有说明为什么在第 3 轮顺带处理这个第 1 轮就指出的时序安全问题，也没有分析这个额外改动是否会与当前的修复目标产生冲突，导致标注人员无法判断该改动是有意设计还是无意的连带修改。
+1. service.py 的 verify 新增 clamped_iterations = min(stored_hash.iterations, algorithm.max_iterations) 对存储迭代值二次限幅。提示词只要求修复 check_rehash_needed 和恢复算法层限幅，未涉及 verify 中迭代值来源。hash 已将限幅值存入 HashResult，verify 对已受保护值再做 min 是冗余，且修改了 verify 契约——从"按存储迭代重算"变"按上限封顶"，未评估绕过服务层 hash 的非标哈希场景下的验证失败风险。
+2. algorithms.py 的 constant_time_compare 函数被完全重写，从 if len(a) != len(b): return False 配合 zip(a, b) 异或比对改为基于 max(len(a), len(b)) 遍历的逐字节异或累积方式。此改动不在提示词要求范围内，提示词要求的两项修复均不涉及该函数。COT 中完全没有提到此修改，既没说明为什么在第 3 轮顺带处理第 1 轮就指出的时序安全问题，也没分析此额外改动是否会与当前修复目标冲突，标注人员无法判断该改动是有意设计还是无意连带修改。
 
 过程不满意：
 1. 模型在收到提示词后的第 1 步就直接用 `todo_write` 创建了 5 项子任务计划，之后才使用 `view_files` 逐个读取 algorithms.py、service.py 和 models.py 的代码。这与第 1 轮评估中明确指出的反例完全一致：未经任何分析就制定计划，没有先理解代码现状和问题边界。在第 1 轮评估已点出此问题的情况下，第 3 轮仍重复同样的错误模式，说明模型并未从历史会话的标注反馈中吸收教训改进工作流程。正确做法是先读取全部相关源码、运行测试了解当前状态、理清两个待修复问题的具体影响范围和代码位置，再制定针对性的修复步骤。

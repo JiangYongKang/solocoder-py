@@ -1,5 +1,5 @@
 产物不满意：
-1. models.py 第9行通过 `from ..seat.clock import Clock, SystemClock` 依赖了 seat 包的 Clock 抽象和 SystemClock，而 seat 是另一个任务域的包不属于 certchain。提示词要求"所有相关代码放在 src/solocoder_py/certchain/ 包下"，这个跨包依赖违反了提示词第1条要求和项目规则的包隔离原则。当 seat 包被移除时 certchain 在导入阶段直接崩溃，正确做法是在 certchain 包内自建时钟抽象或直接使用 time 模块，CertChainClock 薄封装类可完全自包含。
+1. models.py 中 `from ..seat.clock import Clock, SystemClock` 依赖了 seat 包的 Clock 抽象，而 seat 是另一个任务域的包不属于 certchain。提示词要求"所有相关代码放在 src/solocoder_py/certchain/ 包下"，这个跨包依赖违反了提示词第1条和包隔离原则。当 seat 包被移除时 certchain 在导入阶段直接崩溃，正确做法是在 certchain 包内自建时钟抽象或直接使用 time 模块。
 2. models.py 的 `_cert_tbs_bytes` 在第37-38行对 not_before 和 not_after 两个 float 时间戳使用 `int()` 截断再序列化到签名数据中，但 `is_valid_at` 以原始 float 值比较。若两张证书其他字段相同仅 not_before 相差 0.5 秒（如 1000.1 和 1000.9），会生成完全相同的 TBS 字节和签名，存在数据完整性漏洞。正确做法是统一时间精度，要么全部截断要么全保留。
 3. validator.py 第101-102行的 `if next_cert.subject != current.issuer: raise ChainBrokenError(...)` 是无法触达的冗余校验。`find_issuer_cert` 内部按主体名称索引返回证书，返回的 subject 一定等于传入的 issuer_name 即 current.issuer，该分支永远不执行，属于无意义的死代码，增加了 `_build_and_verify_chain` 方法的阅读干扰。
 
