@@ -1,0 +1,3 @@
+你实现的 WebSocket 会话管理器模块在第 3 轮修复后仍存在一处遗漏：
+1. session.py 中 _send_ping 方法在捕获 ConnectionClosedError 时将状态置为 DISCONNECTED，但没有检查 max_attempts 是否为 0。模块内 __init__、disconnect、_handle_close_frame、_on_heartbeat_timeout 和 _tick_reconnect 这五个断连路径都已经正确处理 max_attempts == 0 时直接进入 PERMANENTLY_CLOSED 的语义，唯有 _send_ping 的异常处理分支缺失了同一判断。当 max_attempts 为 0 且 _send_ping 触发 ConnectionClosedError 时，状态会先进入 DISCONNECTED 再由 _tick_reconnect 补救为 PERMANENTLY_CLOSED，期间 on_disconnect 回调已被调用但最终状态尚未收敛。请让 _send_ping 的断连行为与其他五个断连路径保持一致。
+2. 修复后重新运行 `poetry run pytest tests/websocket/ -q`，需要让所有测试通过。

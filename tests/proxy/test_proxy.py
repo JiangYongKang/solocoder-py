@@ -546,7 +546,7 @@ class TestRewriterChain:
         assert modified.body == b"original [modified]"
 
     def test_url_rewrite_ignores_query_params_match(self) -> None:
-        rewriter = UrlRewriter().add_rule(r"/api/", "/api/v1/")
+        rewriter = UrlRewriter().add_rule(r"/api", "/api/v1")
 
         request = Request(
             method="GET",
@@ -556,10 +556,24 @@ class TestRewriterChain:
         modified = rewriter.rewrite(request)
 
         assert modified.url == request.url
-        assert "products" in modified.url
+        assert "/products?" in modified.url
         assert "filter=api" in modified.url
         assert "sort=name" in modified.url
-        assert "/api/v1/" not in modified.url
+        assert "/api/v1" not in modified.url
+
+    def test_url_rewrite_path_matches_even_with_query_param_match(self) -> None:
+        rewriter = UrlRewriter().add_rule(r"/api", "/api/v1")
+
+        request = Request(
+            method="GET",
+            url="http://example.com/api/users?ref=api&category=api-docs",
+            headers={},
+        )
+        modified = rewriter.rewrite(request)
+
+        assert "/api/v1/users" in modified.url
+        assert "ref=api" in modified.url
+        assert "category=api-docs" in modified.url
 
     def test_url_rewrite_path_with_query_preserved(self) -> None:
         rewriter = UrlRewriter().add_rule(r"/api/products", "/api/v2/items")

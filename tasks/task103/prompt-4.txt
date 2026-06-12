@@ -1,0 +1,4 @@
+你实现的 TCP 连接池模块在第 3 轮修复后仍有代码质量问题需要处理：
+1. borrow 方法中健康检查失败后直接调用 conn.close() 关闭连接，而 _eviction_loop 中的驱逐逻辑通过 _destroy_connection 方法来关闭连接。这两处销毁路径的行为不一致——_destroy_connection 方法会从 _all_conns 集合中移除连接引用，而 borrow 中的直接 close 路径不会。虽然当前 borrow 中的 close 路径在调用前已从 _all_conns 中删除引用，但两套不同代码路径执行相同的销毁职责会在未来 _destroy_connection 增加新逻辑时产生遗漏风险。请将 borrow 中健康检查失败后的连接销毁统一为调用 _destroy_connection 方法。
+2. borrow 方法中健康检查每次创建一个新的 threading.Thread 并在 join(timeout) 后直接丢弃。当 join 超时返回且线程仍在运行时，该线程继续持有被关闭连接对象的引用执行健康检查，缺乏任何取消或等待机制。虽然 daemon=True 避免了进程退出阻塞，但这种每次创建新线程的模式在高频借出时会产生不必要的线程创建开销。请考虑使用 concurrent.futures 模块来更可控地实现健康检查超时机制。
+3. 修复后重新运行 `poetry run pytest tests/connpool/ -v`，需要让所有测试通过。

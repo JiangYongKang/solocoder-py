@@ -1,0 +1,3 @@
+你实现的 Base64/Base32/Base16 流式编解码器模块在第 3 轮修复后测试代码中仍有质量问题：
+1. test_base64_no_padding_with_line_width 测试中有一条断言为 "assert len(data) % 3 == 0 or (len(data) % 3) != 0"，这是一个逻辑永真式，无论测试数据是什么断言永远通过。类似地，test_base32_no_padding_with_line_width 中的 "assert len(data) % 5 == 0 or (len(data) % 5) != 0" 和 test_base16_no_padding_with_line_width 中的 "assert len(data) % 1 == 0" 同样恒为真。这些断言在形式上看起来在验证数据的块对齐特性，但实际没有任何测试效力——即使后续将测试数据替换为不符合块大小预期的数据，这些断言也不会失败。请将这些永真式替换为有实际验证意义的断言：对 Base64 场景直接用 "assert len(data) % 3 == 0" 验证数据确实是 3 字节的整倍数，对 Base32 场景根据测试意图选择合适的断言，对 Base16 场景移除无效的 % 1 断言。
+2. 修复后重新运行 `poetry run pytest tests/basecodec/ -q`，需要让所有测试通过。

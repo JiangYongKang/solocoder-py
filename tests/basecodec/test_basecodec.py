@@ -384,7 +384,7 @@ class TestLineWidthControl:
 
     def test_base64_no_padding_with_line_width(self):
         data = b"Base64 block is 3 bytes -> 4 chars, so use 3*N length!"
-        assert len(data) % 3 == 0 or (len(data) % 3) != 0
+        assert len(data) % 3 == 0
         encoded = b64encode(data, pad=False, line_width=24)
         assert "\n" in encoded
         assert "=" not in encoded
@@ -395,8 +395,8 @@ class TestLineWidthControl:
         assert decoded == data
 
     def test_base32_no_padding_with_line_width(self):
-        data = b"Base32 block=5bytes->8chars, padding needed often here!"
-        assert len(data) % 5 == 0 or (len(data) % 5) != 0
+        data = b"Base32 block=5bytes->8chars, padding bits exist here!"
+        assert len(data) % 5 != 0
         encoded = b32encode(data, pad=False, line_width=32)
         assert "\n" in encoded
         assert "=" not in encoded
@@ -408,7 +408,6 @@ class TestLineWidthControl:
 
     def test_base16_no_padding_with_line_width(self):
         data = b"Base16 encodes each byte as two hex digits, 1:2 ratio always works cleanly."
-        assert len(data) % 1 == 0
         encoded = b16encode(data, pad=False, line_width=30)
         assert "\n" in encoded
         assert "=" not in encoded

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import warnings
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Deque, Optional, Set
 from collections import deque
 
@@ -42,6 +43,8 @@ class ConnectionPool:
         self._closed: bool = False
         self._eviction_thread: Optional[threading.Thread] = None
         self._eviction_stop_event: threading.Event = threading.Event()
+
+        self._hc_executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
 
         self._stats: PoolStats = PoolStats()
 
@@ -146,26 +149,18 @@ class ConnectionPool:
 
             healthy = False
             timed_out = False
-            result_holder: dict = {}
+            hc_timeout = self._config.health_check_timeout
 
-            def check():
-                try:
-                    result_holder["result"] = conn.health_check(
-                        timeout=self._config.health_check_timeout
-                    )
-                except Exception as e:
-                    result_holder["exception"] = e
-
-            t = threading.Thread(target=check, daemon=True)
-            t.start()
-            t.join(timeout=self._config.health_check_timeout)
-
-            if t.is_alive():
+            try:
+                future = self._hc_executor.submit(
+                    conn.health_check, timeout=hc_timeout
+                )
+                healthy = future.result(timeout=hc_timeout)
+            except FuturesTimeoutError:
                 timed_out = True
-            elif "exception" in result_holder:
+                future.cancel()
+            except Exception:
                 healthy = False
-            else:
-                healthy = result_holder.get("result", False)
 
             with self._lock:
                 if not healthy:
@@ -173,8 +168,7 @@ class ConnectionPool:
                         self._stats.health_check_timeout_count += 1
                     else:
                         self._stats.health_check_failed_count += 1
-                    conn.close()
-                    self._stats.closed_connections += 1
+                    self._destroy_connection(conn)
                     continue
 
                 self._all_conns.add(conn)
@@ -305,6 +299,8 @@ class ConnectionPool:
         if self._eviction_thread is not None:
             self._eviction_thread.join(timeout=5.0)
             self._eviction_thread = None
+
+        self._hc_executor.shutdown(wait=False)
 
     def __enter__(self) -> "ConnectionPool":
         return self

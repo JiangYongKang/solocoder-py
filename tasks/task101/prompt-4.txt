@@ -1,0 +1,3 @@
+你实现的 URL 改写功能在第 3 轮修复后仍有一个测试质量问题需要处理：
+1. 你在 test_url_rewrite_ignores_query_params_match 测试用例中使用了正则模式 r"/api/" 来验证查询参数不会被误匹配。但该缺陷的原始复现条件是不带尾部斜杠的模式 r"/api"，此时 URL "http://example.com/products?filter=api" 中的查询参数 "filter=api" 会在旧代码下被误匹配。由于当前测试中查询参数 "filter=api" 前后字符分别为 "=" 和 "&" 而非斜杠，正则 r"/api/" 无论在修复前还是修复后的代码中都无法命中该查询参数，属于无效回归测试。请修正该测试用例中的正则模式和测试数据，使其能真正验证原始缺陷场景——即模式为 r"/api" 且查询参数中包含不含斜杠包围的独立 "api" 子串时不被误匹配。
+2. 重新运行 `poetry run pytest tests/proxy/ -q`，需要让所有测试通过。
