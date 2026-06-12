@@ -21,18 +21,6 @@ class ConnectionClosedError(WebSocketError):
     pass
 
 
-class HeartbeatTimeoutError(WebSocketError):
-    def __init__(self, missed_pongs: int) -> None:
-        self.missed_pongs = missed_pongs
-        super().__init__(f"Heartbeat timed out after {missed_pongs} missed pongs")
-
-
-class ReconnectionFailedError(WebSocketError):
-    def __init__(self, attempts: int) -> None:
-        self.attempts = attempts
-        super().__init__(f"Reconnection failed after {attempts} attempts")
-
-
 class ReorderBufferOverflowError(WebSocketError):
     def __init__(self, buffer_size: int) -> None:
         self.buffer_size = buffer_size

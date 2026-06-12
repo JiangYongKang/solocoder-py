@@ -602,6 +602,60 @@ class TestHealthCheck:
         assert conn.is_closed is True
         assert pool.stats.health_check_failed_count == 1
 
+    def test_health_check_timeout(self):
+        config = PoolConfig(
+            max_size=5,
+            health_check_on_borrow=True,
+            health_check_timeout=0.1,
+            eviction_interval=0,
+        )
+        pool = ConnectionPool(
+            host="localhost", port=6379, config=config, clock=RealClock()
+        )
+
+        conn1 = pool.borrow()
+        conn1.set_health_check_delay(1.0)
+        pool.return_conn(conn1)
+
+        assert pool.idle_size() == 1
+
+        start = time.monotonic()
+        conn2 = pool.borrow()
+        elapsed = time.monotonic() - start
+
+        assert elapsed >= 0.09
+        assert elapsed < 0.5
+        assert conn2.conn_id != conn1.conn_id
+        assert conn1.is_closed is True
+        assert pool.stats.health_check_timeout_count == 1
+        assert pool.stats.health_check_failed_count == 0
+
+        pool.return_conn(conn2)
+        pool.close()
+
+    def test_health_check_timeout_parameter_used(self):
+        config = PoolConfig(
+            max_size=3,
+            health_check_on_borrow=True,
+            health_check_timeout=0.2,
+            eviction_interval=0,
+        )
+        pool = ConnectionPool(
+            host="localhost", port=6379, config=config, clock=RealClock()
+        )
+
+        conn = pool.borrow()
+        conn.set_health_check_delay(0.05)
+        pool.return_conn(conn)
+
+        conn2 = pool.borrow()
+        assert conn2.conn_id == conn.conn_id
+        assert pool.stats.health_check_timeout_count == 0
+        assert pool.stats.health_check_failed_count == 0
+
+        pool.return_conn(conn2)
+        pool.close()
+
 
 class TestReturnEdgeCases:
     def test_return_closed_connection(self):
@@ -745,5 +799,92 @@ class TestEvictionThread:
             time.sleep(0.3)
 
             assert pool.idle_size() == 0
+        finally:
+            pool.close()
+
+
+class TestEvictionThreadProtection:
+    def test_eviction_error_counted_but_thread_continues(self):
+        clock = ManualClock()
+        config = PoolConfig(
+            max_size=5,
+            idle_timeout=10.0,
+            eviction_interval=0.01,
+        )
+        pool = ConnectionPool(
+            host="localhost", port=6379, config=config, clock=clock
+        )
+
+        try:
+            conn = pool.borrow()
+            pool.return_conn(conn)
+
+            assert pool.idle_size() == 1
+
+            original_evict = pool._evict_idle_connections
+            error_count = 0
+
+            def faulty_evict():
+                nonlocal error_count
+                error_count += 1
+                raise RuntimeError("simulated eviction failure")
+
+            pool._evict_idle_connections = faulty_evict
+
+            time.sleep(0.1)
+
+            assert pool.stats.eviction_error_count >= 1
+
+            pool._evict_idle_connections = original_evict
+
+            clock.advance(15.0)
+            pool.evict_now()
+
+            assert pool.idle_size() == 0
+            assert pool.stats.evicted_count == 1
+        finally:
+            pool.close()
+
+    def test_eviction_error_does_not_stop_eviction(self):
+        clock = ManualClock()
+        config = PoolConfig(
+            max_size=5,
+            idle_timeout=5.0,
+            eviction_interval=0.01,
+        )
+        pool = ConnectionPool(
+            host="localhost", port=6379, config=config, clock=clock
+        )
+
+        try:
+            conn1 = pool.borrow()
+            conn2 = pool.borrow()
+            pool.return_conn(conn1)
+            pool.return_conn(conn2)
+
+            assert pool.idle_size() == 2
+
+            error_triggered = False
+            original_evict = pool._evict_idle_connections
+
+            def faulty_once_evict():
+                nonlocal error_triggered
+                if not error_triggered:
+                    error_triggered = True
+                    raise RuntimeError("first eviction fails")
+                original_evict()
+
+            pool._evict_idle_connections = faulty_once_evict
+
+            time.sleep(0.05)
+
+            assert error_triggered is True
+            assert pool.stats.eviction_error_count >= 1
+
+            clock.advance(10.0)
+            pool.evict_now()
+
+            assert pool.idle_size() == 0
+            assert pool.stats.evicted_count == 2
         finally:
             pool.close()

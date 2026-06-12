@@ -2,9 +2,7 @@ from .clock import Clock, ManualClock, SystemClock
 from .connection import SimulatedWebSocketConnection, create_connected_pair
 from .exceptions import (
     ConnectionClosedError,
-    HeartbeatTimeoutError,
     InvalidSequenceError,
-    ReconnectionFailedError,
     ReorderBufferOverflowError,
     SessionClosedError,
     SessionNotFoundError,
@@ -35,8 +33,6 @@ __all__ = [
     "SessionClosedError",
     "SessionNotFoundError",
     "ConnectionClosedError",
-    "HeartbeatTimeoutError",
-    "ReconnectionFailedError",
     "ReorderBufferOverflowError",
     "InvalidSequenceError",
     "SessionManager",

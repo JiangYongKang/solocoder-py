@@ -1,0 +1,4 @@
+你实现的 WebSocket 会话管理器模块仍存在以下缺陷，需要修复：
+1. session.py 中 _on_heartbeat_timeout 方法在心跳超时断开连接后直接将状态置为 DISCONNECTED，没有检查重连配置的 max_attempts 是否为 0。模块内其它三个断连路径（__init__ 构造方法、disconnect 方法、_handle_close_frame 方法）在处理断连时都会先判断 max_attempts == 0，若为 0 则直接进入 PERMANENTLY_CLOSED 并标记 _closed = True，但 _on_heartbeat_timeout 缺失了这个判断，导致重连被禁用时心跳超时后先进入 DISCONNECTED 再由 _tick_reconnect 补救收敛，中间存在状态不一致的短暂窗口。应让这四个断连路径的行为保持一致。
+2. exceptions.py 中定义的 HeartbeatTimeoutError 和 ReconnectionFailedError 两个异常类在 session.py 中已没有任何代码路径触发它们，__init__.py 的导出列表和 README.md 的"异常类型"章节却仍然将它们列为模块可抛出的异常，用户按文档去导入和捕获这些异常将永远不会生效。需清理 __init__.py、exceptions.py 和 README.md 中的死异常引用，确保文档与代码行为一致。
+3. 修复后重新运行 `poetry run pytest tests/websocket/ -q`，需要让所有测试通过。

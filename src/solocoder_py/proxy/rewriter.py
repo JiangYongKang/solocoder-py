@@ -30,10 +30,7 @@ class UrlRewriteRule:
     def _extract_path(self, url: str) -> str:
         from urllib.parse import urlparse
         parsed = urlparse(url)
-        path = parsed.path or "/"
-        if parsed.query:
-            return f"{path}?{parsed.query}"
-        return path
+        return parsed.path or "/"
 
     def matches(self, request: Request) -> bool:
         if self.method and request.method != self.method:
@@ -64,18 +61,8 @@ class UrlRewriter(RequestRewriter):
                 if rule.matches(request):
                     parsed = urlparse(request.url)
                     path = parsed.path or "/"
-                    if parsed.query:
-                        path_with_query = f"{path}?{parsed.query}"
-                    else:
-                        path_with_query = path
-                    new_path_with_query = rule.pattern.sub(
-                        rule.replacement, path_with_query
-                    )
-                    if "?" in new_path_with_query:
-                        new_path, new_query = new_path_with_query.split("?", 1)
-                    else:
-                        new_path, new_query = new_path_with_query, parsed.query
-                    new_parsed = parsed._replace(path=new_path, query=new_query)
+                    new_path = rule.pattern.sub(rule.replacement, path)
+                    new_parsed = parsed._replace(path=new_path)
                     new_url = urlunparse(new_parsed)
                     modified = request.copy()
                     modified.url = new_url

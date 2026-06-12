@@ -240,7 +240,7 @@ session.tick()
 - `SessionClosedError`: 会话已关闭
 - `SessionNotFoundError`: 会话不存在
 - `ConnectionClosedError`: 连接已关闭
-- `HeartbeatTimeoutError`: 心跳超时
-- `ReconnectionFailedError`: 重连失败
 - `ReorderBufferOverflowError`: 重排缓冲区溢出
 - `InvalidSequenceError`: 无效序列号
+
+> 注意：心跳超时和重连失败不再通过抛出异常通知调用方，而是通过会话状态变更（`state` 属性）和回调函数（`on_disconnect` / `on_reconnect`）来反映。

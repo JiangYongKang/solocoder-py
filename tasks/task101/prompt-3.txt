@@ -1,0 +1,4 @@
+你实现的 URL 改写功能存在遗留缺陷，需要继续修复：
+1. `UrlRewriteRule` 的 `_extract_path` 方法虽然做了结构化解析，但返回值仍包含查询参数部分。当 URL 为 `http://example.com/products?filter=api` 且改写规则为 `r"/api"` 时，`matches` 会在 query string 中命中 "api" 而错误返回 True，同时 `rewrite` 方法中对查询参数也执行了替换，导致查询参数被意外修改。需要确保匹配和替换都只作用于路径部分，查询参数保持原样透传。
+2. 第 2 轮修复后未补充针对查询参数 URL 改写场景的回归测试。当前所有 URL 改写测试的请求 URL 均不包含查询参数，无法验证带查询参数的 URL 不会被误匹配或误替换。需要补充带查询参数且参数值恰好包含匹配词的测试用例。
+3. 重新运行 `poetry run pytest tests/proxy/ -q`，需要让所有测试通过。

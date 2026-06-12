@@ -286,6 +286,9 @@ class WebSocketSession:
         self._reconnect_status = ReconnectStatus()
         if self._on_disconnect:
             self._on_disconnect()
+        if self._reconnect_config.max_attempts == 0:
+            self._state = SessionState.PERMANENTLY_CLOSED
+            self._closed = True
 
     def _tick_reconnect(self) -> None:
         if self._reconnect_config.max_attempts == 0:

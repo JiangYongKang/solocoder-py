@@ -20,6 +20,7 @@ class MockTCPConnection:
     borrow_count: int = 0
     _healthy: bool = True
     _closed: bool = False
+    _health_check_delay: float = 0.0
 
     def connect(self) -> None:
         if self._closed:
@@ -50,9 +51,15 @@ class MockTCPConnection:
         if not self._closed:
             self._healthy = True
 
+    def set_health_check_delay(self, delay_seconds: float) -> None:
+        self._health_check_delay = delay_seconds
+
     def health_check(self, timeout: Optional[float] = None) -> bool:
         if self._closed:
             return False
+        if self._health_check_delay > 0:
+            import time as _time
+            _time.sleep(self._health_check_delay)
         return self._healthy
 
     def send(self, data: bytes) -> None:

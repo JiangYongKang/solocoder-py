@@ -1,0 +1,7 @@
+你实现的 Base64/Base32/Base16 流式编解码器模块仍存在一些代码质量问题和测试覆盖不足的情况，需要修复：
+1. `base.py` 的 `_BaseDecoder.finalize` 方法中，有填充路径和无填充路径各有一段对完整块的循环解码逻辑。由于 `update` 方法在上一轮修复后已能在两种模式下都处理完所有完整块，进入 `finalize` 时 buffer 剩余内容不会再达到一个完整块的大小，导致两处完整块循环体永远不会执行。请清理这些死代码。
+2. `base.py` 的 `_BaseDecoder` 中新增的 `_total_chars` 计数器在 pad=True 模式下每次 `update` 都在累加，但该值从来不被任何逻辑读取或使用，仅在 pad=False 模式的 `finalize` 中用于长度校验。请调整该计数器的维护范围，使其只在真正需要时才计入开销。
+3. `test_base16_line_width_exact_multiple` 测试用 152 字节数据编码为 304 个字符，以行宽 76 折行预期产生 4 行每行 76 字符。当前断言只验证了前两行的长度，未对后两行做等长校验。如果折行逻辑在第二行之后出现偏差而恰好第三行也是 76 字符，该测试无法发现 bug。请补全对所有中间行行长的验证。
+4. `test_streaming_no_padding_with_line_width` 测试中流式解码仅使用了 53 字符这一种切分长度。当切分点更接近编码块边界时，剩余字符的积累方式不同，当前测试无法覆盖这些不同对齐偏差下的解码正确性。请增加不同切分长度的测试用例来暴露边界情况。
+5. `test_base64_no_padding_with_line_width`、`test_base32_no_padding_with_line_width` 和 `test_base16_no_padding_with_line_width` 三个组合场景测试使用了完全相同的测试数据。Base64、Base32、Base16 的编码块大小和位对齐逻辑各不相同，相同数据会掩盖各编码器特有的边界条件。请为每种编码器设计能体现其块大小特性的不同测试数据。
+6. 修复后重新运行 `poetry run pytest tests/basecodec/ -q`，需要让所有测试通过。

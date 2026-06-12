@@ -260,7 +260,8 @@ class _BaseDecoder(ABC):
             raise TypeError("data must be a string")
         filtered = self._filter_whitespace(data)
         self._buffer += filtered
-        self._total_chars += len(filtered)
+        if not self._pad:
+            self._total_chars += len(filtered)
         while len(self._buffer) >= self._chars_per_block:
             if self._pad:
                 has_padding = self._PAD_CHAR in self._buffer[: self._chars_per_block]
@@ -282,31 +283,13 @@ class _BaseDecoder(ABC):
             return result
         data, pad_count = self._validate_and_strip_padding(self._buffer)
         if self._pad:
-            full_blocks = len(data) // self._chars_per_block
-            remainder_start = full_blocks * self._chars_per_block
-            for i in range(full_blocks):
-                start = i * self._chars_per_block
-                end = start + self._chars_per_block
-                block = data[start:end]
-                decoded = self._decode_block(block, 0)
-                self._output.extend(decoded)
-            remainder = data[remainder_start:]
-            if remainder:
-                decoded = self._decode_block(remainder, pad_count)
+            if len(data) > 0:
+                decoded = self._decode_block(data, pad_count)
                 self._output.extend(decoded)
         else:
             expected_bytes = self._validate_no_padding_length(self._total_chars)
-            full_blocks = len(data) // self._chars_per_block
-            remainder_start = full_blocks * self._chars_per_block
-            for i in range(full_blocks):
-                start = i * self._chars_per_block
-                end = start + self._chars_per_block
-                block = data[start:end]
-                decoded = self._decode_block(block, 0)
-                self._output.extend(decoded)
-            remainder = data[remainder_start:]
-            if remainder:
-                decoded = self._decode_block(remainder, 0)
+            if len(data) > 0:
+                decoded = self._decode_block(data, 0)
                 self._output.extend(decoded)
             if len(self._output) != expected_bytes:
                 raise TruncatedInputError(

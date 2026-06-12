@@ -26,6 +26,8 @@ class PoolStats:
     return_count: int = 0
     evicted_count: int = 0
     health_check_failed_count: int = 0
+    health_check_timeout_count: int = 0
+    eviction_error_count: int = 0
 
     @property
     def active_connections(self) -> int:

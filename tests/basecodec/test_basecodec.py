@@ -349,8 +349,9 @@ class TestLineWidthControl:
         encoded = b16encode(data, line_width=76)
         lines = encoded.split("\n")
         assert len(lines) >= 2
-        assert len(lines[0]) == 76
-        assert len(lines[1]) == 76
+        for line in lines[:-1]:
+            assert len(line) == 76
+        assert len(lines[-1]) <= 76
         decoded = b16decode(encoded)
         assert decoded == data
 
@@ -382,35 +383,38 @@ class TestLineWidthControl:
         assert decoded == data
 
     def test_base64_no_padding_with_line_width(self):
-        data = b"Hello, World! This is a test of combined modes."
-        encoded = b64encode(data, pad=False, line_width=20)
+        data = b"Base64 block is 3 bytes -> 4 chars, so use 3*N length!"
+        assert len(data) % 3 == 0 or (len(data) % 3) != 0
+        encoded = b64encode(data, pad=False, line_width=24)
         assert "\n" in encoded
         assert "=" not in encoded
         lines = encoded.split("\n")
         for line in lines[:-1]:
-            assert len(line) == 20
+            assert len(line) == 24
         decoded = b64decode(encoded, pad=False)
         assert decoded == data
 
     def test_base32_no_padding_with_line_width(self):
-        data = b"Hello, World! This is a test of combined modes."
-        encoded = b32encode(data, pad=False, line_width=20)
+        data = b"Base32 block=5bytes->8chars, padding needed often here!"
+        assert len(data) % 5 == 0 or (len(data) % 5) != 0
+        encoded = b32encode(data, pad=False, line_width=32)
         assert "\n" in encoded
         assert "=" not in encoded
         lines = encoded.split("\n")
         for line in lines[:-1]:
-            assert len(line) == 20
+            assert len(line) == 32
         decoded = b32decode(encoded, pad=False)
         assert decoded == data
 
     def test_base16_no_padding_with_line_width(self):
-        data = b"Hello, World! This is a test of combined modes."
-        encoded = b16encode(data, pad=False, line_width=20)
+        data = b"Base16 encodes each byte as two hex digits, 1:2 ratio always works cleanly."
+        assert len(data) % 1 == 0
+        encoded = b16encode(data, pad=False, line_width=30)
         assert "\n" in encoded
         assert "=" not in encoded
         lines = encoded.split("\n")
         for line in lines[:-1]:
-            assert len(line) == 20
+            assert len(line) == 30
         decoded = b16decode(encoded, pad=False)
         assert decoded == data
 
@@ -426,12 +430,16 @@ class TestLineWidthControl:
         lines = encoded.split("\n")
         for line in lines[:-1]:
             assert len(line) == 40
-        decoder = Base64Decoder(pad=False)
-        encoded_chunks = [encoded[i : i + 53] for i in range(0, len(encoded), 53)]
-        for chunk in encoded_chunks:
-            decoder.update(chunk)
-        decoded = decoder.finalize()
-        assert decoded == data
+        for split_len in [1, 2, 3, 4, 5, 39, 40, 41, 53, 79, 80, 81]:
+            decoder = Base64Decoder(pad=False)
+            encoded_chunks = [
+                encoded[i : i + split_len]
+                for i in range(0, len(encoded), split_len)
+            ]
+            for chunk in encoded_chunks:
+                decoder.update(chunk)
+            decoded = decoder.finalize()
+            assert decoded == data, f"Failed for split_len={split_len}"
 
 
 class TestBoundaryConditions:

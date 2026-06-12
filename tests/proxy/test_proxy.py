@@ -545,6 +545,80 @@ class TestRewriterChain:
         assert modified.headers["X-Version"] == "1"
         assert modified.body == b"original [modified]"
 
+    def test_url_rewrite_ignores_query_params_match(self) -> None:
+        rewriter = UrlRewriter().add_rule(r"/api/", "/api/v1/")
+
+        request = Request(
+            method="GET",
+            url="http://example.com/products?filter=api&sort=name",
+            headers={},
+        )
+        modified = rewriter.rewrite(request)
+
+        assert modified.url == request.url
+        assert "products" in modified.url
+        assert "filter=api" in modified.url
+        assert "sort=name" in modified.url
+        assert "/api/v1/" not in modified.url
+
+    def test_url_rewrite_path_with_query_preserved(self) -> None:
+        rewriter = UrlRewriter().add_rule(r"/api/products", "/api/v2/items")
+
+        request = Request(
+            method="GET",
+            url="http://example.com/api/products?category=books&limit=10&ref=api_v1",
+            headers={},
+        )
+        modified = rewriter.rewrite(request)
+
+        assert "/api/v2/items" in modified.url
+        assert "category=books" in modified.url
+        assert "limit=10" in modified.url
+        assert "ref=api_v1" in modified.url
+
+    def test_url_rewrite_query_param_value_not_rewritten(self) -> None:
+        rewriter = UrlRewriter().add_rule(r"users", "accounts")
+
+        request = Request(
+            method="GET",
+            url="http://example.com/users?role=users&next=/users/profile",
+            headers={},
+        )
+        modified = rewriter.rewrite(request)
+
+        assert "/accounts?" in modified.url
+        assert "role=users" in modified.url
+        assert "next=/users/profile" in modified.url
+
+    def test_url_rewrite_no_match_query_only(self) -> None:
+        rewriter = UrlRewriter().add_rule(r"/old-path", "/new-path")
+
+        request = Request(
+            method="GET",
+            url="http://example.com/search?q=old-path&lang=en",
+            headers={},
+        )
+        modified = rewriter.rewrite(request)
+
+        assert modified.url == request.url
+        assert "q=old-path" in modified.url
+        assert "/new-path" not in modified.url
+
+    def test_url_rewrite_complex_path_and_query(self) -> None:
+        rewriter = UrlRewriter().add_rule(r"^/v1/(\w+)$", r"/v2/\1/detail")
+
+        request = Request(
+            method="GET",
+            url="http://example.com/v1/products?v1=true&filter=v1&path=/v1/items",
+            headers={},
+        )
+        modified = rewriter.rewrite(request)
+
+        assert "/v2/products/detail" in modified.url
+        assert "v1=true" in modified.url
+        assert "filter=v1" in modified.url
+        assert "path=/v1/items" in modified.url
+
 
 class TestHeaderFilter:
     def test_case_insensitive_matching(self) -> None:
