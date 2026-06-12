@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import struct
 from typing import Any, Dict
 
 from .buffer import Buffer
@@ -18,6 +17,32 @@ from .models import (
     check_compatibility,
 )
 from .varint import decode_uvarint, decode_varint, encode_uvarint, encode_varint
+
+WIRE_TYPE_VARINT = 0
+WIRE_TYPE_LEN = 2
+
+
+def _field_type_to_wire_type(field_type: FieldType) -> int:
+    if field_type == FieldType.BOOL or field_type in SIGNED_INT_TYPES or field_type in UNSIGNED_INT_TYPES:
+        return WIRE_TYPE_VARINT
+    elif field_type == FieldType.STRING or field_type == FieldType.BYTES:
+        return WIRE_TYPE_LEN
+    else:
+        raise SchemaError(f"unsupported field type: {field_type}")
+
+
+def _encode_tag(field_id: int, wire_type: int) -> bytes:
+    tag = (field_id << 3) | wire_type
+    return encode_uvarint(tag)
+
+
+def _decode_tag(buf: Buffer) -> tuple[int, int]:
+    tag = decode_uvarint(buf)
+    field_id = tag >> 3
+    wire_type = tag & 0x07
+    if field_id <= 0:
+        raise DeserializationError(f"invalid field id in tag: {field_id}")
+    return field_id, wire_type
 
 
 def _encode_string(value: str) -> bytes:
@@ -76,6 +101,19 @@ def _decode_integer(field_type: FieldType, buf: Buffer) -> int:
         raise SchemaError(f"not an integer field type: {field_type}")
 
 
+def _skip_by_wire_type(buf: Buffer, wire_type: int) -> None:
+    if wire_type == WIRE_TYPE_VARINT:
+        while True:
+            b = buf.read_byte()
+            if (b & 0x80) == 0:
+                break
+    elif wire_type == WIRE_TYPE_LEN:
+        length = decode_uvarint(buf)
+        buf.skip(length)
+    else:
+        raise DeserializationError(f"unknown wire type: {wire_type}")
+
+
 class BinarySerializer:
     def __init__(self, schema: Schema) -> None:
         self._schema = schema
@@ -90,7 +128,8 @@ class BinarySerializer:
         buf = Buffer()
         buf.write_bytes(encode_uvarint(self._schema.version))
         for field in self._schema.sorted_fields():
-            buf.write_bytes(encode_uvarint(field.field_id))
+            wire_type = _field_type_to_wire_type(field.field_type)
+            buf.write_bytes(_encode_tag(field.field_id, wire_type))
             value = data.get(field.name, field.default)
             self._write_field_value(buf, field, value)
         return buf.data
@@ -111,33 +150,46 @@ class BinarySerializer:
         except Exception as e:
             raise DeserializationError(f"failed to read schema version: {e}") from e
 
-        fields = reader_schema.fields if reader_schema else self._schema.fields
-        for f in fields:
+        if stored_version < 1:
+            raise DeserializationError(f"invalid stored schema version: {stored_version}")
+
+        active_schema = reader_schema if reader_schema is not None else self._schema
+        for f in active_schema.fields:
             result[f.name] = f.default
+
+        reader_fields = (
+            {f.field_id: f for f in reader_schema.fields}
+            if reader_schema is not None
+            else self._fields_by_id
+        )
 
         while buf.remaining > 0:
             try:
-                field_id = decode_uvarint(buf)
+                field_id, wire_type = _decode_tag(buf)
             except Exception as e:
-                raise DeserializationError(f"failed to read field id: {e}") from e
+                raise DeserializationError(f"failed to read field tag: {e}") from e
 
-            field = self._fields_by_id.get(field_id)
-            if reader_schema is not None:
-                field = reader_schema.field_by_id(field_id)
+            field = reader_fields.get(field_id)
 
             if field is None:
                 try:
-                    self._skip_unknown_field(buf)
+                    _skip_by_wire_type(buf, wire_type)
                 except Exception as e:
                     raise DeserializationError(
                         f"failed to skip unknown field id={field_id}: {e}"
                     ) from e
                 continue
 
+            actual_wire_type = _field_type_to_wire_type(field.field_type)
+            if wire_type != actual_wire_type:
+                raise DeserializationError(
+                    f"wire type mismatch for field '{field.name}' (id={field_id}): "
+                    f"expected {actual_wire_type}, got {wire_type}"
+                )
+
             try:
                 value = self._read_field_value(buf, field)
-                if field.name in result:
-                    result[field.name] = value
+                result[field.name] = value
             except Exception as e:
                 raise DeserializationError(
                     f"failed to read field '{field.name}' (id={field_id}): {e}"
@@ -147,17 +199,33 @@ class BinarySerializer:
 
     def _write_field_value(self, buf: Buffer, field: FieldDef, value: Any) -> None:
         if field.field_type == FieldType.BOOL:
-            buf.write_bytes(_encode_bool(bool(value)))
+            if not isinstance(value, bool):
+                raise TypeError(
+                    f"field '{field.name}' expects bool, got {type(value).__name__}"
+                )
+            buf.write_bytes(_encode_bool(value))
         elif field.field_type in (
             FieldType.INT32,
             FieldType.INT64,
             FieldType.UINT32,
             FieldType.UINT64,
         ):
-            buf.write_bytes(_encode_integer(field.field_type, int(value)))
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(
+                    f"field '{field.name}' expects int, got {type(value).__name__}"
+                )
+            buf.write_bytes(_encode_integer(field.field_type, value))
         elif field.field_type == FieldType.STRING:
-            buf.write_bytes(_encode_string(str(value)))
+            if not isinstance(value, str):
+                raise TypeError(
+                    f"field '{field.name}' expects str, got {type(value).__name__}"
+                )
+            buf.write_bytes(_encode_string(value))
         elif field.field_type == FieldType.BYTES:
+            if not isinstance(value, (bytes, bytearray)):
+                raise TypeError(
+                    f"field '{field.name}' expects bytes, got {type(value).__name__}"
+                )
             buf.write_bytes(_encode_bytes(bytes(value)))
         else:
             raise SchemaError(f"unsupported field type: {field.field_type}")
@@ -178,27 +246,6 @@ class BinarySerializer:
             return _decode_bytes(buf)
         else:
             raise SchemaError(f"unsupported field type: {field.field_type}")
-
-    def _skip_unknown_field(self, buf: Buffer) -> None:
-        marker = buf.peek_byte()
-        if marker == 0x00 or marker == 0x01:
-            buf.skip(1)
-            return
-        if marker < 0x80:
-            decode_uvarint(buf)
-            return
-        try:
-            decode_uvarint(buf)
-            return
-        except Exception:
-            pass
-        try:
-            length = decode_uvarint(buf)
-            buf.skip(length)
-            return
-        except Exception:
-            pass
-        raise DeserializationError("cannot determine unknown field encoding")
 
 
 def deserialize_with_schema(

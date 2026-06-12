@@ -1,0 +1,5 @@
+你实现的二进制协议帧编解码器模块存在一些问题，需要修复：
+1. `decoder.py` 的 `_try_decode_frame` 在 `payload_length` 超过 `max_payload_size` 时抛出的是 `IncompleteFrameError`，将"帧格式非法"和"数据未到齐"两种语义混为一谈。`decode_one` 捕获该异常后返回 `waiting_for_more=True`，但缓冲区未被消费，导致调用方陷入无限循环等待。
+2. `decoder.py` 的 `_consume_bytes` 方法完整定义但从未被类中任何其他方法调用，属于死代码。所有缓冲区消费操作均通过直接切片赋值完成，存在两条语义相同但互不调用的实现路径。
+3. `encoder.py` 的 `encode` 方法接受可选的 `version` 参数但不做任何合法性检查，调用方可传入超出支持范围的版本号而不报错，与 `FrameConfig` 的版本管控设计矛盾。
+4. 修复后重新运行 `poetry run pytest tests/framecodec/ -q`，需要让所有测试通过。

@@ -58,21 +58,7 @@ class MockUpstreamResolver(UpstreamResolver):
             cname_key = (normalized_name, DNSRecordType.CNAME)
             cname_records = self._records.get(cname_key, [])
             if cname_records:
-                all_records = list(cname_records)
-                target_name = cname_records[0].value.rstrip(".").lower()
-                target_key = (target_name, record_type)
-                target_records = self._records.get(target_key, [])
-                while target_records:
-                    all_records.extend(target_records)
-                    target_cname_key = (target_name, DNSRecordType.CNAME)
-                    target_cname = self._records.get(target_cname_key, [])
-                    if not target_cname:
-                        break
-                    all_records.extend(target_cname)
-                    target_name = target_cname[0].value.rstrip(".").lower()
-                    target_key = (target_name, record_type)
-                    target_records = self._records.get(target_key, [])
-                return DNSResponse(records=all_records)
+                return DNSResponse(records=list(cname_records))
 
         return DNSResponse(records=list(records))
 

@@ -1,0 +1,6 @@
+你实现的 HTTP 正向代理模块存在一些问题，需要修复：
+1. 请求头过滤的集成测试断言写法有误，`test_whitelist_header_filter` 和 `test_blacklist_header_filter` 检查的是原始 request.headers 而非实际转发到上游的请求头，且断言中大小写不一致导致虚通过。需修复测试使其验证到 proxy 实际转发出去的请求头是否已被过滤。
+2. `proxy.py` 的 `forward` 方法将改写前的原始请求传给了响应改写器，而非经过请求改写链处理后的请求。当请求改写器修改了 URL 路径后，响应改写器收到的仍然是旧 URL，导致基于 URL 做判断的响应改写逻辑使用了过期上下文。
+3. `rewriter.py` 的 `UrlRewriteRule.matches` 在整个 URL 字符串上做正则搜索，未限定到路径部分。查询参数中出现的匹配词也会错误触发改写。
+4. `connection_pool.py` 的 `acquire` 方法在成功获取连接前就递增了 `connection_counter`，异常时计数不准确。
+5. 修复后重新运行 `poetry run pytest tests/proxy/ -q`，需要让所有测试通过。

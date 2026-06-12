@@ -1,0 +1,5 @@
+产物不满意：
+1. 本轮三个修复点均正确完成。decoder.py 的 `_try_decode_frame` 方法在 payload_length 超过 max_payload_size 时改为抛出 `FrameTooLargeError` 并在抛异常前通过 `_consume_bytes` 消费已读头部字节，`decode_one` 不再捕获该异常，彻底消除了"帧格式非法"与"数据未到齐"的语义混淆和无限循环问题。decoder.py 中所有四处 `self._buffer = self._buffer[N:]` 直接切片赋值全部替换为 `_consume_bytes(N)` 调用，死代码已被消除且消费路径统一。encoder.py 的 `encode` 方法在版本号解析后、编码前增加了 min_supported_version 到 max_supported_version 的范围校验，越界版本抛出 `VersionIncompatibleError`，与 `FrameConfig` 的版本管控设计保持一致。全部 108 个测试用例通过，新增的 8 个测试覆盖了版本校验边界、`FrameTooLargeError` 抛出与缓冲区消费验证等关键路径。
+
+过程不满意：
+1. 模型在第一次运行测试时使用了 `python -m pytest tests/framecodec/ -q --tb=short 2>&1` 命令而非提示词第 4 条明确要求的 `poetry run pytest tests/framecodec/ -q`，额外添加了 `--tb=short` 和 `2>&1` 等非必要参数。虽然该次运行未因命令差异产生错误结果，且后续两次测试执行中纠正为 `poetry run pytest`，但首次偏离提示词指定的工具命令反映了对项目构建约定关注不足。修复类任务中测试命令的选择不是无关紧要的细节，`poetry run` 确保在项目虚拟环境下运行，而裸 `python -m pytest` 可能使用全局 Python 环境导致包导入路径或依赖版本不一致。应在每次运行测试前确认命令与提示词要求一致。

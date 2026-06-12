@@ -157,8 +157,6 @@ class HttpForwardProxy:
 
         self._increment_stat("total_requests")
 
-        original_request = request.copy()
-
         try:
             modified_request = self._rewriter_chain.rewrite_request(request)
 
@@ -170,7 +168,7 @@ class HttpForwardProxy:
             response = self._execute_with_retry(modified_request)
 
             modified_response = self._rewriter_chain.rewrite_response(
-                response, original_request
+                response, modified_request
             )
 
             if self._response_header_filter:

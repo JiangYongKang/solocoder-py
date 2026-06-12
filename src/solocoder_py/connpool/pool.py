@@ -28,6 +28,9 @@ class ConnectionPool:
         self._config: PoolConfig = config if config is not None else PoolConfig()
         self._clock: Clock = clock if clock is not None else RealClock()
 
+        if self._config.max_size < 0:
+            raise ValueError("max_size cannot be negative")
+
         self._lock: threading.Lock = threading.Lock()
         self._not_empty: threading.Condition = threading.Condition(self._lock)
 
@@ -136,7 +139,7 @@ class ConnectionPool:
 
             if self._config.health_check_on_borrow:
                 try:
-                    if not conn.health_check():
+                    if not conn.health_check(timeout=self._config.health_check_timeout):
                         self._stats.health_check_failed_count += 1
                         self._destroy_connection(conn)
                         continue
@@ -218,10 +221,7 @@ class ConnectionPool:
             self._eviction_stop_event.wait(self._config.eviction_interval)
             if self._eviction_stop_event.is_set():
                 break
-            try:
-                self._evict_idle_connections()
-            except Exception:
-                pass
+            self._evict_idle_connections()
 
     def _evict_idle_connections(self) -> None:
         with self._lock:

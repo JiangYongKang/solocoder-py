@@ -27,10 +27,19 @@ class UrlRewriteRule:
     replacement: str
     method: Optional[str] = None
 
+    def _extract_path(self, url: str) -> str:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        path = parsed.path or "/"
+        if parsed.query:
+            return f"{path}?{parsed.query}"
+        return path
+
     def matches(self, request: Request) -> bool:
         if self.method and request.method != self.method:
             return False
-        return self.pattern.search(request.url) is not None
+        path = self._extract_path(request.url)
+        return self.pattern.search(path) is not None
 
 
 class UrlRewriter(RequestRewriter):
@@ -49,12 +58,28 @@ class UrlRewriter(RequestRewriter):
 
     def rewrite(self, request: Request) -> Request:
         try:
+            from urllib.parse import urlparse, urlunparse
+
             for rule in self._rules:
                 if rule.matches(request):
-                    new_url = rule.pattern.sub(rule.replacement, request.url)
-                    request = request.copy()
-                    request.url = new_url
-                    return request
+                    parsed = urlparse(request.url)
+                    path = parsed.path or "/"
+                    if parsed.query:
+                        path_with_query = f"{path}?{parsed.query}"
+                    else:
+                        path_with_query = path
+                    new_path_with_query = rule.pattern.sub(
+                        rule.replacement, path_with_query
+                    )
+                    if "?" in new_path_with_query:
+                        new_path, new_query = new_path_with_query.split("?", 1)
+                    else:
+                        new_path, new_query = new_path_with_query, parsed.query
+                    new_parsed = parsed._replace(path=new_path, query=new_query)
+                    new_url = urlunparse(new_parsed)
+                    modified = request.copy()
+                    modified.url = new_url
+                    return modified
             return request
         except Exception as e:
             raise RewriterError(f"URL rewrite failed: {e}") from e

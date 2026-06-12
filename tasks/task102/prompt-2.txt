@@ -1,0 +1,5 @@
+你实现的 DNS 存根解析器模块存在一些问题，需要修复：
+1. CNAME 链深度超限与循环引用共用同一个 `DNSCNAMELoopError` 异常，深度超限和真正的循环引用是两种不同场景，调用方无法区分。需要为深度超限场景新增独立异常类型。
+2. `conftest.py` 中 `MockUpstreamResolver` 的 `resolve` 方法自行实现了 CNAME 链跟随逻辑，一次性返回所有中间 CNAME 和目标 A/AAAA 记录。这导致 `StubResolver.resolve` 中逐级 CNAME 跟踪的 for 循环只执行一次就提前返回，中间级 CNAME 缓存的读写和过期判定等核心路径从未被测试真正覆盖。
+3. 缺少中间级 CNAME TTL 过期的测试用例。提示词要求"中间 CNAME 过期需重新解析"，但测试中所有记录 TTL 相同且在同一次解析中完成，未覆盖链中间某级过期后需要重新解析的场景。
+4. 修复后重新运行 `poetry run pytest tests/dns/ -q`，需要让所有测试通过。

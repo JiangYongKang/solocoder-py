@@ -6,8 +6,6 @@ from .clock import Clock, SystemClock
 from .connection import SimulatedWebSocketConnection
 from .exceptions import (
     ConnectionClosedError,
-    HeartbeatTimeoutError,
-    ReconnectionFailedError,
     SessionClosedError,
 )
 from .models import (
@@ -41,6 +39,7 @@ class WebSocketSession:
         self._connection = connection or SimulatedWebSocketConnection(session_id)
         self._heartbeat_config = heartbeat_config or HeartbeatConfig()
         self._reconnect_config = reconnect_config or ReconnectConfig()
+        self._reorder_config = reorder_config or ReorderConfig()
         self._clock = clock or SystemClock()
         self._on_message = on_message
         self._on_disconnect = on_disconnect
@@ -61,6 +60,7 @@ class WebSocketSession:
         self._delivered_messages: list[Message] = []
         self._closed: bool = False
         self._disconnected_at: float = 0.0
+        self._current_ping_counted_for_timeout: int = 0
 
         if self._connection.is_connected:
             self._state = SessionState.CONNECTED
@@ -158,7 +158,7 @@ class WebSocketSession:
             raise ConnectionClosedError("Session is not connected")
 
         seq = self._send_sequence
-        self._send_sequence = (self._send_sequence + 1) % (self._reorder_buffer._config.max_sequence + 1)
+        self._send_sequence = (self._send_sequence + 1) % (self._reorder_config.max_sequence + 1)
 
         msg = Message(
             sequence=seq,
@@ -210,8 +210,13 @@ class WebSocketSession:
         if self._state not in (SessionState.PERMANENTLY_CLOSED, SessionState.DISCONNECTED):
             self._state = SessionState.DISCONNECTED
             self._connection.disconnect()
+            self._disconnected_at = self._clock.now()
+            self._reconnect_status = ReconnectStatus()
             if self._on_disconnect:
                 self._on_disconnect()
+            if self._reconnect_config.max_attempts == 0:
+                self._state = SessionState.PERMANENTLY_CLOSED
+                self._closed = True
 
     def tick(self) -> None:
         if self._closed:
@@ -224,9 +229,8 @@ class WebSocketSession:
 
         if self._state == SessionState.CONNECTED:
             self._tick_heartbeat()
-        elif self._state == SessionState.DISCONNECTED:
-            self._tick_reconnect()
-        elif self._state == SessionState.RECONNECTING:
+
+        if self._state in (SessionState.DISCONNECTED, SessionState.RECONNECTING):
             self._tick_reconnect()
 
         if self._closed:
@@ -242,10 +246,12 @@ class WebSocketSession:
         if time_since_ping >= config.ping_interval:
             self._send_ping()
 
-        if self._heartbeat_status.ping_count > 0 and self._heartbeat_status.missed_pongs > 0:
-            time_since_pong = now - self._heartbeat_status.last_ping_sent_at
+        ping_count = self._heartbeat_status.ping_count
+        if ping_count > 0 and ping_count > self._current_ping_counted_for_timeout:
+            time_since_pong = now - self._heartbeat_status.last_pong_received_at
             if time_since_pong >= config.ping_interval + config.pong_timeout:
                 self._heartbeat_status.missed_pongs += 1
+                self._current_ping_counted_for_timeout = ping_count
 
         if self._heartbeat_status.missed_pongs >= config.max_missed_pongs:
             self._on_heartbeat_timeout()
@@ -255,10 +261,10 @@ class WebSocketSession:
             self._connection.send_ping()
             self._heartbeat_status.last_ping_sent_at = self._clock.now()
             self._heartbeat_status.ping_count += 1
-            if self._heartbeat_status.ping_count > 1:
-                self._heartbeat_status.missed_pongs += 1
         except ConnectionClosedError:
             self._state = SessionState.DISCONNECTED
+            self._disconnected_at = self._clock.now()
+            self._reconnect_status = ReconnectStatus()
             if self._on_disconnect:
                 self._on_disconnect()
 
@@ -271,14 +277,15 @@ class WebSocketSession:
             ping_count=0,
             pong_count=0,
         )
+        self._current_ping_counted_for_timeout = 0
 
     def _on_heartbeat_timeout(self) -> None:
-        missed = self._heartbeat_status.missed_pongs
         self._connection.disconnect()
         self._state = SessionState.DISCONNECTED
+        self._disconnected_at = self._clock.now()
+        self._reconnect_status = ReconnectStatus()
         if self._on_disconnect:
             self._on_disconnect()
-        raise HeartbeatTimeoutError(missed_pongs=missed)
 
     def _tick_reconnect(self) -> None:
         if self._reconnect_config.max_attempts == 0:
@@ -316,7 +323,7 @@ class WebSocketSession:
                     self._state = SessionState.PERMANENTLY_CLOSED
                     self._closed = True
                     status.next_attempt_at = None
-                    raise ReconnectionFailedError(attempts=status.attempt_count)
+                    return
 
                 status.current_delay = config.calculate_delay(status.attempt_count + 1)
                 status.next_attempt_at = now + status.current_delay
@@ -340,7 +347,7 @@ class WebSocketSession:
                 self._state = SessionState.PERMANENTLY_CLOSED
                 self._closed = True
                 status.next_attempt_at = None
-                raise ReconnectionFailedError(attempts=status.attempt_count)
+                return
 
             status.current_delay = config.calculate_delay(status.attempt_count + 1)
             status.next_attempt_at = now + status.current_delay

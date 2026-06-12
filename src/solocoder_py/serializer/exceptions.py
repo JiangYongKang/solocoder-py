@@ -25,9 +25,5 @@ class SchemaCompatibilityError(SchemaError):
     pass
 
 
-class UnknownFieldError(SchemaError):
-    pass
-
-
 class DeserializationError(SerializerError):
     pass

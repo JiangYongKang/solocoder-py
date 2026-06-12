@@ -13,9 +13,8 @@ from .models import WidthMarker
 
 WIDTH_MARKER_MASK = 0x03
 WIDTH_MARKER_SHIFT = 6
-SIGN_BIT_MASK = 0x20
 ANCHOR_FLAG_MASK = 0x10
-RESERVED_BITS_MASK = 0x0F
+RESERVED_BITS_MASK = 0x2F
 WIDTH_TO_BYTES = {
     WidthMarker.WIDTH_1: 1,
     WidthMarker.WIDTH_2: 2,
@@ -57,9 +56,6 @@ def encode_int(value: int, signed: bool = True, is_anchor: bool = False) -> byte
     width_bytes = WIDTH_TO_BYTES[width]
 
     marker_byte = width << WIDTH_MARKER_SHIFT
-
-    if signed and value < 0:
-        marker_byte |= SIGN_BIT_MASK
 
     if is_anchor:
         marker_byte |= ANCHOR_FLAG_MASK

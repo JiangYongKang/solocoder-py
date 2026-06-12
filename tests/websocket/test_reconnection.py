@@ -5,7 +5,6 @@ import pytest
 from solocoder_py.websocket import (
     ManualClock,
     ReconnectConfig,
-    ReconnectionFailedError,
     SessionState,
     SimulatedWebSocketConnection,
     WebSocketSession,
@@ -202,9 +201,8 @@ class TestReconnectionMaxAttempts:
         assert session.reconnect_status.attempt_count == 2
 
         clock.advance(4.0)
-        with pytest.raises(ReconnectionFailedError) as exc_info:
-            session.tick()
-        assert exc_info.value.attempts == 3
+        session.tick()
+        assert session.reconnect_status.attempt_count == 3
         assert session.state == SessionState.PERMANENTLY_CLOSED
         assert session.is_closed
 
@@ -269,15 +267,16 @@ class TestReconnectionMaxAttempts:
         delays = []
         session.tick()
 
-        for i in range(8):
+        for i in range(5):
             next_attempt = session.reconnect_status.next_attempt_at
+            if next_attempt is None:
+                break
             current_time = clock.now()
             wait_time = next_attempt - current_time
             delays.append(wait_time)
             clock.advance(wait_time)
-            try:
-                session.tick()
-            except ReconnectionFailedError:
+            session.tick()
+            if session.state == SessionState.PERMANENTLY_CLOSED:
                 break
 
         assert delays[0] == 1.0

@@ -252,6 +252,47 @@ class TestErrorScenarios:
         result = codec.decode_one()
         assert result.waiting_for_more is True
 
+    def test_decoder_payload_length_exceeds_max_raises_frame_too_large(self, codec):
+        config = FrameConfig(
+            version=1,
+            min_supported_version=1,
+            max_supported_version=2,
+            length_prefix_size=4,
+            max_payload_size=100,
+        )
+        codec_custom = FrameCodec(config)
+        huge_length = config.max_payload_size + 1
+        header = (
+            (1).to_bytes(config.version_size, byteorder=config.byte_order, signed=False)
+            + huge_length.to_bytes(config.length_prefix_size, byteorder=config.byte_order, signed=False)
+        )
+        codec_custom.feed(header)
+        with pytest.raises(FrameTooLargeError, match="exceeds max"):
+            codec_custom.decode_one()
+
+    def test_decoder_payload_length_exceeds_max_consumes_header_no_infinite_loop(self, codec):
+        config = FrameConfig(
+            version=1,
+            min_supported_version=1,
+            max_supported_version=2,
+            length_prefix_size=4,
+            max_payload_size=100,
+        )
+        codec_custom = FrameCodec(config)
+        huge_length = config.max_payload_size + 1
+        header = (
+            (1).to_bytes(config.version_size, byteorder=config.byte_order, signed=False)
+            + huge_length.to_bytes(config.length_prefix_size, byteorder=config.byte_order, signed=False)
+        )
+        codec_custom.feed(header)
+        with pytest.raises(FrameTooLargeError):
+            codec_custom.decode_one()
+        assert codec_custom.buffer_size == 0
+
+    def test_encoder_version_out_of_range_raises(self, codec):
+        with pytest.raises(VersionIncompatibleError, match="not in supported range"):
+            codec.encode(b"test", version=99)
+
     def test_multiple_bad_frames_mixed_with_good(self, codec):
         good1 = codec.encode(b"good1")
         bad = bytearray(codec.encode(b"bad payload"))

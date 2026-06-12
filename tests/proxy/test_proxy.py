@@ -86,18 +86,42 @@ class TestNormalFlows:
         assert response.headers["X-Proxied"] == "true"
 
     def test_whitelist_header_filter(
-        self, proxy_with_servers: HttpForwardProxy
+        self,
+        proxy_with_servers: HttpForwardProxy,
+        mock_primary_server: MockUpstreamServer,
     ) -> None:
+        captured_request_headers: dict = {}
+
+        def capture_and_echo(request: Request) -> Response:
+            captured_request_headers.update(dict(request.headers))
+            return Response(
+                status_code=200,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": "2",
+                    "X-Upstream-Server": "primary",
+                    "X-Internal": "secret",
+                },
+                body=b"OK",
+            )
+
+        mock_primary_server.add_route(
+            path_pattern="/filtered",
+            handler=capture_and_echo,
+        )
+
         request_filter = HeaderFilter(
             HeaderFilterConfig(
                 mode=FilterMode.WHITELIST,
-                headers=["Accept", "Content-Type"],
+                headers=["accept", "content-type"],
+                case_insensitive=True,
             )
         )
         response_filter = HeaderFilter(
             HeaderFilterConfig(
                 mode=FilterMode.WHITELIST,
-                headers=["Content-Type", "Content-Length"],
+                headers=["content-type", "content-length"],
+                case_insensitive=True,
             )
         )
         proxy_with_servers.set_request_header_filter(request_filter)
@@ -105,38 +129,60 @@ class TestNormalFlows:
 
         request = Request(
             method="GET",
-            url="http://example.com/api/test",
+            url="http://example.com/filtered",
             headers={
                 "Accept": "application/json",
+                "Content-Type": "text/plain",
                 "X-Secret": "should-be-removed",
                 "Authorization": "Bearer token",
             },
         )
         response = proxy_with_servers.forward(request)
 
-        assert "Accept" in request.headers
-        assert "X-Secret" not in [h.lower() for h in request.headers]
-        assert "Authorization" not in [h.lower() for h in request.headers]
+        captured_lower = {k.lower(): v for k, v in captured_request_headers.items()}
+        assert "accept" in captured_lower
+        assert "content-type" in captured_lower
+        assert "x-secret" not in captured_lower
+        assert "authorization" not in captured_lower
 
-        response_headers_lower = [h.lower() for h in response.headers]
+        response_headers_lower = {k.lower(): v for k, v in response.headers.items()}
         assert "content-type" in response_headers_lower
         assert "content-length" in response_headers_lower
         assert "x-upstream-server" not in response_headers_lower
+        assert "x-internal" not in response_headers_lower
 
     def test_blacklist_header_filter(
-        self, proxy_with_servers: HttpForwardProxy
+        self,
+        proxy_with_servers: HttpForwardProxy,
+        mock_primary_server: MockUpstreamServer,
     ) -> None:
+        captured_request_headers: dict = {}
+
+        def capture_and_echo(request: Request) -> Response:
+            captured_request_headers.update(dict(request.headers))
+            return Response(
+                status_code=200,
+                headers={"Content-Type": "text/plain"},
+                body=b"OK",
+            )
+
+        mock_primary_server.add_route(
+            path_pattern="/filtered",
+            handler=capture_and_echo,
+        )
+
         request_filter = HeaderFilter(
             HeaderFilterConfig(
                 mode=FilterMode.BLACKLIST,
-                headers=["X-Secret", "Authorization"],
+                headers=["x-secret", "authorization"],
+                case_insensitive=True,
             )
         )
         proxy_with_servers.set_request_header_filter(request_filter)
 
         request = Request(
             method="GET",
-            url="http://example.com/api/test",
+            url="http://example.com/filtered",
             headers={
                 "Accept": "application/json",
                 "X-Secret": "should-be-removed",
@@ -146,10 +192,12 @@ class TestNormalFlows:
         )
         response = proxy_with_servers.forward(request)
 
-        assert "Accept" in request.headers
-        assert "X-Other" in request.headers
-        assert "X-Secret" not in [h.lower() for h in request.headers]
-        assert "Authorization" not in [h.lower() for h in request.headers]
+        captured_lower = {k.lower(): v for k, v in captured_request_headers.items()}
+        assert "accept" in captured_lower
+        assert "x-other" in captured_lower
+        assert "x-secret" not in captured_lower
+        assert "authorization" not in captured_lower
+        assert captured_lower.get("x-other") == "keep"
 
     def test_upstream_failover(
         self,

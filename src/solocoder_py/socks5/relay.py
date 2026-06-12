@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from .constants import ATYP_DOMAINNAME
-from .exceptions import Socks5Error
+from .exceptions import Socks5Error, Socks5ResolutionError
 from .models import Socks5Address, UdpDatagram
 
 
@@ -50,10 +50,17 @@ class UdpRelay:
         if not self._active:
             raise Socks5Error("UDP association is not active")
         host = datagram.address.host
-        if datagram.address.atyp == ATYP_DOMAINNAME and self._dns_resolver is not None:
+        if datagram.address.atyp == ATYP_DOMAINNAME:
+            if self._dns_resolver is None:
+                raise Socks5ResolutionError(
+                    f"No DNS resolver available to resolve domain: {host}"
+                )
             resolved = self._dns_resolver.resolve(host)
-            if resolved is not None:
-                host = resolved
+            if resolved is None:
+                raise Socks5ResolutionError(
+                    f"Failed to resolve domain: {host}"
+                )
+            host = resolved
         self._client_to_remote.append(
             ((host, datagram.address.port), datagram.data)
         )

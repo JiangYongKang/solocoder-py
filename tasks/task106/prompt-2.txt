@@ -1,0 +1,5 @@
+你实现的 SOCKS5 代理模块存在一些问题，需要修复：
+1. `session.py` 文件引用了包内不存在的 `SimulatedConnection`、`DnsResolver`、`Socks5Request`、`parse_greeting` 等类和方法，与 `server.py` 中的实际实现完全不兼容，属于孤立死代码文件。应清理或整合这个文件。
+2. `UdpRelay.send_from_client` 在 DNS 解析返回 None 时静默地将未解析的域名字符串作为转发目标写入队列，调用方完全无法感知解析失败。提示词要求覆盖"域名解析失败时的错误响应"，UDP 中继场景下也应抛出明确错误。
+3. 测试中缺少 IPv6 正向 CONNECT 的成功路径验证。提示词要求支持 IPv4/IPv6/域名三种地址类型，但所有测试中唯一涉及 IPv6 的用例是验证排除 IPv6 后返回错误，没有测试 IPv6 地址成功建立连接的正向流程。
+4. 修复后重新运行 `poetry run pytest tests/socks5/ -q`，需要让所有测试通过。

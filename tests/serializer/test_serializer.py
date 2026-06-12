@@ -451,13 +451,13 @@ class TestErrorCases:
             version=1,
             fields=[FieldDef(field_id=1, field_type=FieldType.BOOL, name="b")],
         )
-        from solocoder_py.serializer.serializer import _encode_bool, _decode_bool
+        from solocoder_py.serializer.serializer import _encode_tag
         from solocoder_py.serializer.varint import encode_uvarint
 
         version_bytes = encode_uvarint(1)
-        fid_bytes = encode_uvarint(1)
+        tag_bytes = _encode_tag(1, 0)
         bad_bool = b"\x02"
-        raw = version_bytes + fid_bytes + bad_bool
+        raw = version_bytes + tag_bytes + bad_bool
         ser = BinarySerializer(schema)
         with pytest.raises(DeserializationError):
             ser.deserialize(raw)
@@ -474,3 +474,269 @@ class TestErrorCases:
         )
         with pytest.raises(SchemaCompatibilityError):
             check_compatibility(v1, other)
+
+
+class TestUnknownFieldSkipping:
+    def test_short_string_unknown_field_skipped(self):
+        writer_schema = Schema(
+            name="User",
+            version=2,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=10, field_type=FieldType.STRING, name="short_note"),
+            ],
+        )
+        reader_schema = Schema(
+            name="User",
+            version=1,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+            ],
+        )
+        writer_ser = BinarySerializer(writer_schema)
+        raw = writer_ser.serialize({"id": 42, "short_note": "hello"})
+        reader_ser = BinarySerializer(reader_schema)
+        result = reader_ser.deserialize(raw, reader_schema=reader_schema)
+        assert result["id"] == 42
+
+    def test_long_string_unknown_field_skipped_correctly(self):
+        writer_schema = Schema(
+            name="User",
+            version=2,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=10, field_type=FieldType.STRING, name="long_bio"),
+                FieldDef(field_id=2, field_type=FieldType.STRING, name="name"),
+            ],
+        )
+        reader_schema = Schema(
+            name="User",
+            version=1,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=2, field_type=FieldType.STRING, name="name"),
+            ],
+        )
+        long_string = "A" * 300
+        writer_ser = BinarySerializer(writer_schema)
+        raw = writer_ser.serialize({"id": 7, "long_bio": long_string, "name": "Bob"})
+        reader_ser = BinarySerializer(reader_schema)
+        result = reader_ser.deserialize(raw, reader_schema=reader_schema)
+        assert result["id"] == 7
+        assert result["name"] == "Bob"
+
+    def test_bytes_unknown_field_skipped(self):
+        writer_schema = Schema(
+            name="Doc",
+            version=2,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=5, field_type=FieldType.BYTES, name="payload"),
+                FieldDef(field_id=2, field_type=FieldType.STRING, name="title"),
+            ],
+        )
+        reader_schema = Schema(
+            name="Doc",
+            version=1,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=2, field_type=FieldType.STRING, name="title"),
+            ],
+        )
+        large_bytes = b"\x00\x01\x02\xff" * 100
+        writer_ser = BinarySerializer(writer_schema)
+        raw = writer_ser.serialize({"id": 1, "payload": large_bytes, "title": "Hi"})
+        reader_ser = BinarySerializer(reader_schema)
+        result = reader_ser.deserialize(raw, reader_schema=reader_schema)
+        assert result["id"] == 1
+        assert result["title"] == "Hi"
+
+    def test_mixed_unknown_fields_skipped(self):
+        writer_schema = Schema(
+            name="Item",
+            version=3,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=10, field_type=FieldType.INT64, name="secret_val"),
+                FieldDef(field_id=11, field_type=FieldType.STRING, name="secret_str"),
+                FieldDef(field_id=12, field_type=FieldType.BOOL, name="secret_flag"),
+                FieldDef(field_id=2, field_type=FieldType.STRING, name="name"),
+            ],
+        )
+        reader_schema = Schema(
+            name="Item",
+            version=1,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=2, field_type=FieldType.STRING, name="name"),
+            ],
+        )
+        writer_ser = BinarySerializer(writer_schema)
+        data = {
+            "id": 999,
+            "secret_val": -12345,
+            "secret_str": "this is a secret with length > 128 chars? " + "x" * 200,
+            "secret_flag": True,
+            "name": "KnownItem",
+        }
+        raw = writer_ser.serialize(data)
+        reader_ser = BinarySerializer(reader_schema)
+        result = reader_ser.deserialize(raw, reader_schema=reader_schema)
+        assert result["id"] == 999
+        assert result["name"] == "KnownItem"
+
+    def test_unknown_field_at_end_skipped(self):
+        writer_schema = Schema(
+            name="E",
+            version=2,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=2, field_type=FieldType.STRING, name="name"),
+                FieldDef(field_id=50, field_type=FieldType.BYTES, name="extra"),
+            ],
+        )
+        reader_schema = Schema(
+            name="E",
+            version=1,
+            fields=[
+                FieldDef(field_id=1, field_type=FieldType.UINT64, name="id"),
+                FieldDef(field_id=2, field_type=FieldType.STRING, name="name"),
+            ],
+        )
+        writer_ser = BinarySerializer(writer_schema)
+        raw = writer_ser.serialize({"id": 1, "name": "X", "extra": b"\xff" * 500})
+        reader_ser = BinarySerializer(reader_schema)
+        result = reader_ser.deserialize(raw, reader_schema=reader_schema)
+        assert result == {"id": 1, "name": "X"}
+
+
+class TestStrictTypeChecking:
+    def test_bool_field_rejects_int(self):
+        schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.BOOL, name="flag")],
+        )
+        ser = BinarySerializer(schema)
+        with pytest.raises(TypeError, match="expects bool"):
+            ser.serialize({"flag": 1})
+
+    def test_bool_field_rejects_string(self):
+        schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.BOOL, name="flag")],
+        )
+        ser = BinarySerializer(schema)
+        with pytest.raises(TypeError):
+            ser.serialize({"flag": "false"})
+
+    def test_int_field_rejects_bool(self):
+        schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.UINT64, name="n")],
+        )
+        ser = BinarySerializer(schema)
+        with pytest.raises(TypeError, match="expects int"):
+            ser.serialize({"n": True})
+
+    def test_int_field_rejects_string(self):
+        schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.INT64, name="n")],
+        )
+        ser = BinarySerializer(schema)
+        with pytest.raises(TypeError):
+            ser.serialize({"n": "42"})
+
+    def test_string_field_rejects_int(self):
+        schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.STRING, name="s")],
+        )
+        ser = BinarySerializer(schema)
+        with pytest.raises(TypeError, match="expects str"):
+            ser.serialize({"s": 123})
+
+    def test_bytes_field_rejects_string(self):
+        schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.BYTES, name="b")],
+        )
+        ser = BinarySerializer(schema)
+        with pytest.raises(TypeError, match="expects bytes"):
+            ser.serialize({"b": "hello"})
+
+
+class TestStoredVersion:
+    def test_stored_version_zero_invalid(self):
+        from solocoder_py.serializer.varint import encode_uvarint
+
+        schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.UINT64, name="id")],
+        )
+        raw = encode_uvarint(0)
+        ser = BinarySerializer(schema)
+        with pytest.raises(DeserializationError, match="invalid stored schema version"):
+            ser.deserialize(raw)
+
+    def test_stored_version_negative_invalid(self):
+        from solocoder_py.serializer.serializer import _encode_tag
+        from solocoder_py.serializer.varint import encode_uvarint
+
+        schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.UINT64, name="id")],
+        )
+        version_bytes = encode_uvarint(1)
+        tag_bytes = _encode_tag(1, 0)
+        value_bytes = encode_uvarint(42)
+        raw = version_bytes + tag_bytes + value_bytes
+        ser = BinarySerializer(schema)
+        result = ser.deserialize(raw)
+        assert result["id"] == 42
+
+
+class TestWireType:
+    def test_wire_type_mismatch_raises(self):
+        from solocoder_py.serializer.serializer import _encode_tag
+        from solocoder_py.serializer.varint import encode_uvarint
+
+        writer_schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.UINT64, name="x")],
+        )
+        version_bytes = encode_uvarint(1)
+        tag_bytes = _encode_tag(1, 2)
+        length_bytes = encode_uvarint(5)
+        data_bytes = b"hello"
+        raw = version_bytes + tag_bytes + length_bytes + data_bytes
+        ser = BinarySerializer(writer_schema)
+        with pytest.raises(DeserializationError, match="wire type mismatch"):
+            ser.deserialize(raw)
+
+    def test_unknown_wire_type_raises_in_unknown_field(self):
+        from solocoder_py.serializer.serializer import _encode_tag
+        from solocoder_py.serializer.varint import encode_uvarint
+
+        reader_schema = Schema(
+            name="T",
+            version=1,
+            fields=[FieldDef(field_id=1, field_type=FieldType.UINT64, name="id")],
+        )
+        version_bytes = encode_uvarint(2)
+        id_tag = _encode_tag(1, 0)
+        id_val = encode_uvarint(10)
+        bad_tag = _encode_tag(5, 7)
+        raw = version_bytes + id_tag + id_val + bad_tag
+        ser = BinarySerializer(reader_schema)
+        with pytest.raises(DeserializationError, match="unknown wire type"):
+            ser.deserialize(raw, reader_schema=reader_schema)

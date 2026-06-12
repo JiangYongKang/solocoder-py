@@ -17,6 +17,7 @@ from solocoder_py.socks5 import (
     UdpRelay,
     ATYP_IPV4,
     ATYP_DOMAINNAME,
+    ATYP_IPV6,
     AUTH_NO_AUTH,
     AUTH_USERNAME_PASSWORD,
     REP_SUCCEEDED,
@@ -158,6 +159,17 @@ class TestConnectCommand:
 
         session = handshake_no_auth(server, "s1")
         response = do_connect(server, "s1", "192.168.1.1", 80)
+        reply = parse_reply(response)
+        assert reply.reply_code == REP_SUCCEEDED
+        assert session.state == SessionState.RELAYING
+        assert session.connection is not None
+
+    def test_connect_ipv6(self):
+        server = make_no_auth_server()
+        server.network.register_target("2001:db8::1", 8080)
+
+        session = handshake_no_auth(server, "s1")
+        response = do_connect(server, "s1", "2001:db8::1", 8080, ATYP_IPV6)
         reply = parse_reply(response)
         assert reply.reply_code == REP_SUCCEEDED
         assert session.state == SessionState.RELAYING

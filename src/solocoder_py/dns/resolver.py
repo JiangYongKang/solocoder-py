@@ -6,6 +6,7 @@ from typing import List, Optional, Set
 from .cache import DNSCache
 from .exceptions import (
     DNSCNAMELoopError,
+    DNSCNAMEChainTooLongError,
     DNSResolutionError,
     DNSTimeoutError,
 )
@@ -101,9 +102,10 @@ class StubResolver:
 
             break
         else:
-            raise DNSCNAMELoopError(
+            raise DNSCNAMEChainTooLongError(
                 f"CNAME chain exceeded maximum depth of {self._max_cname_chain_depth}",
                 chain=chain,
+                max_depth=self._max_cname_chain_depth,
             )
 
         return DNSResponse(records=all_records)

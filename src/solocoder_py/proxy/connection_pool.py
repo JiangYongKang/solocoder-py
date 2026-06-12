@@ -98,33 +98,35 @@ class ConnectionPool:
                     self._config.max_reuse_count
                 ):
                     conn.acquire()
-                    self._connection_counter += 1
-                    return conn
-
-            if len(pool) >= self._config.max_pool_size:
-                for conn in pool.values():
-                    if conn.status == ConnectionStatus.IDLE:
-                        conn.close()
-                        del pool[conn.id]
-                        break
+                    result = conn
+                    break
+            else:
                 if len(pool) >= self._config.max_pool_size:
-                    raise ConnectionPoolError(
-                        f"Connection pool for {upstream_address} is full"
-                    )
+                    for conn in pool.values():
+                        if conn.status == ConnectionStatus.IDLE:
+                            conn.close()
+                            del pool[conn.id]
+                            break
+                    if len(pool) >= self._config.max_pool_size:
+                        raise ConnectionPoolError(
+                            f"Connection pool for {upstream_address} is full"
+                        )
 
-            now = self._clock.now()
-            conn_id = f"{upstream_address}-{uuid.uuid4().hex[:8]}"
-            new_conn = PooledConnection(
-                id=conn_id,
-                upstream_address=upstream_address,
-                status=ConnectionStatus.IDLE,
-                created_at=now,
-                last_used_at=now,
-            )
-            pool[conn_id] = new_conn
-            new_conn.acquire()
+                now = self._clock.now()
+                conn_id = f"{upstream_address}-{uuid.uuid4().hex[:8]}"
+                new_conn = PooledConnection(
+                    id=conn_id,
+                    upstream_address=upstream_address,
+                    status=ConnectionStatus.IDLE,
+                    created_at=now,
+                    last_used_at=now,
+                )
+                new_conn.acquire()
+                pool[conn_id] = new_conn
+                result = new_conn
+
             self._connection_counter += 1
-            return new_conn
+            return result
 
     def release(self, conn: PooledConnection) -> None:
         with self._lock:

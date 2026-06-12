@@ -1,7 +1,7 @@
 import pytest
 
 from solocoder_py.framecodec import FrameConfig, FrameEncoder, Frame
-from solocoder_py.framecodec.exceptions import FrameTooLargeError
+from solocoder_py.framecodec.exceptions import FrameTooLargeError, VersionIncompatibleError
 
 
 class TestFrameEncoder:
@@ -122,3 +122,23 @@ class TestFrameEncoder:
             signed=False,
         )
         assert length == len(payload)
+
+    def test_encode_version_below_min_raises(self, encoder):
+        with pytest.raises(VersionIncompatibleError, match="not in supported range"):
+            encoder.encode(b"test", version=0)
+
+    def test_encode_version_above_max_raises(self, encoder):
+        with pytest.raises(VersionIncompatibleError, match="not in supported range"):
+            encoder.encode(b"test", version=3)
+
+    def test_encode_frame_version_out_of_range_raises(self, encoder, small_payload):
+        with pytest.raises(VersionIncompatibleError, match="not in supported range"):
+            encoder.encode_frame(Frame(version=5, payload=small_payload))
+
+    def test_encode_version_at_min_boundary(self, encoder):
+        encoded = encoder.encode(b"test", version=1)
+        assert isinstance(encoded, bytes)
+
+    def test_encode_version_at_max_boundary(self, encoder):
+        encoded = encoder.encode(b"test", version=2)
+        assert isinstance(encoded, bytes)

@@ -5,6 +5,7 @@ from typing import List, Optional
 from .crc import CrcCalculator
 from .exceptions import (
     CrcCheckError,
+    FrameTooLargeError,
     IncompleteFrameError,
     VersionIncompatibleError,
 )
@@ -69,7 +70,8 @@ class FrameDecoder:
         )
 
         if payload_length > self._config.max_payload_size:
-            raise IncompleteFrameError(
+            self._consume_bytes(header_size)
+            raise FrameTooLargeError(
                 f"Payload length {payload_length} exceeds max {self._config.max_payload_size}"
             )
 
@@ -94,7 +96,7 @@ class FrameDecoder:
         )
 
         if not self._is_version_supported(version):
-            self._buffer = self._buffer[total_frame_size:]
+            self._consume_bytes(total_frame_size)
             raise VersionIncompatibleError(
                 f"Version {version} not supported. "
                 f"Supported range: [{self._config.min_supported_version}, {self._config.max_supported_version}]"
@@ -104,13 +106,13 @@ class FrameDecoder:
         calculated_crc = CrcCalculator.calculate(frame_without_crc, crc_size)
 
         if calculated_crc != received_crc:
-            self._buffer = self._buffer[total_frame_size:]
+            self._consume_bytes(total_frame_size)
             raise CrcCheckError(
                 f"CRC mismatch: expected {calculated_crc:#0{2 + 2 * crc_size}x}, "
                 f"got {received_crc:#0{2 + 2 * crc_size}x}"
             )
 
-        self._buffer = self._buffer[total_frame_size:]
+        self._consume_bytes(total_frame_size)
 
         frame = Frame(version=version, payload=payload, crc=received_crc)
         return frame, total_frame_size

@@ -4,7 +4,6 @@ import pytest
 
 from solocoder_py.websocket import (
     HeartbeatConfig,
-    HeartbeatTimeoutError,
     ManualClock,
     MessageType,
     SessionState,
@@ -155,11 +154,10 @@ class TestHeartbeatTimeout:
         assert session.heartbeat_status.missed_pongs == 2
 
         clock.advance(5.0)
-        with pytest.raises(HeartbeatTimeoutError) as exc_info:
-            session.tick()
-        assert exc_info.value.missed_pongs >= 3
+        session.tick()
+        assert session.heartbeat_status.missed_pongs >= 3
         assert not session.is_connected
-        assert session.state == SessionState.DISCONNECTED
+        assert session.state == SessionState.RECONNECTING
 
     def test_max_missed_pongs_one_disconnects_quickly(self):
         clock = ManualClock()
@@ -178,9 +176,9 @@ class TestHeartbeatTimeout:
         assert session.is_connected
 
         clock.advance(6.0)
-        with pytest.raises(HeartbeatTimeoutError):
-            session.tick()
+        session.tick()
         assert not session.is_connected
+        assert session.state == SessionState.RECONNECTING
 
 
 class TestHeartbeatStatus:

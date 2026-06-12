@@ -21,12 +21,14 @@ class DeltaDecompressor:
     ) -> None:
         self._config = config or DeltaEncodingConfig()
         self._input = input_stream or io.BytesIO()
+        self._cached_data: Optional[bytes] = None
         self._anchor: Optional[int] = None
         self._values_since_anchor: int = 0
         self._total_values: int = 0
         self._anchor_count: int = 0
         self._offset: int = 0
         self._decoded_values: List[int] = []
+        self._update_cached_data()
 
     @property
     def config(self) -> DeltaEncodingConfig:
@@ -44,8 +46,20 @@ class DeltaDecompressor:
     def anchor_count(self) -> int:
         return self._anchor_count
 
+    def _update_cached_data(self) -> None:
+        if self._cached_data is None:
+            if hasattr(self._input, "getvalue"):
+                self._cached_data = self._input.getvalue()
+
+    def _get_cached_data(self) -> bytes:
+        self._update_cached_data()
+        if self._cached_data is None:
+            raise DeltaDecompressionError("Input stream does not support random access")
+        return self._cached_data
+
     def set_input_data(self, data: bytes) -> None:
         self._input = io.BytesIO(data)
+        self._cached_data = data
         self._offset = 0
         self._anchor = None
         self._values_since_anchor = 0
@@ -54,9 +68,7 @@ class DeltaDecompressor:
         self._decoded_values = []
 
     def read(self) -> int:
-        data = self._input.getvalue() if hasattr(self._input, "getvalue") else None
-        if data is None:
-            raise DeltaDecompressionError("Input stream does not support random access")
+        data = self._get_cached_data()
 
         if self._offset >= len(data):
             raise EOFError("No more data to decompress")
@@ -106,11 +118,11 @@ class DeltaDecompressor:
         return values
 
     def has_more_data(self) -> bool:
-        data = self._input.getvalue() if hasattr(self._input, "getvalue") else b""
+        data = self._get_cached_data()
         return self._offset < len(data)
 
     def get_stats(self) -> CompressionStats:
-        data = self._input.getvalue() if hasattr(self._input, "getvalue") else b""
+        data = self._get_cached_data()
         compressed_size = len(data)
         return CompressionStats(
             original_size=self._total_values * 8,
@@ -126,6 +138,7 @@ class DeltaDecompressor:
         self._anchor_count = 0
         self._offset = 0
         self._decoded_values = []
+        self._cached_data = None
         if hasattr(self._input, "seek"):
             self._input.seek(0)
 

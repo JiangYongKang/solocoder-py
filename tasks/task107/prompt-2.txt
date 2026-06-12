@@ -1,0 +1,8 @@
+你实现的紧凑二进制序列化器模块存在一些问题，需要修复：
+1. `serializer.py` 的 `_skip_unknown_field` 方法无法正确跳过未知的 STRING 或 BYTES 类型字段。当未知字段是长度大于等于 128 的字符串时，其长度前缀的 varint 首字节会被误判为多字节整数，方法解码了长度值后就返回了，完全没有跳过后面的实际数据字节，导致后续所有字段的反序列化完全错位。
+2. `deserialize` 方法读取了 `stored_version` 变量（二进制数据中的 schema 版本号）但此后从未使用过，序列化时写入的版本号在反序列化时被完全忽略，成为一个无效字段。
+3. `_skip_unknown_field` 方法中的异常重试逻辑存在缓冲区状态错误：第一个 try 块调用 `decode_uvarint` 失败后读指针已被移动，第二个 try 块在错误位置再次调用 `decode_uvarint`，读取的值和后续的 skip 操作完全错乱。
+4. `deserialize` 方法中存在冗余赋值：`field = self._fields_by_id.get(field_id)` 在 `reader_schema is not None` 时立即被 `field = reader_schema.field_by_id(field_id)` 无条件覆盖，前一行成为死代码。
+5. `_write_field_value` 方法对所有字段值做了静默类型转换（`bool(value)`、`int(value)` 等），往 BOOL 字段传入字符串 "false" 会被转为 True，掩盖调用方的数据类型错误。
+6. `exceptions.py` 中定义了 `UnknownFieldError` 异常类但整个包中从未有任何地方抛出它，成为孤儿代码。
+7. 修复后重新运行 `poetry run pytest tests/serializer/ -q`，需要让所有测试通过。

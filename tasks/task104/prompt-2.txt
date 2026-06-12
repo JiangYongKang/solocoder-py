@@ -1,0 +1,8 @@
+你实现的 WebSocket 会话管理器模块存在一些问题，需要修复：
+1. `session.py` 中 `_send_ping` 和 `_tick_heartbeat` 两个位置同时对 `missed_pongs` 递增，导致计数增长速度为实际丢失数的两倍，配置 `max_missed_pongs=3` 时只需连续 2 次未收到 Pong 就会被判定超时。
+2. `_on_heartbeat_timeout` 方法判定心跳超时后抛出 `HeartbeatTimeoutError` 异常导致 `tick` 方法中断，紧随其后的 `_tick_reconnect` 不会被调用，心跳断开后重连流程无法自动衔接。
+3. `_tick_heartbeat` 方法使用 `last_ping_sent_at` 而非 `last_pong_received_at` 作为超时计时基准，导致 pong_timeout 的判定滞后于实际超时时间。
+4. `manager.py` 的 `tick_all` 方法用 `except Exception: pass` 吞掉了所有异常，包括 `HeartbeatTimeoutError` 和重连失败异常，会话状态变更事件对调用方完全不可见。
+5. `send` 方法直接引用 `self._reorder_buffer._config.max_sequence` 跨越了类的私有属性边界，破坏了 `ReorderBuffer` 的封装。
+6. README.md 中 `ReorderConfig` 的默认 `max_sequence` 文档值为 65535，但代码实际默认值是 4294967295，与代码不一致。
+7. 修复后重新运行 `poetry run pytest tests/websocket/ -q`，需要让所有测试通过。

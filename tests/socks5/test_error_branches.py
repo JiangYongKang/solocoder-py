@@ -154,6 +154,24 @@ class TestDomainResolutionFailure:
         assert reply.reply_code == REP_HOST_UNREACHABLE
         assert session.state == SessionState.CLOSED
 
+    def test_udp_relay_unresolvable_domain_raises_error(self):
+        server = make_full_server()
+
+        session = handshake_no_auth(server, "s1")
+
+        addr = Socks5Address(atyp=ATYP_IPV4, host="0.0.0.0", port=0)
+        request = build_request(0x03, addr)
+        server.process_session("s1", request)
+
+        relay = server.get_udp_relay("s1")
+        assert relay is not None
+
+        target_addr = Socks5Address(atyp=ATYP_DOMAINNAME, host="nonexistent.example.com", port=53)
+        datagram = UdpDatagram(rsv=0, frag=0, address=target_addr, data=b"query")
+
+        with pytest.raises(Socks5ResolutionError, match="Failed to resolve domain"):
+            relay.send_from_client(datagram)
+
 
 class TestUnsupportedAuthMethod:
     def test_no_acceptable_method(self):

@@ -22,8 +22,7 @@
 | `ZigZagOverflowError` | ZigZag 编解码数值溢出（输入超出指定位宽的整数范围） |
 | `SchemaError` | Schema 定义相关错误的基类 |
 | `SchemaCompatibilityError` | Schema 演进兼容性检查失败（字段被删除、类型被修改、字段未追加等） |
-| `UnknownFieldError` | 预留：未知字段编号错误 |
-| `DeserializationError` | 反序列化过程中的通用错误 |
+| `DeserializationError` | 反序列化过程中的通用错误（数据损坏、wire type 不匹配等） |
 
 ### buffer.py
 
@@ -132,6 +131,52 @@ decode(m) =  (m >> 1) ^ -(m & 1)
 | 64              | 128               |
 
 可见，正负整数交错排列，绝对值越小的数编码结果也越小，编码后所需字节数也越少。
+
+## Wire Type 与字段编码格式
+
+为了支持**向前兼容**（旧 Schema 能跳过未知字段），每个字段的编码都包含一个自描述的 **tag**，其中同时编码了字段编号和 wire type（导线类型）。
+
+### 整体二进制格式
+
+```
++-----------+---------+---------+---------+---------+
+|  version  |  tag 1  | value 1 |  tag 2  | value 2 |  ...
+| (varint)  |(varint) | (type dep.) |(varint)|(type dep.) |
++-----------+---------+---------+---------+---------+
+```
+
+- `version`：Schema 版本号（UVarint 编码），用于元数据校验
+- `tag`：字段编号 + wire type 的组合编码（UVarint 编码）
+- `value`：字段值，编码方式由 wire type 决定
+
+### Tag 编码
+
+```
+tag = (field_id << 3) | wire_type
+```
+
+- `field_id` 左移 3 位，腾出低 3 位存放 wire type
+- 整个 tag 按 UVarint 规则编码
+
+### Wire Type 定义
+
+| Wire Type | 名称     | 字段类型                     | 编码格式                        |
+|-----------|----------|-----------------------------|--------------------------------|
+| 0         | VARINT   | `BOOL`, `INT32`, `INT64`, `UINT32`, `UINT64` | 变长整数（varint）               |
+| 2         | LEN      | `STRING`, `BYTES`           | varint(长度) + 原始字节数据      |
+
+### 未知字段跳过逻辑
+
+反序列化时遇到当前 Schema 未知的 field_id，根据 tag 中的 wire type 即可正确跳过：
+
+- **VARINT (0)**：逐字节读取，直到遇到最高位为 0 的字节（即一个完整 varint 的结束）
+- **LEN (2)**：先读取长度 varint，然后跳过对应数量的字节
+
+这种设计确保了即使完全不知道字段的语义和具体类型，也能安全地跳过未知字段的数据，保证了 Schema 向前兼容。
+
+### 类型安全校验
+
+当字段在 reader_schema 中已知时，会校验实际 wire type 与字段类型是否匹配。不匹配则抛出 `DeserializationError("wire type mismatch")`，防止数据损坏或类型错误被静默忽略。
 
 ## Schema 向前兼容策略
 
@@ -338,6 +383,17 @@ assert result["name"] == "X"
 | `INT64`        | `int`      | `0`     | ZigZag + UVarint（64 位） |
 | `STRING`       | `str`      | `""`    | UVarint(长度) + UTF-8 字节 |
 | `BYTES`        | `bytes`    | `b""`   | UVarint(长度) + 原始字节 |
+
+### 严格类型检查
+
+序列化时采用**严格类型检查**，不会做隐式类型转换。传入类型不匹配会抛出 `TypeError`：
+
+- `BOOL` 字段只接受 `bool` 类型（传入 `int` 或 `str` 都会报错）
+- 整数字段（`INT32`/`INT64`/`UINT32`/`UINT64`）只接受 `int` 类型（注意 `bool` 是 `int` 的子类，因此也会被拒绝）
+- `STRING` 字段只接受 `str` 类型
+- `BYTES` 字段接受 `bytes` 或 `bytearray` 类型
+
+这样可以及早发现调用方的数据类型错误，避免因隐式转换导致的隐蔽 Bug。
 
 ## 模块文件结构
 

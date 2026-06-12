@@ -151,6 +151,7 @@ class _BaseDecoder(ABC):
         self._output: bytearray = bytearray()
         self._finalized: bool = False
         self._reverse_table: dict[str, int] | None = None
+        self._total_chars: int = 0
 
     @property
     @abstractmethod
@@ -259,15 +260,16 @@ class _BaseDecoder(ABC):
             raise TypeError("data must be a string")
         filtered = self._filter_whitespace(data)
         self._buffer += filtered
-        if self._pad:
-            while len(self._buffer) >= self._chars_per_block:
+        self._total_chars += len(filtered)
+        while len(self._buffer) >= self._chars_per_block:
+            if self._pad:
                 has_padding = self._PAD_CHAR in self._buffer[: self._chars_per_block]
                 if has_padding:
                     break
-                block = self._buffer[: self._chars_per_block]
-                self._buffer = self._buffer[self._chars_per_block :]
-                decoded = self._decode_block(block, 0)
-                self._output.extend(decoded)
+            block = self._buffer[: self._chars_per_block]
+            self._buffer = self._buffer[self._chars_per_block :]
+            decoded = self._decode_block(block, 0)
+            self._output.extend(decoded)
 
     def finalize(self) -> bytes:
         if self._finalized:
@@ -293,7 +295,7 @@ class _BaseDecoder(ABC):
                 decoded = self._decode_block(remainder, pad_count)
                 self._output.extend(decoded)
         else:
-            expected_bytes = self._validate_no_padding_length(len(data))
+            expected_bytes = self._validate_no_padding_length(self._total_chars)
             full_blocks = len(data) // self._chars_per_block
             remainder_start = full_blocks * self._chars_per_block
             for i in range(full_blocks):
@@ -319,6 +321,7 @@ class _BaseDecoder(ABC):
         self._buffer = ""
         self._output.clear()
         self._finalized = False
+        self._total_chars = 0
 
     def decode(self, data: str) -> bytes:
         self.reset()

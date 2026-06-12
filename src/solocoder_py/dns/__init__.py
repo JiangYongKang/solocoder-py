@@ -5,6 +5,7 @@ from .exceptions import (
     DNSResolutionError,
     DNSTimeoutError,
     DNSCNAMELoopError,
+    DNSCNAMEChainTooLongError,
     DNSNoRecordsError,
     DNSInvalidRecordError,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "DNSResolutionError",
     "DNSTimeoutError",
     "DNSCNAMELoopError",
+    "DNSCNAMEChainTooLongError",
     "DNSNoRecordsError",
     "DNSInvalidRecordError",
     "DNSRecord",

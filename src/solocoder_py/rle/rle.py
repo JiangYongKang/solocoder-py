@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Tuple
-
 from .exceptions import (
     RLEInvalidCountError,
     RLEInvalidLengthError,
@@ -47,7 +45,6 @@ def encode(data: bytes) -> bytes:
             result.append(data[i])
             i += chunk_size
         else:
-            literal_start = i
             literal_buf = bytearray()
 
             while i < n and len(literal_buf) < MAX_LITERAL_LENGTH:
@@ -197,29 +194,39 @@ class RLEEncoder:
         if self._finished:
             return bytes(self._output)
 
-        while self._buffer:
-            run_len = self._count_run_from(0)
+        data = bytes(self._buffer)
+        self._buffer.clear()
+        i = 0
+        n = len(data)
+
+        while i < n:
+            run_len = _count_run(data, i)
 
             if run_len >= MIN_RUN_LENGTH:
                 chunk_size = min(run_len, MAX_COUNT)
                 self._output.append(ESC_BYTE)
                 self._output.append(TYPE_RUN)
                 self._output.append(chunk_size)
-                self._output.append(self._buffer[0])
-                self._buffer = self._buffer[chunk_size:]
+                self._output.append(data[i])
+                i += chunk_size
             else:
-                take = min(len(self._buffer), MAX_LITERAL_LENGTH)
-                literal = self._buffer[:take]
-                self._buffer = self._buffer[take:]
+                literal_buf = bytearray()
 
-                if len(literal) == 1 and literal[0] == ESC_BYTE:
+                while i < n and len(literal_buf) < MAX_LITERAL_LENGTH:
+                    run_len_here = _count_run(data, i)
+                    if run_len_here >= MIN_RUN_LENGTH:
+                        break
+                    literal_buf.append(data[i])
+                    i += 1
+
+                if len(literal_buf) == 1 and literal_buf[0] == ESC_BYTE:
                     self._output.append(ESC_BYTE)
                     self._output.append(TYPE_ESC_ESCAPE)
                 else:
                     self._output.append(ESC_BYTE)
                     self._output.append(TYPE_LITERAL)
-                    self._output.append(len(literal))
-                    self._output.extend(literal)
+                    self._output.append(len(literal_buf))
+                    self._output.extend(literal_buf)
 
         self._finished = True
         return bytes(self._output)

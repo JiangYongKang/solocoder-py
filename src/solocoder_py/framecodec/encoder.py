@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .crc import CrcCalculator
-from .exceptions import FrameTooLargeError
+from .exceptions import FrameTooLargeError, VersionIncompatibleError
 from .models import Frame, FrameConfig
 
 
@@ -18,6 +18,16 @@ class FrameEncoder:
     def encode(self, payload: bytes, version: Optional[int] = None) -> bytes:
         if version is None:
             version = self._config.version
+
+        if not (
+            self._config.min_supported_version
+            <= version
+            <= self._config.max_supported_version
+        ):
+            raise VersionIncompatibleError(
+                f"Version {version} not in supported range "
+                f"[{self._config.min_supported_version}, {self._config.max_supported_version}]"
+            )
 
         if len(payload) > self._config.max_payload_size:
             raise FrameTooLargeError(

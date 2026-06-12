@@ -23,6 +23,13 @@ class DNSCNAMELoopError(DNSResolutionError):
         self.chain = chain or []
 
 
+class DNSCNAMEChainTooLongError(DNSResolutionError):
+    def __init__(self, message: str, chain: list[str] | None = None, max_depth: int | None = None) -> None:
+        super().__init__(message)
+        self.chain = chain or []
+        self.max_depth = max_depth
+
+
 class DNSNoRecordsError(DNSResolutionError):
     pass
 

@@ -4,7 +4,6 @@ from .exceptions import (
     SchemaCompatibilityError,
     SchemaError,
     SerializerError,
-    UnknownFieldError,
     VarintDecodeError,
     ZigZagOverflowError,
 )
@@ -38,7 +37,6 @@ __all__ = [
     "SchemaCompatibilityError",
     "SchemaError",
     "SerializerError",
-    "UnknownFieldError",
     "VarintDecodeError",
     "ZigZagOverflowError",
     "Buffer",

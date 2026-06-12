@@ -162,6 +162,42 @@ class TestConnectionPoolBasic:
 
         assert pool.size() == 2
 
+    def test_max_size_zero_borrow_fail(self):
+        config = make_config(max_size=0, wait_strategy=PoolWaitStrategy.FAIL)
+        pool, clock = make_pool(config=config)
+
+        assert pool.size() == 0
+        assert pool.config.max_size == 0
+
+        with pytest.raises(PoolExhaustedError):
+            pool.borrow()
+
+        assert pool.size() == 0
+        assert pool.stats.total_connections == 0
+        pool.close()
+
+    def test_max_size_zero_block_timeout(self):
+        config = make_config(max_size=0, wait_strategy=PoolWaitStrategy.BLOCK, wait_timeout=0.1)
+        pool = ConnectionPool(
+            host="localhost", port=6379, config=config, clock=RealClock()
+        )
+
+        assert pool.size() == 0
+
+        start = time.monotonic()
+        with pytest.raises(PoolExhaustedError):
+            pool.borrow()
+        elapsed = time.monotonic() - start
+
+        assert elapsed >= 0.09
+        assert pool.size() == 0
+        pool.close()
+
+    def test_max_size_negative_rejected(self):
+        config = make_config(max_size=-1)
+        with pytest.raises(ValueError, match="max_size cannot be negative"):
+            make_pool(config=config)
+
     def test_return_all_and_close(self):
         config = make_config(max_size=5)
         pool, clock = make_pool(config=config)

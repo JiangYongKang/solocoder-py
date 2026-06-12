@@ -288,6 +288,151 @@ class TestLineWidthControl:
         decoded = b64decode(encoded)
         assert decoded == data
 
+    def test_base32_line_width_76(self):
+        data = b"x" * 100
+        encoded = b32encode(data, line_width=76)
+        lines = encoded.split("\n")
+        for line in lines[:-1]:
+            assert len(line) == 76
+        assert len(lines[-1]) <= 76
+        decoded = b32decode(encoded)
+        assert decoded == data
+
+    def test_base32_line_width_exact_multiple(self):
+        data = b"x" * 95
+        encoded = b32encode(data, line_width=76)
+        lines = encoded.split("\n")
+        assert len(lines) >= 2
+        assert len(lines[0]) == 76
+        decoded = b32decode(encoded)
+        assert decoded == data
+
+    def test_base32_decode_with_newlines(self):
+        data = b"Hello, World!"
+        encoded = b32encode(data, line_width=8)
+        assert "\n" in encoded
+        decoded = b32decode(encoded)
+        assert decoded == data
+
+    def test_base32_line_width_zero_no_wrap(self):
+        data = b"x" * 100
+        encoded = b32encode(data, line_width=0)
+        assert "\n" not in encoded
+        decoded = b32decode(encoded)
+        assert decoded == data
+
+    def test_base32_streaming_encode_with_line_width(self):
+        data = b"x" * 200
+        encoder = Base32Encoder(line_width=76)
+        chunks = [data[i : i + 10] for i in range(0, len(data), 10)]
+        for chunk in chunks:
+            encoder.update(chunk)
+        encoded = encoder.finalize()
+        lines = encoded.split("\n")
+        for line in lines[:-1]:
+            assert len(line) == 76
+        decoded = b32decode(encoded)
+        assert decoded == data
+
+    def test_base16_line_width_76(self):
+        data = b"x" * 100
+        encoded = b16encode(data, line_width=76)
+        lines = encoded.split("\n")
+        for line in lines[:-1]:
+            assert len(line) == 76
+        assert len(lines[-1]) <= 76
+        decoded = b16decode(encoded)
+        assert decoded == data
+
+    def test_base16_line_width_exact_multiple(self):
+        data = b"x" * 152
+        encoded = b16encode(data, line_width=76)
+        lines = encoded.split("\n")
+        assert len(lines) >= 2
+        assert len(lines[0]) == 76
+        assert len(lines[1]) == 76
+        decoded = b16decode(encoded)
+        assert decoded == data
+
+    def test_base16_decode_with_newlines(self):
+        data = b"Hello, World!"
+        encoded = b16encode(data, line_width=8)
+        assert "\n" in encoded
+        decoded = b16decode(encoded)
+        assert decoded == data
+
+    def test_base16_line_width_zero_no_wrap(self):
+        data = b"x" * 100
+        encoded = b16encode(data, line_width=0)
+        assert "\n" not in encoded
+        decoded = b16decode(encoded)
+        assert decoded == data
+
+    def test_base16_streaming_encode_with_line_width(self):
+        data = b"x" * 200
+        encoder = Base16Encoder(line_width=76)
+        chunks = [data[i : i + 10] for i in range(0, len(data), 10)]
+        for chunk in chunks:
+            encoder.update(chunk)
+        encoded = encoder.finalize()
+        lines = encoded.split("\n")
+        for line in lines[:-1]:
+            assert len(line) == 76
+        decoded = b16decode(encoded)
+        assert decoded == data
+
+    def test_base64_no_padding_with_line_width(self):
+        data = b"Hello, World! This is a test of combined modes."
+        encoded = b64encode(data, pad=False, line_width=20)
+        assert "\n" in encoded
+        assert "=" not in encoded
+        lines = encoded.split("\n")
+        for line in lines[:-1]:
+            assert len(line) == 20
+        decoded = b64decode(encoded, pad=False)
+        assert decoded == data
+
+    def test_base32_no_padding_with_line_width(self):
+        data = b"Hello, World! This is a test of combined modes."
+        encoded = b32encode(data, pad=False, line_width=20)
+        assert "\n" in encoded
+        assert "=" not in encoded
+        lines = encoded.split("\n")
+        for line in lines[:-1]:
+            assert len(line) == 20
+        decoded = b32decode(encoded, pad=False)
+        assert decoded == data
+
+    def test_base16_no_padding_with_line_width(self):
+        data = b"Hello, World! This is a test of combined modes."
+        encoded = b16encode(data, pad=False, line_width=20)
+        assert "\n" in encoded
+        assert "=" not in encoded
+        lines = encoded.split("\n")
+        for line in lines[:-1]:
+            assert len(line) == 20
+        decoded = b16decode(encoded, pad=False)
+        assert decoded == data
+
+    def test_streaming_no_padding_with_line_width(self):
+        data = b"x" * 300
+        encoder = Base64Encoder(pad=False, line_width=40)
+        chunks = [data[i : i + 17] for i in range(0, len(data), 17)]
+        for chunk in chunks:
+            encoder.update(chunk)
+        encoded = encoder.finalize()
+        assert "\n" in encoded
+        assert "=" not in encoded
+        lines = encoded.split("\n")
+        for line in lines[:-1]:
+            assert len(line) == 40
+        decoder = Base64Decoder(pad=False)
+        encoded_chunks = [encoded[i : i + 53] for i in range(0, len(encoded), 53)]
+        for chunk in encoded_chunks:
+            decoder.update(chunk)
+        decoded = decoder.finalize()
+        assert decoded == data
+
 
 class TestBoundaryConditions:
     def test_empty_byte_stream(self):

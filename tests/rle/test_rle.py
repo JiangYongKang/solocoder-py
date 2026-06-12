@@ -289,6 +289,80 @@ class TestRLEEncoder:
         with pytest.raises(RuntimeError, match="already been finished"):
             encoder.write(b"test")
 
+    def test_mixed_literal_then_run_matches_encode(self):
+        data = b"AABBB"
+        encoder = RLEEncoder()
+        encoder.write(data)
+        stream_result = encoder.finish()
+        direct_result = encode(data)
+        assert stream_result == direct_result
+        assert decode(stream_result) == data
+
+    def test_mixed_run_then_literal_then_run_matches_encode(self):
+        data = bytes([0x41] * 5 + [0x42, 0x43, 0x44] + [0x45] * 8)
+        encoder = RLEEncoder()
+        encoder.write(data)
+        stream_result = encoder.finish()
+        direct_result = encode(data)
+        assert stream_result == direct_result
+        assert decode(stream_result) == data
+
+    def test_mixed_data_incremental_writes_matches_encode(self):
+        data = bytes([0x41] * 5 + [0x42, 0x43] + [0x44] * 10)
+        encoder = RLEEncoder()
+        encoder.write(data[:3])
+        encoder.write(data[3:7])
+        encoder.write(data[7:])
+        stream_result = encoder.finish()
+        direct_result = encode(data)
+        assert stream_result == direct_result
+        assert decode(stream_result) == data
+
+    def test_run_after_literal_boundary_crossed_increments(self):
+        data = b"AA" + b"B" * 5
+        encoder = RLEEncoder()
+        encoder.write(b"AA")
+        encoder.write(b"BBB")
+        encoder.write(b"BB")
+        stream_result = encoder.finish()
+        direct_result = encode(data)
+        assert stream_result == direct_result
+        assert decode(stream_result) == data
+
+    def test_mixed_with_escape_byte_matches_encode(self):
+        data = bytes([0x41, 0x41, ESC_BYTE, 0x42, 0x42, 0x42])
+        encoder = RLEEncoder()
+        encoder.write(data)
+        stream_result = encoder.finish()
+        direct_result = encode(data)
+        assert stream_result == direct_result
+        assert decode(stream_result) == data
+
+    def test_complex_mixed_pattern_matches_encode(self):
+        data = bytearray()
+        for i in range(5):
+            data.extend(bytes([0x40 + i]) * (1 + i))
+            data.extend(bytes([0x60 + i]))
+        data.extend(bytes([0x7A] * 10))
+        data = bytes(data)
+        encoder = RLEEncoder()
+        encoder.write(data)
+        stream_result = encoder.finish()
+        direct_result = encode(data)
+        assert stream_result == direct_result
+        assert decode(stream_result) == data
+
+    def test_literal_span_across_multiple_writes(self):
+        data = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0xFF, 0xFF, 0xFF])
+        encoder = RLEEncoder()
+        encoder.write(data[:2])
+        encoder.write(data[2:4])
+        encoder.write(data[4:])
+        stream_result = encoder.finish()
+        direct_result = encode(data)
+        assert stream_result == direct_result
+        assert decode(stream_result) == data
+
 
 class TestRLEDecoder:
     def test_decode_single_write(self):

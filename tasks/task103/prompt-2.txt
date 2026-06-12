@@ -1,0 +1,5 @@
+你实现的 TCP 连接池模块存在一些问题，需要修复：
+1. `pool.py` 的 `_eviction_loop` 方法用 `except Exception: pass` 静默吞噬了空闲驱逐过程中的所有异常，如果驱逐逻辑内部出错会导致连接永远不被清理，造成静默连接泄漏。
+2. `models.py` 的 `PoolConfig` 定义了 `health_check_timeout` 字段但在整个 connpool 包中没有任何地方使用它。`pool.py` 在执行健康检查时直接调用 `conn.health_check()` 没有超时控制，用户配置的超时参数形同虚设。
+3. 测试覆盖缺少 `max_size=0` 的边界条件验证，提示词要求测试"连接数达到零时的借用失败"，但测试中所有用例的 max_size 最小为 1。
+4. 修复后重新运行 `poetry run pytest tests/connpool/ -q`，需要让所有测试通过。

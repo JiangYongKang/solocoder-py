@@ -50,7 +50,7 @@ class MockTCPConnection:
         if not self._closed:
             self._healthy = True
 
-    def health_check(self) -> bool:
+    def health_check(self, timeout: Optional[float] = None) -> bool:
         if self._closed:
             return False
         return self._healthy

@@ -22,7 +22,8 @@
 | `DNSCacheError` | 缓存操作相关异常 |
 | `DNSResolutionError` | DNS 解析过程异常基类 |
 | `DNSTimeoutError` | 上游解析器超时异常 |
-| `DNSCNAMELoopError` | CNAME 循环引用或链深度超限异常，携带 `chain` 属性记录 CNAME 链 |
+| `DNSCNAMELoopError` | CNAME 循环引用异常，携带 `chain` 属性记录 CNAME 链（如 a → b → a） |
+| `DNSCNAMEChainTooLongError` | CNAME 链深度超过上限异常，携带 `chain` 和 `max_depth` 属性（与循环引用区分，便于调用方分别处理） |
 | `DNSNoRecordsError` | 无解析结果异常（预留） |
 | `DNSInvalidRecordError` | 无效 DNS 记录异常（预留） |
 

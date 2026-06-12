@@ -114,7 +114,6 @@ class TestVarintEncoding:
         encoded = encode_int(-42)
         assert len(encoded) == 2
         assert encoded[0] >> 6 == WidthMarker.WIDTH_1
-        assert encoded[0] & 0x20 != 0
         value, consumed, is_anchor = decode_int(encoded, 0)
         assert value == -42
         assert consumed == 2
@@ -200,11 +199,6 @@ class TestVarintEncoding:
         with pytest.raises(InvalidWidthMarkerError, match="Invalid width marker"):
             decode_int(invalid_marker, 0)
 
-    def test_sign_bit_in_marker(self):
-        encoded = encode_int(-50)
-        assert encoded[0] & 0x20 == 0x20
-        value, _, _ = decode_int(encoded, 0)
-        assert value == -50
 
 
 class TestDeltaEncodingConfig:

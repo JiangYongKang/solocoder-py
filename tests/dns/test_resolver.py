@@ -7,6 +7,7 @@ import pytest
 from solocoder_py.dns import (
     DNSCache,
     DNSCNAMELoopError,
+    DNSCNAMEChainTooLongError,
     DNSRecord,
     DNSRecordType,
     DNSResolutionError,
@@ -307,6 +308,103 @@ class TestStubResolverNormalFlow:
         cname_records = response.filter_by_type(DNSRecordType.CNAME)
         assert len(cname_records) == 1
         assert cname_records[0].value == "example.com"
+        assert upstream.call_count == 2
+
+    def test_multi_level_cname_calls_upstream_for_each_level(self):
+        upstream = make_mock_upstream()
+        upstream.add_records([
+            DNSRecord(name="a.example.com", type=DNSRecordType.CNAME, value="b.example.com", ttl=300),
+            DNSRecord(name="b.example.com", type=DNSRecordType.CNAME, value="c.example.com", ttl=300),
+            DNSRecord(name="c.example.com", type=DNSRecordType.CNAME, value="final.example.com", ttl=300),
+            DNSRecord(name="final.example.com", type=DNSRecordType.A, value="5.6.7.8", ttl=300),
+        ])
+        resolver = make_resolver(upstream=upstream)
+
+        response = resolver.resolve("a.example.com", DNSRecordType.A)
+
+        assert response.has_records()
+        assert upstream.call_count == 4
+
+        a_records = response.filter_by_type(DNSRecordType.A)
+        assert len(a_records) == 1
+        assert a_records[0].value == "5.6.7.8"
+        cname_records = response.filter_by_type(DNSRecordType.CNAME)
+        assert len(cname_records) == 3
+
+        upstream.reset_call_count()
+
+        response2 = resolver.resolve("a.example.com", DNSRecordType.A)
+        assert upstream.call_count == 0
+        assert response2.has_records()
+
+    def test_intermediate_cname_expired_requires_re_resolve(self):
+        upstream = make_mock_upstream()
+        upstream.add_records([
+            DNSRecord(name="a.example.com", type=DNSRecordType.CNAME, value="b.example.com", ttl=1),
+            DNSRecord(name="b.example.com", type=DNSRecordType.CNAME, value="final.example.com", ttl=300),
+            DNSRecord(name="final.example.com", type=DNSRecordType.A, value="5.6.7.8", ttl=300),
+        ])
+        resolver = make_resolver(upstream=upstream)
+
+        response = resolver.resolve("a.example.com", DNSRecordType.A)
+        assert response.has_records()
+        assert upstream.call_count == 3
+
+        time.sleep(1.1)
+
+        upstream.reset_call_count()
+
+        response2 = resolver.resolve("a.example.com", DNSRecordType.A)
+        assert response2.has_records()
+        assert upstream.call_count == 1
+
+        a_records = response2.filter_by_type(DNSRecordType.A)
+        assert len(a_records) == 1
+        assert a_records[0].value == "5.6.7.8"
+
+    def test_final_cname_target_expired_requires_re_resolve(self):
+        upstream = make_mock_upstream()
+        upstream.add_records([
+            DNSRecord(name="www.example.com", type=DNSRecordType.CNAME, value="example.com", ttl=300),
+            DNSRecord(name="example.com", type=DNSRecordType.A, value="1.2.3.4", ttl=1),
+        ])
+        resolver = make_resolver(upstream=upstream)
+
+        response = resolver.resolve("www.example.com", DNSRecordType.A)
+        assert response.has_records()
+        assert upstream.call_count == 2
+
+        time.sleep(1.1)
+
+        upstream.reset_call_count()
+
+        response2 = resolver.resolve("www.example.com", DNSRecordType.A)
+        assert response2.has_records()
+        assert upstream.call_count == 1
+
+        a_records = response2.filter_by_type(DNSRecordType.A)
+        assert len(a_records) == 1
+        assert a_records[0].value == "1.2.3.4"
+
+    def test_each_cname_level_cached_independently(self):
+        upstream = make_mock_upstream()
+        upstream.add_records([
+            DNSRecord(name="x.example.com", type=DNSRecordType.CNAME, value="y.example.com", ttl=300),
+            DNSRecord(name="y.example.com", type=DNSRecordType.CNAME, value="z.example.com", ttl=300),
+            DNSRecord(name="z.example.com", type=DNSRecordType.A, value="9.9.9.9", ttl=300),
+        ])
+        resolver = make_resolver(upstream=upstream)
+
+        resolver.resolve("x.example.com", DNSRecordType.A)
+        assert upstream.call_count == 3
+
+        upstream.reset_call_count()
+        resolver.resolve("y.example.com", DNSRecordType.A)
+        assert upstream.call_count == 0
+
+        upstream.reset_call_count()
+        resolver.resolve("z.example.com", DNSRecordType.A)
+        assert upstream.call_count == 0
 
     def test_cache_expired_re_resolve(self):
         upstream = make_mock_upstream()
@@ -427,10 +525,17 @@ class TestStubResolverExceptionCases:
             DNSRecord(name="level10.example.com", type=DNSRecordType.A, value="9.9.9.9", ttl=300),
         ])
 
-        with pytest.raises(DNSCNAMELoopError) as exc_info:
+        with pytest.raises(DNSCNAMEChainTooLongError) as exc_info:
             resolver.resolve("level0.example.com", DNSRecordType.A)
 
         assert "exceeded maximum depth" in str(exc_info.value)
+        assert exc_info.value.max_depth == 3
+        assert len(exc_info.value.chain) == 3
+
+    def test_loop_and_chain_too_long_are_different_exceptions(self):
+        assert issubclass(DNSCNAMELoopError, DNSResolutionError)
+        assert issubclass(DNSCNAMEChainTooLongError, DNSResolutionError)
+        assert DNSCNAMELoopError is not DNSCNAMEChainTooLongError
 
     def test_upstream_timeout(self):
         upstream = make_mock_upstream()

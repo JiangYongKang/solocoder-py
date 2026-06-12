@@ -81,15 +81,20 @@ class SessionManager:
         session = self.get_session(session_id)
         session.close()
 
-    def tick_all(self) -> None:
+    def tick_all(self) -> dict[str, Optional[Exception]]:
+        errors: dict[str, Optional[Exception]] = {}
         for session in list(self._sessions.values()):
-            if not session.is_closed:
-                try:
-                    session.tick()
-                except Exception:
-                    pass
+            if session.is_closed:
+                errors[session.session_id] = None
+                continue
+            try:
+                session.tick()
+                errors[session.session_id] = None
+            except Exception as e:
+                errors[session.session_id] = e
 
         self._cleanup_closed_sessions()
+        return errors
 
     def _cleanup_closed_sessions(self) -> None:
         to_remove = [sid for sid, s in self._sessions.items() if s.is_closed]

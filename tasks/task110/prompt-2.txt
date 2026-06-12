@@ -1,0 +1,5 @@
+你实现的差分编码流压缩器模块存在一些问题，需要修复：
+1. `decompressor.py` 的 `read` 方法在每次逐点解压时都调用 `self._input.getvalue()` 复制完整的压缩数据副本。当压缩数据流较大时，每解压一个值就复制一份完整数据，导致解压过程从 O(n) 退化为 O(n*m)。应缓存原始数据避免每次读取时重复复制。
+2. `varint.py` 的 `encode_int` 在标记字节中设置了符号位（SIGN_BIT_MASK），但 `decode_int` 完全忽略该位，实际的符号通过 `struct.unpack` 从数值字节中解析，标记字节中的符号位纯属冗余，浪费了格式空间。
+3. README.md 中 `decode_int` 返回值描述为二元组，但实际函数返回三元组 `(value, consumed, is_anchor)`，文档遗漏了第三个返回值，使用者按二元组解包会报错。
+4. 修复后重新运行 `poetry run pytest tests/delta/ -q`，需要让所有测试通过。
