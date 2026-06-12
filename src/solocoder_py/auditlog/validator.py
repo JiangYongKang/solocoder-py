@@ -50,6 +50,15 @@ class AuditLogValidator:
                     f"Ensure entries list index and start parameter are consistent."
                 )
 
+        if anchor_hashes is not None:
+            max_entry_index = end - 1
+            if max_entry_index >= len(anchor_hashes):
+                raise InvalidIndexError(
+                    f"anchor_hashes length {len(anchor_hashes)} is insufficient "
+                    f"to cover entry index {max_entry_index}. "
+                    f"Need at least {max_entry_index + 1} anchor hashes."
+                )
+
         results: List[VerificationResult] = []
         tampered_indices: List[int] = []
         first_tampered: Optional[int] = None
@@ -80,16 +89,18 @@ class AuditLogValidator:
             actual_hash = entry.hash
             valid = True
             fail_message = ""
+            failure_type = ""
 
             if i > start and entry.previous_hash != previous_hash:
                 valid = False
                 fail_message = f"Previous hash mismatch: expected {previous_hash}, got {entry.previous_hash}"
+                failure_type = "previous_hash"
             elif actual_hash != expected_hash:
                 valid = False
                 fail_message = f"Hash mismatch for entry {entry.index}"
+                failure_type = "content_hash"
             elif (
                 anchor_hashes is not None
-                and entry.index < len(anchor_hashes)
                 and actual_hash != anchor_hashes[entry.index]
             ):
                 valid = False
@@ -97,18 +108,23 @@ class AuditLogValidator:
                     f"Systemic overwrite detected: entry {entry.index} hash "
                     f"does not match anchor hash from chain state"
                 )
+                failure_type = "anchor_hash"
             elif chain_broken:
                 valid = False
                 fail_message = f"Chain already broken at index {first_tampered}, entry {entry.index} cannot be trusted"
+                failure_type = "chain_broken"
+
+            if failure_type == "anchor_hash":
+                result_expected_hash = anchor_hashes[entry.index]
+            else:
+                result_expected_hash = expected_hash
 
             if not valid:
                 results.append(
                     VerificationResult(
                         index=entry.index,
                         valid=False,
-                        expected_hash=anchor_hashes[entry.index]
-                        if anchor_hashes is not None and entry.index < len(anchor_hashes)
-                        else expected_hash,
+                        expected_hash=result_expected_hash,
                         actual_hash=actual_hash,
                         message=fail_message,
                     )
@@ -167,7 +183,7 @@ class AuditLogValidator:
             return VerificationResult(
                 index=entry.index,
                 valid=False,
-                expected_hash=expected_hash if anchor_hash is None else anchor_hash,
+                expected_hash=expected_hash,
                 actual_hash=actual_hash,
                 message=f"Previous hash mismatch: expected {previous_hash}, got {entry.previous_hash}",
             )
@@ -176,7 +192,7 @@ class AuditLogValidator:
             return VerificationResult(
                 index=entry.index,
                 valid=False,
-                expected_hash=expected_hash if anchor_hash is None else anchor_hash,
+                expected_hash=expected_hash,
                 actual_hash=actual_hash,
                 message=f"Hash mismatch for entry {entry.index}",
             )

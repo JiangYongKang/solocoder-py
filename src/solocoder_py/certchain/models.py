@@ -122,7 +122,7 @@ class Certificate:
     signing_secret: bytes = field(repr=False)
 
     def is_valid_at(self, time_sec: float) -> bool:
-        return int(self.not_before) <= int(time_sec) <= int(self.not_after)
+        return self.not_before <= time_sec <= self.not_after
 
     def is_self_signed(self) -> bool:
         return self.subject == self.issuer
@@ -207,7 +207,7 @@ class CRL:
     issuer_signing_secret: bytes = field(repr=False)
 
     def is_valid_at(self, time_sec: float) -> bool:
-        return int(self.this_update) <= int(time_sec) <= int(self.next_update)
+        return self.this_update <= time_sec <= self.next_update
 
     def is_revoked(self, serial_number: int) -> bool:
         return serial_number in self.revoked_serials

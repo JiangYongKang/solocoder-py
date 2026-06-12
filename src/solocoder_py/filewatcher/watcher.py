@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
@@ -8,12 +9,13 @@ from .debouncer import EventDebouncer
 from .event_source import MemoryEventSource
 from .exceptions import (
     FileWatcherAlreadyRunningError,
-    FileWatcherError,
     FileWatcherNotRunningError,
     InvalidPathError,
 )
 from .glob_filter import GlobFilter
 from .models import ChangeType, FileEvent
+
+logger = logging.getLogger(__name__)
 
 
 class FileWatcher:
@@ -90,21 +92,14 @@ class FileWatcher:
         if not self._is_running:
             return
 
-        if not self._is_path_under_root(event.path):
-            if not (event.is_rename and event.old_path is not None and self._is_path_under_root(event.old_path)):
+        if event.is_rename:
+            if not self._is_path_under_root(event.path) and not self._is_path_under_root(event.old_path):
                 return
-
-        if event.is_rename and event.old_path is not None:
-            if not self._is_path_under_root(event.old_path):
-                if not self._is_path_under_root(event.path):
-                    return
-
-        if event.is_rename and event.old_path is not None:
-            new_path_passes = self._filter.matches(event.path)
-            old_path_passes = self._filter.matches(event.old_path)
-            if not new_path_passes and not old_path_passes:
+            if not self._filter.matches(event.path) and not self._filter.matches(event.old_path):
                 return
         else:
+            if not self._is_path_under_root(event.path):
+                return
             if not self._filter.matches(event.path):
                 return
 
@@ -129,9 +124,11 @@ class FileWatcher:
         try:
             self._event_source.add_watch(event.path, is_dir=True, exists=True)
         except Exception as e:
-            raise FileWatcherError(
-                f"Failed to add watch for new directory {event.path}: {e}"
-            ) from e
+            logger.warning(
+                "Failed to add watch for new directory %s: %s",
+                event.path,
+                e,
+            )
 
     def _on_debounced_events(self, events: List[FileEvent]) -> None:
         if not self._is_running:

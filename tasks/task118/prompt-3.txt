@@ -1,0 +1,5 @@
+你实现的 filewatcher 模块在第 2 轮修复中引入了一些代码质量问题，需要继续修复：
+1. watcher.py 的 _on_raw_event 方法中三个分散的重命名条件块之间存在逻辑冗余。第一个块对 old_path 的检查保证了进入后续代码块时 event.path 和 old_path 不可能同时不在根路径下，导致 Block 2 中的 `if not self._is_path_under_root(event.path): return` 成为不可达的死代码。需要梳理三个条件块之间的逻辑关系，消除不可达分支。
+2. watcher.py 的 _on_raw_event 方法中 `event.is_rename and event.old_path is not None` 这一条件使用了冗余的 old_path 非空检查——FileEvent.is_rename 属性内部已包含 old_path is not None 的判定，外部重复检查增加了无意义的代码噪音。应将所有出现该冗余条件的位置统一改为只用 `event.is_rename`。
+3. 第 2 轮修复中 _handle_directory_event 方法将异常从静默吞掉改为直接 raise FileWatcherError，但调用链中没有兜底捕获。异常会沿事件处理链路一路向上传播到顶层，一次注册失败即可中断整个事件处理批次，风险比原来静默吞异常更大。需要在合适的层级捕获该异常并做降级处理（如记录日志），而非放任其向上传播。
+修复后重新运行 poetry run pytest tests/filewatcher/ -q，需要让所有测试通过。

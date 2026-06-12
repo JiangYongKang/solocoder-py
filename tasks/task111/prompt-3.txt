@@ -1,0 +1,4 @@
+你实现的 crypto_hash 模块在第 2 轮修复中引入了新的问题，需要继续修复：
+1. 第 2 轮修复中在 service.py 的 hash 方法里增加了 `min(effective_iterations, algorithm.max_iterations)` 限幅并将限幅后的值存入 HashResult，但 check_rehash_needed 方法仍然用原始未限幅的 `self.default_iterations` 与存储值比对，当用户配置的 iterations 超过算法上限时（如 BCRYPT_V3 配置 50 但 max_iterations=31），存储值为 31 而比对值为 50，31 != 50 恒成立，每次 verify 都触发 rehash，rehash 又生成 iterations=31 的新哈希，再次 verify 再次触发，形成永久重哈希循环。需要让 check_rehash_needed 的比较逻辑感知算法上限的存在。
+2. 第 2 轮修复中将 BcryptSimulatedAlgorithm.hash 方法内部的 min 限幅完全移除，迭代次数上限保护全部依赖服务层在调用前做限幅。算法作为独立组件缺少自保底线，如果有代码绕过服务层直接调用算法类，会执行远超设计上限的轮数。需要在算法层保留防御性限幅。
+修复后重新运行 poetry run pytest tests/crypto_hash/ -q，需要让所有测试通过。

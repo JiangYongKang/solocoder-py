@@ -1,0 +1,5 @@
+你实现的 auditlog 模块在第 2 轮修复中引入了新的验证逻辑缺陷，需要继续修复：
+1. validator.py 的 verify_chain 方法中，当 anchor_hashes 参数被传入但验证失败原因并非锚定哈希不匹配时（如 previous_hash 不一致或内容哈希不一致），VerificationResult 的 expected_hash 字段仍被无条件设置为锚定哈希值而非内容派生的正确哈希，导致 expected_hash 和 actual_hash 在结果中相同但 valid=False，验证报告自相矛盾。expected_hash 的赋值应区分失败类型，仅在锚定不匹配时使用锚定哈希，其余场景使用内容派生的期望值。
+2. verify_chain 方法接收了 anchor_hashes 参数但未校验其长度是否覆盖待验证的范围。当传入的 anchor_hashes 长度小于待验证条目数量时，超出范围的条目其锚定检测被静默跳过，攻击者可通过截断锚定列表绕过系统性覆写检测。需要在方法入口处对 anchor_hashes 长度做前置校验。
+3. verify_entry 方法的 previous_hash 不匹配和内容哈希不匹配分支中，将 expected_hash 设为 `expected_hash if anchor_hash is None else anchor_hash` 三元表达式，把锚定哈希的语义扩大到了非锚定失败场景，当用户传入 anchor_hash 且条目仅是 previous_hash 不正确时，报告中的期望哈希指向的是该条目的锚定值而非其内容应得的哈希，掩盖了内容完整性信息。锚定哈希应仅在锚定不匹配分支中充当 expected_hash。
+修复后重新运行 poetry run pytest tests/auditlog/ -q，需要让所有测试通过。

@@ -178,10 +178,21 @@ class CryptoHashService:
                 f"Salt length changed: {stored_hash.salt_length} -> {self.default_salt_length}"
             )
 
-        if stored_hash.iterations != self.default_iterations:
-            reasons.append(
-                f"Iterations changed: {stored_hash.iterations} -> {self.default_iterations}"
-            )
+        default_algo = get_algorithm(self.default_algorithm)
+        effective_default_iterations = min(self.default_iterations, default_algo.max_iterations)
+
+        if stored_hash.algorithm_version == self.default_algorithm:
+            if stored_hash.iterations != effective_default_iterations:
+                reasons.append(
+                    f"Iterations changed: {stored_hash.iterations} -> {effective_default_iterations}"
+                )
+        else:
+            stored_algo = get_algorithm(stored_hash.algorithm_version)
+            effective_stored_iterations = min(stored_hash.iterations, stored_algo.max_iterations)
+            if effective_stored_iterations != effective_default_iterations:
+                reasons.append(
+                    f"Iterations changed: {effective_stored_iterations} -> {effective_default_iterations}"
+                )
 
         return RehashStatus(
             needs_rehash=len(reasons) > 0,

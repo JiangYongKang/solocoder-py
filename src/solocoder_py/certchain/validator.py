@@ -103,12 +103,9 @@ class CertChainValidator:
         raise TrustAnchorNotFoundError(leaf_cert.subject, "unknown")
 
     def _check_validity(self, cert: Certificate, now: float) -> None:
-        now_sec = int(now)
-        not_before_sec = int(cert.not_before)
-        not_after_sec = int(cert.not_after)
-        if now_sec < not_before_sec:
+        if now < cert.not_before:
             raise CertificateNotYetValidError(cert.subject, cert.not_before, now)
-        if now_sec > not_after_sec:
+        if now > cert.not_after:
             raise CertificateExpiredError(cert.subject, cert.not_after, now)
 
     def _check_crl(self, cert: Certificate, now: float) -> None:

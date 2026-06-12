@@ -26,7 +26,8 @@ class SHA256Algorithm(HashAlgorithm):
 
     def hash(self, data: bytes, salt: bytes, iterations: int) -> bytes:
         result = salt + data
-        for _ in range(max(1, iterations)):
+        effective = min(max(1, iterations), self.max_iterations)
+        for _ in range(effective):
             result = hashlib.sha256(result).digest()
         return result
 
@@ -37,7 +38,8 @@ class SHA512Algorithm(HashAlgorithm):
 
     def hash(self, data: bytes, salt: bytes, iterations: int) -> bytes:
         result = salt + data
-        for _ in range(max(1, iterations)):
+        effective = min(max(1, iterations), self.max_iterations)
+        for _ in range(effective):
             result = hashlib.sha512(result).digest()
         return result
 
@@ -48,7 +50,7 @@ class BcryptSimulatedAlgorithm(HashAlgorithm):
     max_iterations = 31
 
     def hash(self, data: bytes, salt: bytes, iterations: int) -> bytes:
-        cost = max(1, iterations)
+        cost = min(max(1, iterations), self.max_iterations)
         pepper = b"bcrypt_simulated_pepper_v3"
         combined = salt + data
         for i in range(cost):
