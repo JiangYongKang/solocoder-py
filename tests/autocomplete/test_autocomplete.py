@@ -28,11 +28,11 @@ class TestBasicOperations:
             assert empty_trie.contains(word) is True
             assert empty_trie.get_weight(word) == weight
 
-    def test_insert_duplicate_word_ignored(self, empty_trie):
+    def test_insert_duplicate_word_accumulates_weight(self, empty_trie):
         empty_trie.insert("test", weight=5)
         empty_trie.insert("test", weight=10)
         assert empty_trie.size == 1
-        assert empty_trie.get_weight("test") == 5
+        assert empty_trie.get_weight("test") == 15
 
     def test_contains_nonexistent_word(self, empty_trie):
         assert empty_trie.contains("nonexistent") is False
@@ -52,8 +52,8 @@ class TestBasicOperations:
         sample_trie.clear()
         assert sample_trie.size == 0
         assert sample_trie.contains("apple") is False
-        with pytest.raises(InvalidPrefixError, match="prefix 'a' does not exist"):
-            sample_trie.search("a")
+        results = sample_trie.search("a")
+        assert results == []
 
 
 class TestSearchOperations:
@@ -75,9 +75,9 @@ class TestSearchOperations:
         assert "apple" in words
         assert "app" in words
 
-    def test_search_no_match_raises(self, sample_trie):
-        with pytest.raises(InvalidPrefixError, match="prefix 'xyz' does not exist"):
-            sample_trie.search("xyz")
+    def test_search_no_match_returns_empty(self, sample_trie):
+        results = sample_trie.search("xyz", fuzzy=False)
+        assert results == []
 
     def test_search_empty_prefix_returns_all(self, sample_trie):
         results = sample_trie.search("")
@@ -285,10 +285,10 @@ class TestEdgeCases:
         assert len(results) == 1
         assert results[0].word == "apple"
 
-    def test_search_prefix_longer_than_all_words_raises(self, empty_trie):
+    def test_search_prefix_longer_than_all_words_returns_empty(self, empty_trie):
         empty_trie.insert("app", weight=5)
-        with pytest.raises(InvalidPrefixError, match="prefix 'application' does not exist"):
-            empty_trie.search("application")
+        results = empty_trie.search("application", fuzzy=False)
+        assert results == []
 
     def test_zero_weight_word(self, empty_trie):
         empty_trie.insert("zero", weight=0)
@@ -445,27 +445,249 @@ class TestCandidateModel:
         assert candidates[3].weight == 10
 
 
-class TestInvalidPrefixError:
-    def test_search_nonexistent_prefix_raises(self, sample_trie):
-        with pytest.raises(InvalidPrefixError, match="prefix 'xyz' does not exist"):
-            sample_trie.search("xyz")
+class TestFuzzySearch:
+    def test_fuzzy_search_when_no_exact_match(self, sample_trie):
+        results = sample_trie.search("appla", fuzzy=True)
+        assert len(results) > 0
+        for r in results:
+            assert r.is_fuzzy is True
+            assert r.edit_distance > 0
 
-    def test_search_partial_nonexistent_prefix_raises(self, sample_trie):
-        with pytest.raises(InvalidPrefixError, match="prefix 'appz' does not exist"):
-            sample_trie.search("appz")
+    def test_fuzzy_search_disabled_returns_empty(self, sample_trie):
+        results = sample_trie.search("appla", fuzzy=False)
+        assert results == []
 
-    def test_search_single_char_nonexistent_prefix_raises(self, sample_trie):
-        with pytest.raises(InvalidPrefixError, match="prefix 'x' does not exist"):
-            sample_trie.search("x")
+    def test_fuzzy_threshold_zero_returns_empty(self, sample_trie):
+        results = sample_trie.search("appla", fuzzy=True, fuzzy_threshold=0)
+        assert results == []
 
-    def test_search_empty_trie_raises(self, empty_trie):
-        with pytest.raises(InvalidPrefixError, match="prefix 'a' does not exist"):
-            empty_trie.search("a")
+    def test_fuzzy_edit_distance_at_threshold(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        results = empty_trie.search("appla", fuzzy=True, fuzzy_threshold=1)
+        assert len(results) == 1
+        assert results[0].word == "apple"
+        assert results[0].edit_distance == 1
+        assert results[0].is_fuzzy is True
 
-    def test_invalid_prefix_error_is_autocomplete_error(self):
-        from solocoder_py.autocomplete import AutocompleteError
+    def test_fuzzy_edit_distance_exceeds_threshold(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        results = empty_trie.search("xyz", fuzzy=True, fuzzy_threshold=1)
+        assert results == []
 
-        assert issubclass(InvalidPrefixError, AutocompleteError)
+    def test_fuzzy_results_sorted_by_distance_then_weight(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        empty_trie.insert("apply", weight=15)
+        empty_trie.insert("apples", weight=8)
+        results = empty_trie.search("appla", fuzzy=True, fuzzy_threshold=2)
+        assert len(results) == 3
+        assert results[0].word == "apply"
+        assert results[0].edit_distance == 1
+        assert results[0].weight == 15
+        assert results[1].word == "apple"
+        assert results[1].edit_distance == 1
+        assert results[1].weight == 10
+
+    def test_exact_match_takes_precedence_over_fuzzy(self, sample_trie):
+        results = sample_trie.search("app", fuzzy=True)
+        assert len(results) == 3
+        for r in results:
+            assert r.is_fuzzy is False
+
+    def test_fuzzy_search_case_insensitive(self, empty_trie):
+        empty_trie.insert("Apple", weight=10)
+        results = empty_trie.search("appla", fuzzy=True, fuzzy_threshold=1)
+        assert len(results) == 1
+        assert results[0].word == "Apple"
+        assert results[0].is_fuzzy is True
+
+    def test_fuzzy_search_case_sensitive(self, empty_trie):
+        trie = TrieAutocomplete(case_sensitive=True)
+        trie.insert("Apple", weight=10)
+        results = trie.search("Appla", fuzzy=True, fuzzy_threshold=1)
+        assert len(results) == 1
+        assert results[0].edit_distance == 1
+
+    def test_fuzzy_mixed_with_exact_returns_exact_only(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        empty_trie.insert("apply", weight=5)
+        results = empty_trie.search("appl", fuzzy=True)
+        assert len(results) == 2
+        for r in results:
+            assert r.is_fuzzy is False
+            assert r.edit_distance == 0
+
+
+class TestBoundaryConditions:
+    def test_empty_corpus_returns_empty(self, empty_trie):
+        results = empty_trie.search("test")
+        assert results == []
+
+    def test_top_n_zero_returns_all(self, sample_trie):
+        results = sample_trie.search("app", top_n=0)
+        assert len(results) == 3
+
+    def test_top_n_negative_returns_all(self, sample_trie):
+        results = sample_trie.search("app", top_n=-1)
+        assert len(results) == 3
+
+    def test_single_char_prefix(self, sample_trie):
+        results = sample_trie.search("a", top_n=2)
+        assert len(results) == 2
+        assert results[0].weight >= results[1].weight
+
+    def test_prefix_matches_all_corpus(self, empty_trie):
+        for i in range(100):
+            empty_trie.insert(f"w{i}", weight=i)
+        results = empty_trie.search("w", top_n=10)
+        assert len(results) == 10
+        for i in range(9):
+            assert results[i].weight > results[i + 1].weight
+
+    def test_chinese_prefix_match(self, chinese_trie):
+        results = chinese_trie.search("中国")
+        assert len(results) == 3
+        words = [r.word for r in results]
+        assert "中国" in words
+        assert "中国人" in words
+        assert "中国话" in words
+
+    def test_chinese_single_char_prefix(self, chinese_trie):
+        results = chinese_trie.search("北")
+        assert len(results) == 2
+        words = [r.word for r in results]
+        assert "北京" in words
+        assert "北京大学" in words
+
+    def test_mixed_chinese_english(self, empty_trie):
+        empty_trie.insert("中国food", weight=10)
+        empty_trie.insert("中国city", weight=8)
+        empty_trie.insert("china", weight=5)
+        results = empty_trie.search("中国")
+        assert len(results) == 2
+        assert results[0].weight == 10
+
+    def test_case_insensitive_search(self, sample_trie):
+        results = sample_trie.search("APP")
+        assert len(results) == 3
+        words = [r.word for r in results]
+        assert "apple" in words
+        assert "app" in words
+        assert "application" in words
+
+    def test_case_sensitive_search(self, case_sensitive_trie):
+        results = case_sensitive_trie.search("APP")
+        assert len(results) == 1
+        assert results[0].word == "APP"
+
+    def test_case_sensitive_different_cases(self, case_sensitive_trie):
+        results_lower = case_sensitive_trie.search("app")
+        results_upper = case_sensitive_trie.search("APP")
+        results_mixed = case_sensitive_trie.search("App")
+        assert results_lower[0].word == "apple"
+        assert results_upper[0].word == "APP"
+        assert results_mixed[0].word == "Apple"
+
+    def test_blank_word_insertion_raises(self, empty_trie):
+        with pytest.raises(EmptyWordError):
+            empty_trie.insert("   ", weight=5)
+
+    def test_blank_word_update_raises(self, empty_trie):
+        with pytest.raises(EmptyWordError):
+            empty_trie.update_weight("  \t  ", weight=5)
+
+    def test_blank_word_delete_raises(self, empty_trie):
+        with pytest.raises(EmptyWordError):
+            empty_trie.delete("\n  ")
+
+    def test_empty_prefix_search_returns_all(self, sample_trie):
+        results = sample_trie.search("")
+        assert len(results) == sample_trie.size
+
+    def test_none_prefix_raises(self, empty_trie):
+        with pytest.raises(TypeError):
+            empty_trie.search(None)
+
+    def test_fuzzy_threshold_negative_raises(self, sample_trie):
+        with pytest.raises(InvalidWeightError):
+            sample_trie.fuzzy_threshold = -1
+
+
+class TestErrorBranches:
+    def test_delete_nonexistent_returns_false(self, empty_trie):
+        assert empty_trie.delete("nonexistent") is False
+
+    def test_update_nonexistent_inserts(self, empty_trie):
+        empty_trie.update_weight("new", weight=10)
+        assert empty_trie.contains("new") is True
+        assert empty_trie.get_weight("new") == 10
+
+    def test_fuzzy_threshold_zero_no_suggestions(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        results = empty_trie.search("appla", fuzzy=True, fuzzy_threshold=0)
+        assert results == []
+
+    def test_edit_distance_exactly_threshold(self, empty_trie):
+        empty_trie.insert("test", weight=10)
+        results = empty_trie.search("tesx", fuzzy=True, fuzzy_threshold=1)
+        assert len(results) == 1
+        assert results[0].edit_distance == 1
+        assert results[0].is_fuzzy is True
+
+    def test_exact_and_fuzzy_both_exist(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        empty_trie.insert("apply", weight=5)
+        results = empty_trie.search("appl", fuzzy=True)
+        assert len(results) == 2
+        for r in results:
+            assert r.is_fuzzy is False
+
+    def test_duplicate_insert_accumulates(self, empty_trie):
+        empty_trie.insert("test", weight=5)
+        empty_trie.insert("test", weight=3)
+        empty_trie.insert("test", weight=2)
+        assert empty_trie.get_weight("test") == 10
+
+    def test_delete_updates_all_prefix_nodes(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        empty_trie.insert("app", weight=5)
+        results_before = empty_trie.search("ap")
+        assert len(results_before) == 2
+        empty_trie.delete("apple")
+        results_after = empty_trie.search("ap")
+        assert len(results_after) == 1
+        assert results_after[0].word == "app"
+
+
+class TestHeatUpdate:
+    def test_search_increments_heat(self, empty_trie):
+        empty_trie.insert("apple", weight=5)
+        results = empty_trie.search("app")
+        assert results[0].weight == 5
+        empty_trie.update_weight("apple", weight=1, accumulate=True)
+        results = empty_trie.search("app")
+        assert results[0].weight == 6
+
+    def test_multiple_searches_increment_heat(self, empty_trie):
+        empty_trie.insert("test", weight=1)
+        for _ in range(10):
+            empty_trie.update_weight("test", weight=1, accumulate=True)
+        assert empty_trie.get_weight("test") == 11
+
+    def test_heat_affects_sorting(self, empty_trie):
+        empty_trie.insert("a", weight=5)
+        empty_trie.insert("b", weight=10)
+        results1 = empty_trie.search("")
+        assert results1[0].word == "b"
+        empty_trie.update_weight("a", weight=10, accumulate=True)
+        results2 = empty_trie.search("")
+        assert results2[0].word == "a"
+
+    def test_heat_same_value_lex_order(self, empty_trie):
+        empty_trie.insert("banana", weight=5)
+        empty_trie.insert("apple", weight=5)
+        results = empty_trie.search("")
+        assert results[0].word == "apple"
+        assert results[1].word == "banana"
 
 
 class TestTrieNode:

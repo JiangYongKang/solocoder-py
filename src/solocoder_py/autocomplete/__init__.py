@@ -4,12 +4,13 @@ from .exceptions import (
     InvalidPrefixError,
     InvalidWeightError,
 )
-from .models import Candidate, TrieNode
+from .models import Candidate, SearchResult, TrieNode
 from .trie import TrieAutocomplete
 
 __all__ = [
     "TrieAutocomplete",
     "Candidate",
+    "SearchResult",
     "TrieNode",
     "AutocompleteError",
     "EmptyWordError",
