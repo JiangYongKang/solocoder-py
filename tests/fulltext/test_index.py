@@ -552,3 +552,75 @@ class TestExceptionBranches:
         assert stem_word("你好") == "你好"
         assert idx.get_term_frequency("你好", "doc1") == 0
         assert idx.get_term_frequency("你", "doc1") == 1
+
+
+class TestMultiCharChineseStopwordsInIndex:
+    def test_multi_char_chinese_stopwords_filtered_on_index(self):
+        idx = FullTextIndex()
+        idx.add_document(Document(doc_id="doc1", content="我们是一个测试"))
+        assert idx.get_term_frequency("我", "doc1") == 0
+        assert idx.get_term_frequency("们", "doc1") == 0
+        assert idx.get_term_frequency("一", "doc1") == 0
+        assert idx.get_term_frequency("个", "doc1") == 0
+        assert idx.get_term_frequency("我们", "doc1") == 0
+        assert idx.get_term_frequency("一个", "doc1") == 0
+        assert idx.get_term_frequency("测", "doc1") == 1
+        assert idx.get_term_frequency("试", "doc1") == 1
+
+    def test_three_char_chinese_stopwords_filtered_on_index(self):
+        idx = FullTextIndex()
+        idx.add_document(Document(doc_id="doc1", content="为什么这样测试"))
+        assert idx.get_term_frequency("为", "doc1") == 0
+        assert idx.get_term_frequency("什", "doc1") == 0
+        assert idx.get_term_frequency("么", "doc1") == 0
+        assert idx.get_term_frequency("为什么", "doc1") == 0
+        assert idx.get_term_frequency("测", "doc1") == 1
+        assert idx.get_term_frequency("试", "doc1") == 1
+
+    def test_multi_char_chinese_stopwords_filtered_on_query(self):
+        idx = FullTextIndex()
+        idx.add_document(Document(doc_id="doc1", content="Python 是一个编程测试"))
+        results = idx.search("一个编程测试")
+        assert len(results) == 1
+        assert results[0].doc_id == "doc1"
+        assert "一" not in results[0].matched_terms
+        assert "个" not in results[0].matched_terms
+
+    def test_multi_char_stopword_only_query_returns_empty(self):
+        idx = FullTextIndex()
+        idx.add_document(Document(doc_id="doc1", content="我们是一个测试"))
+        results = idx.search("我们一个为什么")
+        assert len(results) == 0
+
+    def test_combined_single_and_multi_char_stopwords(self):
+        idx = FullTextIndex()
+        idx.add_document(Document(doc_id="doc1", content="我们的一个很好的测试"))
+        assert idx.get_term_frequency("我", "doc1") == 0
+        assert idx.get_term_frequency("们", "doc1") == 0
+        assert idx.get_term_frequency("的", "doc1") == 0
+        assert idx.get_term_frequency("一", "doc1") == 0
+        assert idx.get_term_frequency("个", "doc1") == 0
+        assert idx.get_term_frequency("很", "doc1") == 1
+        assert idx.get_term_frequency("好", "doc1") == 1
+        assert idx.get_term_frequency("测", "doc1") == 1
+        assert idx.get_term_frequency("试", "doc1") == 1
+
+    def test_custom_multi_char_stopword_in_index(self):
+        idx = FullTextIndex(extra_stopwords={"测试词"})
+        idx.add_document(Document(doc_id="doc1", content="这是测试词编程"))
+        assert idx.get_term_frequency("测", "doc1") == 0
+        assert idx.get_term_frequency("试", "doc1") == 0
+        assert idx.get_term_frequency("词", "doc1") == 0
+        assert idx.get_term_frequency("编", "doc1") == 1
+        assert idx.get_term_frequency("程", "doc1") == 1
+
+    def test_custom_multi_char_stopword_dynamically_added(self):
+        idx = FullTextIndex()
+        idx.add_document(Document(doc_id="doc1", content="测试词编程"))
+        results_before = idx.search("测试词")
+        assert len(results_before) == 1
+        idx.stopwords.add("测试词")
+        idx.add_document(Document(doc_id="doc2", content="另一个测试词"))
+        assert idx.get_term_frequency("测", "doc2") == 0
+        assert idx.get_term_frequency("试", "doc2") == 0
+        assert idx.get_term_frequency("词", "doc2") == 0

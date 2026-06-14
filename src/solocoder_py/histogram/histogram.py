@@ -96,8 +96,6 @@ class StreamingHistogram:
             if cumulative <= target_rank < cumulative + bucket_count:
                 lower = self._boundaries[i]
                 upper = self._boundaries[i + 1]
-                if bucket_count == 0:
-                    return lower
                 offset = target_rank - cumulative
                 return lower + (upper - lower) * (offset / bucket_count)
             cumulative += bucket_count

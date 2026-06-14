@@ -46,6 +46,7 @@ class TrieAutocomplete:
     ) -> None:
         self._root: TrieNode = TrieNode("")
         self._word_weights: dict[str, int] = {}
+        self._word_originals: dict[str, str] = {}
         self._lock = threading.RLock()
         self._case_sensitive = case_sensitive
         self._fuzzy_threshold = fuzzy_threshold
@@ -83,13 +84,15 @@ class TrieAutocomplete:
 
         with self._lock:
             normalized = self._normalize(word)
-            if word in self._word_weights:
-                new_weight = self._word_weights[word] + weight
-                self._word_weights[word] = new_weight
-                self._update_word_in_trie(normalized, new_weight, original_word=word)
+            if normalized in self._word_weights:
+                new_weight = self._word_weights[normalized] + weight
+                self._word_weights[normalized] = new_weight
+                original = self._word_originals[normalized]
+                self._update_word_in_trie(normalized, new_weight, original_word=original)
                 return
 
-            self._word_weights[word] = weight
+            self._word_weights[normalized] = weight
+            self._word_originals[normalized] = word
             self._insert_word(normalized, weight, original_word=word)
 
     def _insert_word(self, word: str, weight: int, *, original_word: Optional[str] = None) -> None:
@@ -111,18 +114,21 @@ class TrieAutocomplete:
             raise InvalidWeightError(f"weight must be non-negative, got {weight}")
 
         with self._lock:
-            if word not in self._word_weights:
-                self.insert(word, weight)
+            normalized = self._normalize(word)
+            if normalized not in self._word_weights:
+                self._word_weights[normalized] = weight
+                self._word_originals[normalized] = word
+                self._insert_word(normalized, weight, original_word=word)
                 return
 
             if accumulate:
-                new_weight = self._word_weights[word] + weight
+                new_weight = self._word_weights[normalized] + weight
             else:
                 new_weight = weight
 
-            self._word_weights[word] = new_weight
-            normalized = self._normalize(word)
-            self._update_word_in_trie(normalized, new_weight, original_word=word)
+            self._word_weights[normalized] = new_weight
+            original = self._word_originals[normalized]
+            self._update_word_in_trie(normalized, new_weight, original_word=original)
 
     def _update_word_in_trie(self, word: str, new_weight: int, *, original_word: Optional[str] = None) -> None:
         if original_word is None:
@@ -136,11 +142,13 @@ class TrieAutocomplete:
 
     def get_weight(self, word: str) -> Optional[int]:
         with self._lock:
-            return self._word_weights.get(word)
+            normalized = self._normalize(word)
+            return self._word_weights.get(normalized)
 
     def contains(self, word: str) -> bool:
         with self._lock:
-            return word in self._word_weights
+            normalized = self._normalize(word)
+            return normalized in self._word_weights
 
     def search(
         self,
@@ -193,7 +201,8 @@ class TrieAutocomplete:
         results: list[SearchResult] = []
         query_lower = query.lower() if not self._case_sensitive else query
 
-        for word, weight in self._word_weights.items():
+        for normalized, weight in self._word_weights.items():
+            word = self._word_originals[normalized]
             word_lower = word.lower() if not self._case_sensitive else word
             distance = _levenshtein_distance(query_lower, word_lower)
             if distance <= threshold and distance > 0:
@@ -210,8 +219,8 @@ class TrieAutocomplete:
 
     def _get_all_candidates(self, top_n: Optional[int]) -> list[Candidate]:
         all_candidates: list[Candidate] = [
-            Candidate(word=word, weight=weight)
-            for word, weight in self._word_weights.items()
+            Candidate(word=self._word_originals[normalized], weight=weight)
+            for normalized, weight in self._word_weights.items()
         ]
         all_candidates.sort(key=lambda c: (-c.weight, c.word))
         if top_n is not None and top_n > 0:
@@ -223,13 +232,51 @@ class TrieAutocomplete:
             raise EmptyWordError("word cannot be empty or blank")
 
         with self._lock:
-            if word not in self._word_weights:
+            normalized = self._normalize(word)
+            if normalized not in self._word_weights:
                 return False
 
-            del self._word_weights[word]
-            normalized = self._normalize(word)
-            self._delete_word_from_trie(normalized, original_word=word)
+            original = self._word_originals[normalized]
+            del self._word_weights[normalized]
+            del self._word_originals[normalized]
+            self._delete_word_from_trie(normalized, original_word=original)
             return True
+
+    def update_word(self, old_word: str, new_word: str) -> bool:
+        if not old_word or not old_word.strip():
+            raise EmptyWordError("old_word cannot be empty or blank")
+        if not new_word or not new_word.strip():
+            raise EmptyWordError("new_word cannot be empty or blank")
+
+        with self._lock:
+            old_normalized = self._normalize(old_word)
+            new_normalized = self._normalize(new_word)
+
+            if old_normalized not in self._word_weights:
+                return False
+
+            if old_normalized == new_normalized:
+                self._word_originals[old_normalized] = new_word
+                weight = self._word_weights[old_normalized]
+                self._update_word_in_trie(old_normalized, weight, original_word=new_word)
+                return True
+
+            weight = self._word_weights[old_normalized]
+            old_original = self._word_originals[old_normalized]
+
+            del self._word_weights[old_normalized]
+            del self._word_originals[old_normalized]
+            self._delete_word_from_trie(old_normalized, original_word=old_original)
+
+            self._word_weights[new_normalized] = weight
+            self._word_originals[new_normalized] = new_word
+            self._insert_word(new_normalized, weight, original_word=new_word)
+            return True
+
+    def get_original_word(self, word: str) -> Optional[str]:
+        with self._lock:
+            normalized = self._normalize(word)
+            return self._word_originals.get(normalized)
 
     def _delete_word_from_trie(self, word: str, *, original_word: Optional[str] = None) -> None:
         if original_word is None:
@@ -259,7 +306,8 @@ class TrieAutocomplete:
         with self._lock:
             self._root = TrieNode("")
             self._word_weights.clear()
+            self._word_originals.clear()
 
     def get_all_words(self) -> list[str]:
         with self._lock:
-            return sorted(self._word_weights.keys())
+            return sorted(self._word_originals.values())

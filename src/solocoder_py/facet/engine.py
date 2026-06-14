@@ -242,16 +242,11 @@ class FacetSearchEngine:
             values=facet_values,
         )
 
-    def _compute_facets(
-        self, matched_items: List[Dict[str, Any]]
-    ) -> List[FacetResult]:
+    def _compute_facets(self) -> List[FacetResult]:
         facets: List[FacetResult] = []
 
         for field_name, config in self._facet_configs.items():
             items_for_facet = self._get_filtered_items(exclude_field=field_name)
-
-            if not items_for_facet:
-                items_for_facet = list(self._items.values())
 
             if config.field_type == FacetFieldType.CATEGORICAL:
                 facet = self._compute_categorical_facet(
@@ -268,7 +263,7 @@ class FacetSearchEngine:
     def search(self) -> SearchResult:
         with self._lock:
             matched_items = self._get_filtered_items()
-            facets = self._compute_facets(matched_items)
+            facets = self._compute_facets()
             active_filters = self.get_active_filters()
 
             return SearchResult(

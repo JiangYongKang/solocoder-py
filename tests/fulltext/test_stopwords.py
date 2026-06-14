@@ -117,3 +117,72 @@ class TestStopWordsBoundaryConditions:
         assert "的" in words
         sw.add("newword")
         assert "newword" in sw.stopwords
+
+
+class TestStopWordsMultiCharChinese:
+    def test_preprocess_text_multi_char_stopwords(self):
+        sw = StopWords()
+        processed = sw.preprocess_text("我们是一个测试")
+        assert "我们" not in processed
+        assert "一个" not in processed
+
+    def test_preprocess_text_three_char_stopwords(self):
+        sw = StopWords()
+        processed = sw.preprocess_text("为什么这样")
+        assert "为什么" not in processed
+
+    def test_preprocess_text_combined_multi_char_stopwords(self):
+        sw = StopWords()
+        processed = sw.preprocess_text("我们为什么这个那个")
+        assert "我们" not in processed
+        assert "为什么" not in processed
+        assert "这个" not in processed
+        assert "那个" not in processed
+
+    def test_preprocess_text_preserves_non_stopwords(self):
+        sw = StopWords()
+        processed = sw.preprocess_text("我们测试Python编程")
+        assert "测试" in processed
+        assert "编程" in processed
+        assert "Python" in processed
+
+    def test_preprocess_text_mixed_languages(self):
+        sw = StopWords()
+        processed = sw.preprocess_text("the 是我们")
+        assert "the" not in processed
+        assert "我们" not in processed
+
+    def test_preprocess_text_empty(self):
+        sw = StopWords()
+        assert sw.preprocess_text("") == ""
+
+    def test_preprocess_text_no_stopwords(self):
+        sw = StopWords()
+        result = sw.preprocess_text("Python 编程测试")
+        assert "Python" in result
+        assert "编程" in result
+        assert "测试" in result
+
+    def test_preprocess_text_longer_matches_first(self):
+        sw = StopWords()
+        processed = sw.preprocess_text("为什么")
+        assert "为什么" not in processed
+
+    def test_add_multi_char_custom_stopword_rebuilds_pattern(self):
+        sw = StopWords()
+        original = "这是测试词编程"
+        processed_before = sw.preprocess_text(original)
+        assert "测试词" in processed_before
+        sw.add("测试词")
+        processed_after = sw.preprocess_text(original)
+        assert "测试词" not in processed_after
+
+    def test_remove_multi_char_custom_stopword_rebuilds_pattern(self):
+        sw = StopWords()
+        sw.add("测试词")
+        original = "这是测试词编程"
+        processed_before = sw.preprocess_text(original)
+        assert "测试词" not in processed_before
+        sw.remove("测试词")
+        processed_after = sw.preprocess_text(original)
+        assert "测试词" in processed_after

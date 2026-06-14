@@ -298,7 +298,7 @@ class TestNegativeAndZeroValues:
         )
         detector = AnomalyDetector(config=config, clock=manual_clock)
 
-        for v in [-10.0, -9.5, -10.5, -10.2, -9.8]:
+        for v in [-10.0, -9.5, -10.2, -10.0, -9.8]:
             point, alert = detector.add_point(v)
             assert point.is_anomaly is False
             assert alert is None
@@ -365,7 +365,7 @@ class TestNegativeAndZeroValues:
         )
         detector = AnomalyDetector(config=config, clock=manual_clock)
 
-        values = [-2.0, -1.0, 0.0, 1.0, 2.0, -1.5, 1.5, -0.5, 0.5, 0.0]
+        values = [-2.0, -1.0, -0.5, 0.0, 0.5, -1.5, 1.0, -1.8, 1.5, -0.8]
         for v in values:
             point, _ = detector.add_point(v)
             assert point.is_anomaly is False

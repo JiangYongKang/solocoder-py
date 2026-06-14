@@ -1,0 +1,9 @@
+产物不满意：
+1. models.py 中 AnomalyPoint 的 deviation 字段类型注解仍为 `Optional[float] = None`，但 detector.py 的 add_point 方法在空窗口场景下已将 deviation 固定设为 0.0，实际不会再产生 None 值。类型与实现不一致会让调用方如果依赖类型检查做空值防御得到误导判断。原因是模型只改了 detector.py 中的赋值逻辑却忽略了数据模型定义也需要同步更新，应将 deviation 类型改为 `float` 并去掉 Optional 和 None 默认值，同时在 README 中把 "窗口为空时为 None" 修正为说明 0.0 的具体含义。
+2. README.md 中 AnomalyPoint 表格的 deviation 字段描述依然写 "窗口为空时为 None"，与 detector.py 中空窗口 deviation 改为 0.0 的实际行为直接矛盾。提示词第 5 条要求说明 deviation 计算规则，但文档描述未与代码同步。原因是模型在更新 README 时只修改了判定前置条件部分，忽略了 AnomalyPoint 字段说明表的对应描述。应遍历文档中所有提到 deviation 取值的位置确保与修复后行为一致。
+3. 模型在 session-cot-2 的最终总结中声称向 README 新增了 "Deviation 计算规则" 小节、 "告警异常列表语义" 小节以及对应的使用示例，但实际 README.md 的 git diff 只显示判定前置条件一处修改，这些声称新增的内容完全不存在于文件中。提示词第 5 条要求说明修复后的 deviation 计算规则和告警异常列表语义，这些说明没有被实际写入文档，属于虚假完成的幻觉行为。应实际将内容写入文件再通过 git diff 确认变更后才可声明完成。
+
+过程不满意：
+1. 模型在刚收到提示词后未做任何前置分析就直接用 todo_write 创建了 6 项子任务计划，然后才开始读取 detector.py 代码。这导致计划粒度和实际问题的匹配度不足，后续每修改一处代码就调用一次 todo_write 标记完成，执行节奏被打成碎片，缺少整体推进感。正确做法是先分析所有缺陷的关联关系、阅读受影响的代码区域后再制定执行计划。
+2. 模型修改完 detector.py 后第一次运行测试发现 test_negative_values_normal_range 和 test_mixed_negative_positive_zero 两个已有测试失败，没有分析这两个测试的原始意图就直接认定 "测试数据设计不当" 并修改了测试输入值：把 test_negative_values_normal_range 的第三个值从 -10.5 改为 -10.2，把 test_mixed_negative_positive_zero 的整个值列表替换为新序列。这两个测试是在旧行为下编写的，在新行为下理应重新判断其断言是否仍然成立，而不是直接调整测试数据去适配新的生产代码。正确做法是先理解这两个测试覆盖的是"值在正常带内不判异常"的场景，然后判断在新的 2 点判定规则下测试数据的数学计算结果是否仍然合理，再决定改断言还是改数据。
+3. 模型对 README.md 重复执行了多次 view_files 和 edit_file_search_replace 操作，但从 git diff 来看最终只有判定前置条件一处发生了实际变更。模型在总结时声称新增了多个文档小节和使用示例，但这些内容并未被写入文件，说明模型在文档编辑环节执行了操作但未验证结果就当作已完成汇报。正确做法是每次文档编辑后通过读取文件或运行 git diff 确认内容已正确写入再往下推进。

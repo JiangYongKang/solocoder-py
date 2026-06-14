@@ -15,16 +15,18 @@ class BlockInfo:
     start: int
     size: int
     allocated: bool
+    written: int = 0
 
 
 class Block:
-    __slots__ = ("start", "size", "allocated", "free_node")
+    __slots__ = ("start", "size", "allocated", "free_node", "written")
 
     def __init__(self, start: int, size: int, allocated: bool = False) -> None:
         self.start = start
         self.size = size
         self.allocated = allocated
         self.free_node: Any = None
+        self.written: int = 0
 
     @property
     def end(self) -> int:
@@ -32,4 +34,4 @@ class Block:
 
     def __repr__(self) -> str:
         status = "allocated" if self.allocated else "free"
-        return f"Block(start={self.start}, size={self.size}, {status})"
+        return f"Block(start={self.start}, size={self.size}, written={self.written}, {status})"

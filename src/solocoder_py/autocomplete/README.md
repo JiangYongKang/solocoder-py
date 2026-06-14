@@ -34,12 +34,14 @@
 |------|------|
 | `insert(word, weight=1)` | 插入词汇及其热度，重复插入累加热度 |
 | `update_weight(word, weight, *, accumulate=False)` | 更新词汇热度，支持覆盖或累加模式，词汇不存在则自动插入 |
+| `update_word(old_word, new_word)` | 更新词汇文本，保留原有热度值。返回是否成功（旧词不存在返回 False） |
 | `search(prefix, *, top_n=None, fuzzy=True, fuzzy_threshold=None)` | 按前缀查询候选词，返回按热度排序的 `SearchResult` 列表 |
 | `get_weight(word)` | 获取词汇的热度，不存在返回 `None` |
+| `get_original_word(word)` | 获取词汇的原始大小写形式，不存在返回 `None` |
 | `contains(word)` | 判断词汇是否存在 |
 | `delete(word)` | 删除指定词汇，返回是否成功删除 |
 | `clear()` | 清空所有词汇 |
-| `get_all_words()` | 返回所有词汇的排序列表 |
+| `get_all_words()` | 返回所有词汇的排序列表（保留原始大小写） |
 
 **属性：**
 

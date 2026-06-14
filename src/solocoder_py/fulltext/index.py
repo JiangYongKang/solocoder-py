@@ -61,7 +61,8 @@ class FullTextIndex:
         if doc.doc_id in self._documents:
             self._remove_from_index(doc.doc_id)
 
-        tokens = tokenize(doc.content)
+        processed_content = self._stopwords.preprocess_text(doc.content)
+        tokens = tokenize(processed_content)
         filtered_tokens = self._stopwords.filter_tokens(tokens)
         stemmed_tokens = self._stemmer.stem_tokens(filtered_tokens)
 
@@ -121,7 +122,8 @@ class FullTextIndex:
         return doc_id in self._documents
 
     def _process_query(self, query: str) -> list[str]:
-        tokens = tokenize(query)
+        processed_query = self._stopwords.preprocess_text(query)
+        tokens = tokenize(processed_query)
         filtered = self._stopwords.filter_tokens(tokens)
         stemmed = self._stemmer.stem_tokens(filtered)
         return [term for term, _ in stemmed]

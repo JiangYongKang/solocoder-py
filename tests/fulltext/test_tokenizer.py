@@ -45,6 +45,12 @@ class TestTokenizerNormalFlows:
         assert "好" in terms
         assert "世" in terms
         assert "界" in terms
+        assert "这" in terms
+        assert "是" in terms
+        assert "一" in terms
+        assert "个" in terms
+        assert "测" in terms
+        assert "试" in terms
 
     def test_mixed_chinese_english(self):
         text = "你好 world 测试 Python"

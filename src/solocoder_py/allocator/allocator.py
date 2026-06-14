@@ -88,6 +88,7 @@ class MemoryPoolAllocator:
             self._free_list.insert_sorted(remaining_node)
 
         block.allocated = True
+        block.written = 0
         handle = self._next_handle
         self._next_handle += 1
         self._handle_to_block[handle] = block
@@ -175,8 +176,10 @@ class MemoryPoolAllocator:
         if handle not in self._handle_to_block:
             return None
         block = self._handle_to_block[handle]
-        read_size = size if size is not None else block.size
-        read_size = min(read_size, block.size)
+        if size is not None:
+            read_size = min(size, block.size)
+        else:
+            read_size = min(block.written, block.size)
         return bytes(self._pool[block.start:block.start + read_size])
 
     def write(self, handle: int, data: bytes) -> bool:
@@ -185,13 +188,15 @@ class MemoryPoolAllocator:
         block = self._handle_to_block[handle]
         write_size = min(len(data), block.size)
         self._pool[block.start:block.start + write_size] = data[:write_size]
+        if write_size > block.written:
+            block.written = write_size
         return True
 
     def block_info(self, handle: int) -> Optional[BlockInfo]:
         if handle not in self._handle_to_block:
             return None
         block = self._handle_to_block[handle]
-        return BlockInfo(start=block.start, size=block.size, allocated=block.allocated)
+        return BlockInfo(start=block.start, size=block.size, allocated=block.allocated, written=block.written)
 
     def allocated_count(self) -> int:
         return len(self._handle_to_block)

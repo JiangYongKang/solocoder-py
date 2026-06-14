@@ -85,7 +85,9 @@ def metaphone(name: str, max_length: int | None = None) -> str:
                 i += 2
                 continue
             elif next_ch == "K" and prev != "S":
-                pass
+                result.append("K")
+                i += 2
+                continue
             else:
                 result.append("K")
         elif ch == "D":

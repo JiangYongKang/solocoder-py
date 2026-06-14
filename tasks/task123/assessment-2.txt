@@ -1,0 +1,7 @@
+产物不满意：
+1. update_document 方法的 grams_to_update 循环中（index.py 第 94 行）添加了 `if gram not in self._index` 判断并在条件成立时创建空字典。但实际上任何同时存在于新旧 gram 集合中的 gram 必然已经在 `_index` 中存在，由 add_document 写入，且 grams_to_update 集合与 grams_to_remove 集合互斥，该 gram 不可能在之前的 remove 步骤中被清理，这个判断永远不会为 True。虽然不影响功能正确性，但它属于永远不会执行的冗余分支代码，反映了模型对内部状态不变量推理不充分，未仔细分析 gram 在 _index、_doc_grams、_documents 三个数据结构之间的存在性约束关系。
+2. 提示词第 1 条要求 remove_document 避免重复调用 _extract_grams 提取 gram，但模型未针对此优化行为本身补充验证测试。现有的 69 个测试验证的是删除和更新后的搜索正确性，属于功能性测试，无法直接证明 _extract_grams 在 remove_document 路径上确实没有被再次调用。如果后续维护中不小心在 remove_document 中加回了 _extract_grams 调用，现有测试套件完全无法发现这种性能退化。应使用 mock 技术验证 _extract_grams 在删除路径上未被调用，确保优化承诺可被自动化测试保护。
+
+过程不满意：
+1. 模型在刚收到提示词后立即连续两次调用 todo_write 创建了 6 项子任务计划（思考轨迹第 4 步和第 9 步），而第一次对 index.py 代码文件的阅读发生在第 26 步，此前完全没有读取任何源文件。这违反了标注规范中「不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划」的要求。正确做法是先阅读 index.py 理解 add_document 和 remove_document 的当前实现、_merge_gram_positions 中多余排序的具体代码位置、以及现有测试的覆盖结构，然后基于对代码现状的准确理解制定针对性的优化计划，而非凭提示词表面描述直接排程。
+2. 模型在整个开发和调试过程中多次使用 `python -m pytest tests/ngram/test_ngram.py -q` 运行测试，而提示词第 6 条明确要求使用 `poetry run pytest tests/ngram/ -q`。虽然两条命令在当前环境下输出结果一致，但 poetry 管理的项目应使用 poetry run 确保在正确的虚拟环境中执行，直接使用 python -m pytest 可能在依赖版本不一致时产生隐蔽偏差。模型直到所有改动完成后的最后一步才切换到 poetry run pytest 做最终验证，说明模型未从一开始就严格遵循提示词中指定的命令格式。

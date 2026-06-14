@@ -313,9 +313,9 @@ class TestMultiResolutionRollup:
         base_time = 1704067200.0
 
         for i in range(10):
-            store.write(base_time + i * 60, float(i), labels={"host": "server1"})
+            store.write(base_time + i * 60, float(i), labels={"host": "server1"}, allow_out_of_order=True)
             store.write(
-                base_time + i * 60, float(i * 2), labels={"host": "server2"}
+                base_time + i * 60 + 0.5, float(i * 2), labels={"host": "server2"}, allow_out_of_order=True
             )
 
         result = store.query_aggregated("5min", labels={"host": "server1"})

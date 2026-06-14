@@ -248,6 +248,39 @@ class TestMetaphoneLetterC:
         assert metaphone("Chaos") == "XS"
 
 
+class TestMetaphoneCKCombination:
+    def test_ck_jackson(self):
+        assert metaphone("Jackson") == "JKSN"
+
+    def test_ck_back(self):
+        assert metaphone("Back") == "BK"
+
+    def test_ck_mack(self):
+        assert metaphone("Mack") == "MK"
+
+    def test_ck_jack(self):
+        assert metaphone("Jack") == "JK"
+
+    def test_ck_sack(self):
+        assert metaphone("Sack") == "SK"
+
+    def test_ck_pack(self):
+        assert metaphone("Pack") == "PK"
+
+    def test_ck_rack(self):
+        assert metaphone("Rack") == "RK"
+
+    def test_ck_check(self):
+        assert metaphone("Check") == "XK"
+
+    def test_ck_truck(self):
+        assert metaphone("Truck") == "TRK"
+
+    def test_ck_in_middle(self):
+        assert metaphone("Lucky") == "LK"
+        assert metaphone("Bucket") == "BKT"
+
+
 class TestMetaphoneLetterG:
     def test_soft_g(self):
         assert metaphone("Gent") == "JNT"

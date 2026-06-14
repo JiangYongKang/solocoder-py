@@ -12,6 +12,7 @@ from .conftest import (
     build_engine_with_products,
     get_facet_by_name,
     get_facet_value_count,
+    is_facet_value_selected,
 )
 
 
@@ -89,19 +90,132 @@ class TestNoMatchingResults:
         assert result.total_count == 0
         assert result.items == []
 
-    def test_facet_counts_remain_correct_when_no_results(self):
+    def test_facet_counts_correct_when_no_results(self):
         engine, products = build_engine_with_products()
 
         engine.add_filter("category", "相机")
         result = engine.search()
 
+        assert result.total_count == 0
+        assert result.items == []
+        assert result.active_filters == {"category": ["相机"]}
+
+        category_facet = get_facet_by_name(result, "category")
+        assert get_facet_value_count(category_facet, "手机") == 6
+        assert get_facet_value_count(category_facet, "笔记本") == 4
+        assert get_facet_value_count(category_facet, "平板") == 3
+        assert get_facet_value_count(category_facet, "耳机") == 5
+        assert get_facet_value_count(category_facet, "相机") == 0
+
         brand_facet = get_facet_by_name(result, "brand")
-        assert get_facet_value_count(brand_facet, "苹果") == 5
-        assert get_facet_value_count(brand_facet, "华为") == 5
+        assert len(brand_facet.values) == 0
+
+        color_facet = get_facet_by_name(result, "color")
+        assert len(color_facet.values) == 0
+
+        size_facet = get_facet_by_name(result, "size")
+        assert len(size_facet.values) == 0
 
         price_facet = get_facet_by_name(result, "price")
-        assert get_facet_value_count(price_facet, "0-1000") == 2
-        assert get_facet_value_count(price_facet, "6000+") == 2
+        assert get_facet_value_count(price_facet, "0-1000") == 0
+        assert get_facet_value_count(price_facet, "1000-3000") == 0
+        assert get_facet_value_count(price_facet, "3000-6000") == 0
+        assert get_facet_value_count(price_facet, "6000+") == 0
+
+        rating_facet = get_facet_by_name(result, "rating")
+        assert get_facet_value_count(rating_facet, "0-2星") == 0
+        assert get_facet_value_count(rating_facet, "2-4星") == 0
+        assert get_facet_value_count(rating_facet, "4-5星") == 0
+
+    def test_multi_field_filter_no_results_category_facet_excludes_own_filter(self):
+        engine, products = build_engine_with_products()
+
+        engine.add_filter("category", "耳机")
+        engine.add_filter("brand", "联想")
+        result = engine.search()
+
+        assert result.total_count == 0
+        assert result.active_filters == {"category": ["耳机"], "brand": ["联想"]}
+
+        category_facet = get_facet_by_name(result, "category")
+        assert get_facet_value_count(category_facet, "手机") == 0
+        assert get_facet_value_count(category_facet, "笔记本") == 2
+        assert get_facet_value_count(category_facet, "平板") == 0
+        assert get_facet_value_count(category_facet, "耳机") == 0
+
+        brand_facet = get_facet_by_name(result, "brand")
+        assert get_facet_value_count(brand_facet, "苹果") == 1
+        assert get_facet_value_count(brand_facet, "华为") == 1
+        assert get_facet_value_count(brand_facet, "小米") == 1
+        assert get_facet_value_count(brand_facet, "索尼") == 2
+        assert get_facet_value_count(brand_facet, "联想") == 0
+
+    def test_numeric_filter_no_results_numeric_facet_excludes_own_filter(self):
+        engine, products = build_engine_with_products()
+
+        engine.add_filter("rating", "0-2星")
+        result = engine.search()
+
+        assert result.total_count == 0
+
+        rating_facet = get_facet_by_name(result, "rating")
+        assert get_facet_value_count(rating_facet, "0-2星") == 0
+        assert get_facet_value_count(rating_facet, "2-4星") == 1
+        assert get_facet_value_count(rating_facet, "4-5星") == 17
+
+        category_facet = get_facet_by_name(result, "category")
+        assert len(category_facet.values) == 0
+
+    def test_no_results_all_numeric_facets_zero_with_multiple_filters(self):
+        engine, products = build_engine_with_products()
+
+        engine.add_filter("category", "相机")
+        engine.add_filter("brand", "联想")
+        result = engine.search()
+
+        assert result.total_count == 0
+
+        price_facet = get_facet_by_name(result, "price")
+        assert get_facet_value_count(price_facet, "0-1000") == 0
+        assert get_facet_value_count(price_facet, "1000-3000") == 0
+        assert get_facet_value_count(price_facet, "3000-6000") == 0
+        assert get_facet_value_count(price_facet, "6000+") == 0
+
+        rating_facet = get_facet_by_name(result, "rating")
+        assert all(v.count == 0 for v in rating_facet.values)
+
+    def test_no_results_categorical_facet_with_other_filter_applied(self):
+        engine, products = build_engine_with_products()
+
+        engine.add_filter("category", "相机")
+        engine.add_filter("color", "红色")
+        result = engine.search()
+
+        assert result.total_count == 0
+
+        color_facet = get_facet_by_name(result, "color")
+        assert len(color_facet.values) == 0
+
+        brand_facet = get_facet_by_name(result, "brand")
+        assert len(brand_facet.values) == 0
+
+    def test_remove_filter_rollback_from_no_results(self):
+        engine, products = build_engine_with_products()
+
+        engine.add_filter("category", "相机")
+        result1 = engine.search()
+        assert result1.total_count == 0
+
+        engine.remove_filter("category", "相机")
+        result2 = engine.search()
+
+        assert result2.total_count == 18
+        assert len(result2.items) == 18
+        assert result2.active_filters == {}
+
+        category_facet = get_facet_by_name(result2, "category")
+        assert get_facet_value_count(category_facet, "手机") == 6
+        assert get_facet_value_count(category_facet, "笔记本") == 4
 
 
 class TestEmptyIntersection:

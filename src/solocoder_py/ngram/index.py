@@ -27,6 +27,7 @@ class NGramIndex:
         self._n = n
         self._index: dict[str, dict[str, list[int]]] = {}
         self._documents: dict[str, str] = {}
+        self._doc_grams: dict[str, dict[str, list[int]]] = {}
 
     @property
     def n(self) -> int:
@@ -46,6 +47,7 @@ class NGramIndex:
 
         self._documents[doc_id] = content
         grams = self._extract_grams(content)
+        self._doc_grams[doc_id] = grams
         for gram, positions in grams.items():
             if gram not in self._index:
                 self._index[gram] = {}
@@ -55,8 +57,7 @@ class NGramIndex:
         if doc_id not in self._documents:
             raise DocumentNotFoundError(f"Document '{doc_id}' not found")
 
-        content = self._documents[doc_id]
-        grams = self._extract_grams(content)
+        grams = self._doc_grams[doc_id]
         for gram in grams:
             if gram in self._index and doc_id in self._index[gram]:
                 del self._index[gram][doc_id]
@@ -64,6 +65,38 @@ class NGramIndex:
                     del self._index[gram]
 
         del self._documents[doc_id]
+        del self._doc_grams[doc_id]
+
+    def update_document(self, doc_id: str, new_content: str) -> None:
+        if doc_id not in self._documents:
+            raise DocumentNotFoundError(f"Document '{doc_id}' not found")
+
+        old_grams = self._doc_grams[doc_id]
+        new_grams = self._extract_grams(new_content)
+
+        grams_to_remove = old_grams.keys() - new_grams.keys()
+        grams_to_add = new_grams.keys() - old_grams.keys()
+        grams_to_update = old_grams.keys() & new_grams.keys()
+
+        for gram in grams_to_remove:
+            if gram in self._index and doc_id in self._index[gram]:
+                del self._index[gram][doc_id]
+                if not self._index[gram]:
+                    del self._index[gram]
+
+        for gram in grams_to_add:
+            if gram not in self._index:
+                self._index[gram] = {}
+            self._index[gram][doc_id] = new_grams[gram]
+
+        for gram in grams_to_update:
+            if old_grams[gram] != new_grams[gram]:
+                if gram not in self._index:
+                    self._index[gram] = {}
+                self._index[gram][doc_id] = new_grams[gram]
+
+        self._documents[doc_id] = new_content
+        self._doc_grams[doc_id] = new_grams
 
     def get_gram_postings(self, gram: str) -> list[GramPosting]:
         if gram not in self._index:
@@ -195,8 +228,8 @@ class NGramIndex:
         doc_id: str,
         query_grams: dict[str, list[int]],
     ) -> set[int]:
-        sorted_grams = sorted(query_grams.items(), key=lambda item: item[1][0])
-        first_gram, first_query_offsets = sorted_grams[0]
+        ordered_grams = list(query_grams.items())
+        first_gram, first_query_offsets = ordered_grams[0]
 
         if first_gram not in self._index or doc_id not in self._index[first_gram]:
             return set()
@@ -209,7 +242,7 @@ class NGramIndex:
                 if candidate >= 0:
                     candidates.add(candidate)
 
-        for gram, query_offsets in sorted_grams[1:]:
+        for gram, query_offsets in ordered_grams[1:]:
             if not candidates:
                 break
             if gram not in self._index or doc_id not in self._index[gram]:

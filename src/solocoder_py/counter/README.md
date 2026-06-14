@@ -258,21 +258,46 @@ print(counter.query("us-east"))  # 100
 print(counter.total())  # 300
 ```
 
-### 负数与归零
+### 负数与钳位传播策略
+
+计数器的计数值不会低于零。当负增量（或减量操作）导致某叶子节点的计数值变为负数时，该节点的值会被**钳位为 0**。
+
+#### 钳位传播机制
+
+钳位操作采用**叶子优先、实际变化量传播**的策略，确保所有祖先节点的聚合值始终等于其子节点计数值之和：
+
+1. 先根据叶子节点的旧值和 delta 计算新值：`new_leaf = max(old_leaf + delta, 0)`
+2. 计算本次操作的**实际净变化量**：`actual_delta = new_leaf - old_leaf`
+3. 将 `actual_delta`（而非原始 delta）同步累加到该叶子路径上的所有祖先节点
+
+这保证了当父节点有多个叶子子节点时，对某个叶子的超额减量不会影响其他叶子的贡献，父节点及更上层祖先始终等于所有子节点之和。
 
 ```python
 from solocoder_py.counter import MultiDimCounter
 
+counter = MultiDimCounter(levels=["dc", "host", "service"])
+counter.increment("dc-east/host-01/svc-a", 10)
+counter.increment("dc-east/host-01/svc-b", 5)
+
+# 对 svc-a 做超额减量，触发钳位
+counter.decrement("dc-east/host-01/svc-a", 12)
+# svc-a 被钳位为 0，实际减少量为 10（而非 12）
+print(counter.query("dc-east/host-01/svc-a"))  # 0
+print(counter.query("dc-east/host-01/svc-b"))  # 5
+# host-01 聚合值 = 0 + 5 = 5（祖先节点使用实际变化量 -10 而非原始 -12）
+print(counter.query("dc-east/host-01"))        # 5
+print(counter.query("dc-east"))                # 5
+print(counter.total())                         # 5
+```
+
+#### 常规减量（未触发钳位）
+
+```python
 counter = MultiDimCounter(levels=["a", "b"])
 counter.increment("x/y", 5)
 
-# 减少计数
+# 正常减少（未触及零边界），实际变化量等于 delta
 counter.decrement("x/y", 2)
 print(counter.query("x/y"))  # 3
-
-# 减少到负数会被钳位为 0
-counter.decrement("x/y", 10)
-print(counter.query("x/y"))  # 0
-print(counter.query("x"))    # 0
-print(counter.total())       # 0
+print(counter.query("x"))    # 3
 ```

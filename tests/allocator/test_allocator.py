@@ -748,3 +748,139 @@ class TestEdgeCasesComprehensive:
         pool_100.deallocate(h4)
         total = sum(b.size for b in pool_100.all_blocks_info())
         assert total == 100
+
+
+class TestReadWrittenRange:
+    def test_fresh_allocation_reads_empty(self, pool_100):
+        h = pool_100.allocate(20)
+        data = pool_100.read(h)
+        assert data == b""
+
+    def test_fresh_allocation_written_is_zero(self, pool_100):
+        h = pool_100.allocate(20)
+        info = pool_100.block_info(h)
+        assert info.written == 0
+
+    def test_write_updates_written(self, pool_100):
+        h = pool_100.allocate(20)
+        pool_100.write(h, b"hello")
+        info = pool_100.block_info(h)
+        assert info.written == 5
+
+    def test_read_returns_only_written_bytes(self, pool_100):
+        h = pool_100.allocate(20)
+        pool_100.write(h, b"hello")
+        data = pool_100.read(h)
+        assert data == b"hello"
+        assert len(data) == 5
+
+    def test_write_more_extends_written(self, pool_100):
+        h = pool_100.allocate(20)
+        pool_100.write(h, b"hello")
+        pool_100.write(h, b"hello world!")
+        info = pool_100.block_info(h)
+        assert info.written == 12
+        assert pool_100.read(h) == b"hello world!"
+
+    def test_write_less_does_not_shrink_written(self, pool_100):
+        h = pool_100.allocate(20)
+        pool_100.write(h, b"hello world!")
+        pool_100.write(h, b"hi")
+        info = pool_100.block_info(h)
+        assert info.written == 12
+        data = pool_100.read(h)
+        assert data == b"hillo world!"
+
+    def test_write_truncated_still_tracks(self, pool_100):
+        h = pool_100.allocate(10)
+        pool_100.write(h, b"this is a very long string that exceeds block size")
+        info = pool_100.block_info(h)
+        assert info.written == 10
+        assert pool_100.read(h) == b"this is a "
+
+    def test_explicit_read_size_override(self, pool_100):
+        h = pool_100.allocate(20)
+        pool_100.write(h, b"hello")
+        data1 = pool_100.read(h, size=3)
+        assert data1 == b"hel"
+        data2 = pool_100.read(h, size=10)
+        assert data2 == b"hello\x00\x00\x00\x00\x00"
+
+    def test_written_preserved_after_compact(self, pool_100):
+        h1 = pool_100.allocate(10)
+        h2 = pool_100.allocate(10)
+        pool_100.write(h2, b"testdata")
+        pool_100.deallocate(h1)
+        pool_100.compact()
+        info = pool_100.block_info(h2)
+        assert info.written == 8
+        assert pool_100.read(h2) == b"testdata"
+
+    def test_block_info_includes_written(self, pool_100):
+        h = pool_100.allocate(30)
+        pool_100.write(h, b"abc")
+        info = pool_100.block_info(h)
+        assert hasattr(info, "written")
+        assert info.written == 3
+
+
+class TestBestFitEqualSizeTiebreaker:
+    def test_first_fit_picks_smallest_address(self):
+        pool = MemoryPoolAllocator(pool_size=200, strategy=AllocationStrategy.FIRST_FIT)
+        h1 = pool.allocate(30)
+        h2 = pool.allocate(30)
+        h3 = pool.allocate(30)
+        h4 = pool.allocate(30)
+        pool.deallocate(h1)
+        pool.deallocate(h3)
+        h_new = pool.allocate(20)
+        info = pool.block_info(h_new)
+        assert info.start == 0
+
+    def test_best_fit_picks_largest_address_on_equal_size(self):
+        pool = MemoryPoolAllocator(pool_size=200, strategy=AllocationStrategy.BEST_FIT)
+        h1 = pool.allocate(30)
+        h2 = pool.allocate(30)
+        h3 = pool.allocate(30)
+        h4 = pool.allocate(30)
+        pool.deallocate(h1)
+        pool.deallocate(h3)
+        h_new = pool.allocate(20)
+        info = pool.block_info(h_new)
+        assert info.start == 60
+
+    def test_first_fit_vs_best_fit_equal_size_divergence(self):
+        pool_ff = MemoryPoolAllocator(pool_size=300, strategy=AllocationStrategy.FIRST_FIT)
+        pool_bf = MemoryPoolAllocator(pool_size=300, strategy=AllocationStrategy.BEST_FIT)
+
+        for p in (pool_ff, pool_bf):
+            h0 = p.allocate(40)
+            h1 = p.allocate(40)
+            h2 = p.allocate(40)
+            h3 = p.allocate(40)
+            h4 = p.allocate(40)
+            _tail = p.allocate(100)
+            p.deallocate(h0)
+            p.deallocate(h2)
+            p.deallocate(h4)
+
+        h_ff = pool_ff.allocate(30)
+        h_bf = pool_bf.allocate(30)
+
+        assert pool_ff.block_info(h_ff).start == 0
+        assert pool_bf.block_info(h_bf).start == 160
+
+    def test_best_fit_still_prefers_smaller_block_over_tiebreaker(self):
+        pool = MemoryPoolAllocator(pool_size=400, strategy=AllocationStrategy.BEST_FIT)
+        h1 = pool.allocate(50)
+        _h2 = pool.allocate(30)
+        h3 = pool.allocate(20)
+        _h4 = pool.allocate(50)
+        h5 = pool.allocate(50)
+        _tail = pool.allocate(200)
+        pool.deallocate(h1)
+        pool.deallocate(h3)
+        pool.deallocate(h5)
+        h_new = pool.allocate(15)
+        info = pool.block_info(h_new)
+        assert info.start == 80

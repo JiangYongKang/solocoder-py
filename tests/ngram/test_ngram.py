@@ -425,3 +425,148 @@ class TestHighlightFragmentOffsets:
         frag = resp.results[0].fragments[0]
         assert frag.hit_start == 0
         assert frag.text == "[[hello]]"
+
+
+class TestUpdateDocument:
+    def test_update_replaces_content(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello world")
+        idx.update_document("doc1", "hello python")
+        resp_world = idx.search("world")
+        assert resp_world.total_count == 0
+        resp_python = idx.search("python")
+        assert resp_python.total_count == 1
+        assert resp_python.results[0].doc_id == "doc1"
+        assert resp_python.results[0].hit_positions == [6]
+
+    def test_update_old_content_not_searchable(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "the quick brown fox")
+        idx.update_document("doc1", "the lazy dog")
+        resp_fox = idx.search("fox")
+        assert resp_fox.total_count == 0
+        resp_brown = idx.search("brown")
+        assert resp_brown.total_count == 0
+        resp_quick = idx.search("quick")
+        assert resp_quick.total_count == 0
+
+    def test_update_new_content_searchable(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "old text here")
+        idx.update_document("doc1", "brand new content")
+        resp_new = idx.search("new")
+        assert resp_new.total_count == 1
+        assert resp_new.results[0].hit_positions == [6]
+        resp_brand = idx.search("brand")
+        assert resp_brand.total_count == 1
+        assert resp_brand.results[0].hit_positions == [0]
+
+    def test_update_other_docs_unaffected(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "apple banana")
+        idx.add_document("doc2", "cherry date")
+        idx.update_document("doc1", "apricot elderberry")
+        resp_banana = idx.search("banana")
+        assert resp_banana.total_count == 0
+        resp_cherry = idx.search("cherry")
+        assert resp_cherry.total_count == 1
+        assert resp_cherry.results[0].doc_id == "doc2"
+        resp_apricot = idx.search("apricot")
+        assert resp_apricot.total_count == 1
+        assert resp_apricot.results[0].doc_id == "doc1"
+
+    def test_update_nonexistent_doc_raises(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello")
+        with pytest.raises(DocumentNotFoundError):
+            idx.update_document("missing", "new content")
+
+    def test_update_preserves_document_count(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello")
+        idx.add_document("doc2", "world")
+        count_before = idx.document_count
+        idx.update_document("doc1", "hello updated")
+        assert idx.document_count == count_before
+
+    def test_update_same_shared_grams_preserved(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello world")
+        idx.add_document("doc2", "hello python")
+        idx.update_document("doc1", "hello java")
+        resp_hello = idx.search("hello")
+        assert resp_hello.total_count == 2
+        doc_ids = {r.doc_id for r in resp_hello.results}
+        assert doc_ids == {"doc1", "doc2"}
+
+    def test_update_hit_positions_correct_after_change(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "abcdef")
+        idx.update_document("doc1", "xyzabc")
+        resp = idx.search("abc")
+        assert resp.total_count == 1
+        assert resp.results[0].hit_positions == [3]
+
+    def test_update_from_empty_to_nonempty(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "")
+        idx.update_document("doc1", "hello world")
+        resp = idx.search("hello")
+        assert resp.total_count == 1
+        assert resp.results[0].hit_positions == [0]
+
+    def test_update_from_nonempty_to_empty(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello world")
+        idx.update_document("doc1", "")
+        resp = idx.search("hello")
+        assert resp.total_count == 0
+        assert idx.document_count == 1
+
+    def test_update_highlights_correct_after_update(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "AAAhelloBBB")
+        idx.update_document("doc1", "XXXhelloYYY")
+        resp = idx.search("hello", context_size=3)
+        frag = resp.results[0].fragments[0]
+        assert "XXX[[hello]]YYY" in frag.text
+
+    def test_update_multiple_times(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "version one")
+        idx.update_document("doc1", "version two")
+        idx.update_document("doc1", "version three")
+        resp_one = idx.search("one")
+        assert resp_one.total_count == 0
+        resp_two = idx.search("two")
+        assert resp_two.total_count == 0
+        resp_three = idx.search("three")
+        assert resp_three.total_count == 1
+        assert resp_three.results[0].hit_positions == [8]
+
+    def test_update_gram_count_updated(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello")
+        count_before = idx.gram_count
+        idx.update_document("doc1", "hello world")
+        count_after = idx.gram_count
+        assert count_after > count_before
+
+    def test_update_trigram_index(self):
+        idx = NGramIndex(n=3)
+        idx.add_document("doc1", "abcdef")
+        idx.update_document("doc1", "xyzabcdef")
+        resp_abc = idx.search("abc")
+        assert resp_abc.total_count == 1
+        assert resp_abc.results[0].hit_positions == [3]
+        resp_xyz = idx.search("xyz")
+        assert resp_xyz.total_count == 1
+        assert resp_xyz.results[0].hit_positions == [0]
+
+    def test_update_overlapping_content(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "aaaaa")
+        idx.update_document("doc1", "aaabaaa")
+        resp_aaa = idx.search("aaa")
+        assert resp_aaa.total_count == 1
+        assert resp_aaa.results[0].hit_positions == [0, 4]

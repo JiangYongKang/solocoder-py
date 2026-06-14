@@ -804,3 +804,220 @@ class TestConcurrentAccess:
 
         assert len(errors) == 0
         assert empty_trie.get_weight("counter") == 1000
+
+
+class TestCaseInsensitiveKeyNormalization:
+    def test_insert_different_case_merges(self, empty_trie):
+        empty_trie.insert("Apple", weight=10)
+        empty_trie.insert("apple", weight=5)
+        assert empty_trie.size == 1
+        assert empty_trie.get_weight("Apple") == 15
+        assert empty_trie.get_weight("apple") == 15
+        assert empty_trie.get_weight("APPLE") == 15
+
+    def test_contains_case_insensitive(self, empty_trie):
+        empty_trie.insert("Hello", weight=10)
+        assert empty_trie.contains("hello") is True
+        assert empty_trie.contains("HELLO") is True
+        assert empty_trie.contains("Hello") is True
+        assert empty_trie.contains("HeLLo") is True
+
+    def test_get_weight_case_insensitive(self, empty_trie):
+        empty_trie.insert("Test", weight=20)
+        assert empty_trie.get_weight("test") == 20
+        assert empty_trie.get_weight("TEST") == 20
+        assert empty_trie.get_weight("Test") == 20
+
+    def test_update_weight_case_insensitive(self, empty_trie):
+        empty_trie.insert("Test", weight=10)
+        empty_trie.update_weight("test", weight=5, accumulate=True)
+        assert empty_trie.get_weight("Test") == 15
+        assert empty_trie.size == 1
+
+    def test_update_weight_override_case_insensitive(self, empty_trie):
+        empty_trie.insert("Test", weight=10)
+        empty_trie.update_weight("TEST", weight=100)
+        assert empty_trie.get_weight("test") == 100
+
+    def test_update_weight_nonexistent_inserts(self, empty_trie):
+        empty_trie.insert("Apple", weight=10)
+        empty_trie.update_weight("banana", weight=5)
+        assert empty_trie.size == 2
+        assert empty_trie.get_weight("Banana") == 5
+
+    def test_delete_case_insensitive(self, empty_trie):
+        empty_trie.insert("Hello", weight=10)
+        assert empty_trie.delete("hello") is True
+        assert empty_trie.size == 0
+        assert empty_trie.contains("Hello") is False
+
+    def test_delete_case_insensitive_nonexistent(self, empty_trie):
+        empty_trie.insert("Hello", weight=10)
+        assert empty_trie.delete("world") is False
+        assert empty_trie.size == 1
+
+    def test_search_case_insensitive_returns_original(self, empty_trie):
+        empty_trie.insert("ApplePie", weight=10)
+        results = empty_trie.search("apple")
+        assert len(results) == 1
+        assert results[0].word == "ApplePie"
+
+    def test_get_all_words_returns_original_case(self, empty_trie):
+        empty_trie.insert("Apple", weight=10)
+        empty_trie.insert("Banana", weight=5)
+        words = empty_trie.get_all_words()
+        assert "Apple" in words
+        assert "Banana" in words
+
+    def test_fuzzy_search_case_insensitive(self, empty_trie):
+        empty_trie.insert("HelloWorld", weight=10)
+        results = empty_trie.search("halloworld", fuzzy=True, fuzzy_threshold=1)
+        assert len(results) == 1
+        assert results[0].word == "HelloWorld"
+        assert results[0].is_fuzzy is True
+
+    def test_case_sensitive_mode_keeps_separate(self):
+        trie = TrieAutocomplete(case_sensitive=True)
+        trie.insert("Apple", weight=10)
+        trie.insert("apple", weight=5)
+        assert trie.size == 2
+        assert trie.get_weight("Apple") == 10
+        assert trie.get_weight("apple") == 5
+        assert trie.contains("APPLE") is False
+
+    def test_duplicate_insert_case_preserves_first_original(self, empty_trie):
+        empty_trie.insert("Apple", weight=10)
+        empty_trie.insert("apple", weight=5)
+        assert empty_trie.get_original_word("apple") == "Apple"
+        results = empty_trie.search("app")
+        assert results[0].word == "Apple"
+
+    def test_update_weight_preserves_original_case(self, empty_trie):
+        empty_trie.insert("HelloWorld", weight=10)
+        empty_trie.update_weight("helloworld", weight=20)
+        assert empty_trie.get_original_word("HELLOWORLD") == "HelloWorld"
+        results = empty_trie.search("hello")
+        assert results[0].word == "HelloWorld"
+
+
+class TestUpdateWord:
+    def test_update_word_basic(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        assert empty_trie.update_word("apple", "banana") is True
+        assert empty_trie.contains("apple") is False
+        assert empty_trie.contains("banana") is True
+        assert empty_trie.get_weight("banana") == 10
+        assert empty_trie.size == 1
+
+    def test_update_word_preserves_weight(self, empty_trie):
+        empty_trie.insert("test", weight=42)
+        empty_trie.update_word("test", "new_test")
+        assert empty_trie.get_weight("new_test") == 42
+
+    def test_update_word_case_insensitive_old(self, empty_trie):
+        empty_trie.insert("Apple", weight=10)
+        assert empty_trie.update_word("apple", "banana") is True
+        assert empty_trie.contains("Apple") is False
+        assert empty_trie.contains("banana") is True
+
+    def test_update_word_nonexistent_returns_false(self, empty_trie):
+        assert empty_trie.update_word("nonexistent", "new") is False
+        assert empty_trie.size == 0
+
+    def test_update_word_search_results_reflect_change(self, empty_trie):
+        empty_trie.insert("apple", weight=15)
+        empty_trie.insert("application", weight=10)
+        results_before = empty_trie.search("app")
+        words_before = [r.word for r in results_before]
+        assert "apple" in words_before
+
+        empty_trie.update_word("apple", "banana")
+        results_after = empty_trie.search("app")
+        words_after = [r.word for r in results_after]
+        assert "apple" not in words_after
+        assert "banana" not in words_after
+
+        banana_results = empty_trie.search("ban")
+        assert len(banana_results) == 1
+        assert banana_results[0].word == "banana"
+        assert banana_results[0].weight == 15
+
+    def test_update_word_same_normalized_updates_original(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        assert empty_trie.update_word("apple", "Apple") is True
+        assert empty_trie.size == 1
+        assert empty_trie.get_original_word("apple") == "Apple"
+        results = empty_trie.search("app")
+        assert results[0].word == "Apple"
+        assert results[0].weight == 10
+
+    def test_update_word_same_word_noop(self, empty_trie):
+        empty_trie.insert("test", weight=10)
+        assert empty_trie.update_word("test", "test") is True
+        assert empty_trie.size == 1
+        assert empty_trie.get_weight("test") == 10
+
+    def test_update_word_get_all_words_updated(self, empty_trie):
+        empty_trie.insert("old", weight=5)
+        empty_trie.update_word("old", "new")
+        words = empty_trie.get_all_words()
+        assert "old" not in words
+        assert "new" in words
+
+    def test_update_word_fuzzy_search_uses_new_word(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        empty_trie.update_word("apple", "banana")
+        results = empty_trie.search("banan", fuzzy=True, fuzzy_threshold=1)
+        assert len(results) == 1
+        assert results[0].word == "banana"
+
+    def test_update_word_empty_old_raises(self, empty_trie):
+        with pytest.raises(EmptyWordError):
+            empty_trie.update_word("", "new")
+
+    def test_update_word_empty_new_raises(self, empty_trie):
+        empty_trie.insert("old", weight=5)
+        with pytest.raises(EmptyWordError):
+            empty_trie.update_word("old", "")
+
+    def test_update_word_blank_old_raises(self, empty_trie):
+        with pytest.raises(EmptyWordError):
+            empty_trie.update_word("   ", "new")
+
+    def test_update_word_blank_new_raises(self, empty_trie):
+        empty_trie.insert("old", weight=5)
+        with pytest.raises(EmptyWordError):
+            empty_trie.update_word("old", "  \t  ")
+
+    def test_update_word_chinese(self, empty_trie):
+        empty_trie.insert("中国", weight=10)
+        assert empty_trie.update_word("中国", "中华人民共和国") is True
+        assert empty_trie.contains("中国") is False
+        assert empty_trie.contains("中华人民共和国") is True
+        assert empty_trie.get_weight("中华人民共和国") == 10
+        results = empty_trie.search("中华")
+        assert len(results) == 1
+        assert results[0].word == "中华人民共和国"
+
+    def test_update_word_case_sensitive_mode(self):
+        trie = TrieAutocomplete(case_sensitive=True)
+        trie.insert("Apple", weight=10)
+        trie.insert("apple", weight=5)
+        assert trie.update_word("Apple", "Banana") is True
+        assert trie.size == 2
+        assert trie.contains("Banana") is True
+        assert trie.get_weight("Banana") == 10
+        assert trie.contains("apple") is True
+        assert trie.get_weight("apple") == 5
+
+    def test_update_word_sorting_unchanged(self, empty_trie):
+        empty_trie.insert("a", weight=5)
+        empty_trie.insert("b", weight=20)
+        empty_trie.insert("c", weight=10)
+        results_before = empty_trie.search("")
+        assert results_before[0].word == "b"
+
+        empty_trie.update_word("b", "z")
+        results_after = empty_trie.search("")
+        assert results_after[0].word == "z"
+        assert results_after[0].weight == 20

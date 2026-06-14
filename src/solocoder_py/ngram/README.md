@@ -6,7 +6,7 @@
 ## 模块功能
 
 - **N-Gram 索引构建**：将输入文本按可配置的 N 值切分为连续的字符片段（gram），
-  建立每个 gram 到其所在文本及位置的倒排索引，支持增量添加和删除文档
+  建立每个 gram 到其所在文本及位置的倒排索引，支持增量添加、删除和更新文档
 - **亚线性子串搜索**：查询时将查询串按相同 N 值切分为 gram 列表，通过索引快速
   定位候选文档（包含所有查询 gram 的文档），再对候选做精确子串匹配验证，
   搜索时间与 gram 命中数相关而非与文档总量线性相关
@@ -26,7 +26,8 @@ N-Gram 索引的核心实现类，提供以下方法与属性：
 | 方法 / 属性 | 说明 |
 |------------|------|
 | `add_document(doc_id, content)` | 增量添加文档，对内容提取 gram 后更新倒排索引 |
-| `remove_document(doc_id)` | 删除文档，同步清理索引中对应的 gram 记录 |
+| `remove_document(doc_id)` | 删除文档，同步清理索引中对应的 gram 记录（利用缓存避免重复提取 gram） |
+| `update_document(doc_id, new_content)` | 更新文档内容，基于新旧 gram 差异增量更新索引 |
 | `search(query, context_size, highlight_start, highlight_end)` | 子串搜索，返回匹配结果及高亮片段 |
 | `get_gram_postings(gram)` | 获取指定 gram 的倒排记录列表（Posting 列表） |
 | `n` | 索引的 N 值（属性） |
@@ -85,6 +86,17 @@ Gram 倒排记录数据结构：
 
 此外还维护：
 - `_documents`：文档 ID 到原文内容的映射，用于精确匹配验证和高亮提取
+- `_doc_grams`：文档 ID 到该文档 gram→位置列表映射的缓存，避免删除和更新时重复提取 gram
+
+### 文档更新的增量策略
+
+`update_document` 通过比较新旧内容的 gram 集合差异，增量更新索引：
+
+1. **grams_to_remove**：仅存在于旧内容中的 gram，从索引中移除该文档的记录
+2. **grams_to_add**：仅存在于新内容中的 gram，向索引中添加该文档的位置列表
+3. **grams_to_update**：同时存在于新旧内容但位置列表有变化的 gram，更新索引中的记录
+
+此策略避免了 `remove_document` + `add_document` 两步操作带来的完整重建开销。
 
 ### Gram 提取规则
 
@@ -202,6 +214,13 @@ idx.remove_document("doc3")
 resp = idx.search("fast")
 print(resp.total_count)  # 0
 
+# 更新文档内容（增量更新索引，避免完整重建）
+idx.update_document("doc2", "the quick blue fox jumps over the sleepy cat")
+resp_hare = idx.search("hare")
+print(resp_hare.total_count)  # 0
+resp_fox = idx.search("fox")
+print(resp_fox.total_count)  # 2 (doc1 和 doc2)
+
 # trigram 索引（N=3）
 idx3 = NGramIndex(n=3)
 idx3.add_document("doc1", "hello world")
@@ -216,6 +235,7 @@ for p in postings:
 # 异常处理
 from solocoder_py.ngram import (
     DocumentExistsError,
+    DocumentNotFoundError,
     EmptyQueryError,
     InvalidNValueError,
 )
@@ -229,4 +249,9 @@ try:
     idx.search("")
 except EmptyQueryError:
     print("查询串不能为空")
+
+try:
+    idx.update_document("nonexistent", "new content")
+except DocumentNotFoundError:
+    print("文档不存在")
 ```

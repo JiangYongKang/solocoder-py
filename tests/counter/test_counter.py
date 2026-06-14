@@ -524,3 +524,82 @@ class TestCounterState:
         state = counter.get_state()
         assert state.total() == 0
 
+
+class TestClampingConsistency:
+    def test_excess_decrement_across_siblings_preserves_parent(self, three_level_counter):
+        three_level_counter.increment("dc-east/host-01/svc-a", 10)
+        three_level_counter.increment("dc-east/host-01/svc-b", 5)
+        three_level_counter.decrement("dc-east/host-01/svc-a", 12)
+        assert three_level_counter.query("dc-east/host-01/svc-a") == 0
+        assert three_level_counter.query("dc-east/host-01/svc-b") == 5
+        assert three_level_counter.query("dc-east/host-01") == 5
+        assert three_level_counter.query("dc-east") == 5
+        assert three_level_counter.total() == 5
+
+    def test_excess_decrement_multiple_siblings(self, three_level_counter):
+        three_level_counter.increment("dc-east/host-01/svc-a", 3)
+        three_level_counter.increment("dc-east/host-01/svc-b", 4)
+        three_level_counter.increment("dc-east/host-01/svc-c", 5)
+        three_level_counter.decrement("dc-east/host-01/svc-b", 10)
+        assert three_level_counter.query("dc-east/host-01/svc-a") == 3
+        assert three_level_counter.query("dc-east/host-01/svc-b") == 0
+        assert three_level_counter.query("dc-east/host-01/svc-c") == 5
+        assert three_level_counter.query("dc-east/host-01") == 8
+        assert three_level_counter.query("dc-east") == 8
+        assert three_level_counter.total() == 8
+
+    def test_negative_increment_clamp_propagates_actual_delta(self, three_level_counter):
+        three_level_counter.increment("dc-east/host-01/svc-a", 7)
+        three_level_counter.increment("dc-east/host-01/svc-b", 6)
+        three_level_counter.increment("dc-east/host-01/svc-a", -20)
+        assert three_level_counter.query("dc-east/host-01/svc-a") == 0
+        assert three_level_counter.query("dc-east/host-01/svc-b") == 6
+        assert three_level_counter.query("dc-east/host-01") == 6
+        assert three_level_counter.query("dc-east") == 6
+
+    def test_parent_equals_sum_of_children_after_clamp(self, three_level_counter):
+        three_level_counter.increment("dc-east/host-01/svc-a", 10)
+        three_level_counter.increment("dc-east/host-01/svc-b", 10)
+        three_level_counter.increment("dc-east/host-01/svc-c", 10)
+        three_level_counter.decrement("dc-east/host-01/svc-a", 15)
+        children = three_level_counter.query_children("dc-east/host-01")
+        parent_count = three_level_counter.query("dc-east/host-01")
+        assert sum(children.values()) == parent_count
+        assert parent_count == 20
+
+    def test_ancestors_all_consistent_after_clamp(self, three_level_counter):
+        three_level_counter.increment("dc-east/host-01/svc-a", 20)
+        three_level_counter.increment("dc-east/host-02/svc-b", 30)
+        three_level_counter.increment("dc-west/host-03/svc-c", 40)
+        three_level_counter.decrement("dc-east/host-01/svc-a", 50)
+        h1_children = three_level_counter.query_children("dc-east/host-01")
+        assert three_level_counter.query("dc-east/host-01") == sum(h1_children.values())
+        dc_children = three_level_counter.query_children("dc-east")
+        assert three_level_counter.query("dc-east") == sum(dc_children.values())
+        top_children = three_level_counter.query_children()
+        assert three_level_counter.total() == sum(top_children.values())
+        assert three_level_counter.total() == 70
+
+    def test_consecutive_excess_decrements(self, three_level_counter):
+        three_level_counter.increment("dc-east/host-01/svc-a", 10)
+        three_level_counter.increment("dc-east/host-01/svc-b", 10)
+        three_level_counter.decrement("dc-east/host-01/svc-a", 15)
+        three_level_counter.decrement("dc-east/host-01/svc-b", 15)
+        assert three_level_counter.query("dc-east/host-01/svc-a") == 0
+        assert three_level_counter.query("dc-east/host-01/svc-b") == 0
+        assert three_level_counter.query("dc-east/host-01") == 0
+        assert three_level_counter.query("dc-east") == 0
+        assert three_level_counter.total() == 0
+
+    def test_clamp_on_merge_result(self, three_level_schema):
+        c1 = MultiDimCounter(schema=three_level_schema)
+        c2 = MultiDimCounter(schema=three_level_schema)
+        c1.increment("dc-east/host-01/svc-a", 8)
+        c1.increment("dc-east/host-01/svc-b", 4)
+        c2.merge(c1)
+        c2.decrement("dc-east/host-01/svc-a", 20)
+        assert c2.query("dc-east/host-01/svc-a") == 0
+        assert c2.query("dc-east/host-01/svc-b") == 4
+        assert c2.query("dc-east/host-01") == 4
+        assert c2.query("dc-east") == 4
+

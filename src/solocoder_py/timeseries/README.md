@@ -278,3 +278,48 @@ timeseries/
 ```bash
 pytest tests/timeseries/ -v
 ```
+
+## 修复与增强记录
+
+### 覆盖写入上卷一致性保证
+
+**问题**：相同时间戳覆盖写入时，原实现仅替换了 `_raw_data` 中的数据点，但未撤销旧数据点在上卷数据中的增量贡献，导致：
+- 相同标签覆盖时，`count` 和 `sum` 被重复累加（数值翻倍）
+- 不同标签覆盖时，旧标签的上卷状态被保留，形成"幽灵数据"
+- `min`/`max` 无法通过增量撤销保证正确性
+
+**修复方案**：新增 `MultiResolutionStore._handle_rollup_overwrite()` 方法，在检测到覆盖写入时：
+1. 收集旧数据点和新数据点在所有粒度中对应的窗口键集合
+2. 遍历原始数据重新收集受影响窗口的所有值
+3. 调用新增的 `AggregateTimeSeries.rebuild_window()` 方法重建每个粒度的聚合值和 `RollupState`
+4. 对于 `min`/`max` 不可增量撤销的统计量，通过全量重算保证正确性
+
+**使用保证**：当执行覆盖写入时（相同时间戳，无论标签是否变更），所有配置粒度的聚合统计将与当前 `_raw_data` 保持严格一致。
+
+### 死代码与冗余状态清理
+
+**清理内容**：
+1. **移除 `_windows` 列表**：`AggregateTimeSeries` 中 `_windows: list[float]` 属性由 `_rebuild_index()` 每次从 `_data` 重建，但 `query` 方法从未使用，仅产生额外开销
+2. **移除 `_rebuild_index()` 方法**：该方法每次重建 `_windows` 列表，但无任何消费者，且在 `write_aggregate`、`clear` 中被频繁调用
+3. **移除无意义死代码分支**：`write_aggregate()` 中原有的 `if aggregate.timestamp not in [k[0] for k in self._data.keys()]: pass` 条件分支，判断后无任何执行逻辑
+
+**性能影响**：减少了每次写入聚合时的字典键遍历和列表构建开销，内存占用减少了 `_windows` 列表的副本存储。
+
+### 负时间戳对齐修复
+
+**问题**：`Granularity.align_timestamp` 和 `aggregator.align_timestamp` 原使用 `int()` 做窗口对齐，Python 的 `int()` 对负数向零截断。例如：
+- `int(-1 / 60) * 60 = 0`（期望 -60）
+- `int(-100 / 300) * 300 = 0`（期望 -300）
+
+这导致小负时间戳（如历史纪元前、1970 年前的日期）对齐结果错误。
+
+**修复方案**：改用 `math.floor()` 向负无穷方向取整。修复后：
+- 正时间戳：与之前行为一致
+- 负时间戳：正确向更早（更小）的窗口边界对齐
+- 零：始终对齐到零
+
+**补充测试**：
+- `test_fixes.py::TestNegativeTimestampAlignment` - 8 个测试覆盖负时间戳对齐边界
+- `test_fixes.py::TestOverwriteRollupConsistency` - 9 个测试覆盖覆盖写入的上卷一致性
+- `test_fixes.py::TestRollupStateReset` - 3 个测试验证 `RollupState` 重置和重建
+- `test_fixes.py::TestDeadCodeCleanup` - 2 个测试验证死代码清理

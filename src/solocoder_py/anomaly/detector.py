@@ -63,7 +63,7 @@ class AnomalyDetector:
         if window_list:
             deviation = abs(value - current_mean)
         else:
-            deviation = None
+            deviation = 0.0
 
         point = AnomalyPoint(
             value=value,
@@ -93,7 +93,7 @@ class AnomalyDetector:
         if window_len == 0:
             return False
 
-        if self._config.window_size > 1 and window_len < 3:
+        if self._config.window_size > 1 and window_len == 1:
             return False
 
         k = self._config.k_sigma
@@ -150,7 +150,7 @@ class AnomalyDetector:
 
     def _get_recent_anomalies_for_alert(self) -> list[AnomalyPoint]:
         limit = min(
-            max(self._state.consecutive_anomalies, len(self._recent_point_flags)),
+            self._state.consecutive_anomalies,
             len(self._state.anomaly_history),
         )
         return list(self._state.anomaly_history[-limit:])

@@ -19,7 +19,6 @@ class AggregateTimeSeries:
     def __init__(self, granularity: Granularity) -> None:
         self._granularity = granularity
         self._data: dict[tuple[float, tuple], AggregateValue] = {}
-        self._windows: list[float] = []
         self._latest_window: float = float("-inf")
 
     @property
@@ -38,13 +37,8 @@ class AggregateTimeSeries:
         key = (aggregate.timestamp, labels_key)
         self._data[key] = aggregate
 
-        if aggregate.timestamp not in [k[0] for k in self._data.keys()]:
-            pass
-
         if aggregate.timestamp > self._latest_window:
             self._latest_window = aggregate.timestamp
-
-        self._rebuild_index()
 
     def update_rollup(
         self,
@@ -68,7 +62,6 @@ class AggregateTimeSeries:
             if window_start > self._latest_window:
                 self._latest_window = window_start
 
-            self._rebuild_index()
             return aggregate
 
         raise ValueError("Failed to create aggregate from rollup state")
@@ -120,12 +113,10 @@ class AggregateTimeSeries:
         else:
             self._latest_window = float("-inf")
 
-        self._rebuild_index()
         return deleted
 
     def clear(self) -> None:
         self._data.clear()
-        self._windows.clear()
         self._latest_window = float("-inf")
 
     def is_empty(self) -> bool:
@@ -137,8 +128,57 @@ class AggregateTimeSeries:
         windows = [k[0] for k in self._data.keys()]
         return (min(windows), max(windows))
 
-    def _rebuild_index(self) -> None:
-        self._windows = sorted({k[0] for k in self._data.keys()})
+    def rebuild_window(
+        self,
+        window_start: float,
+        labels: dict[str, str],
+        rollup_states: dict[tuple[float, tuple], RollupState],
+        values: list[float],
+    ) -> None:
+        labels_key = tuple(sorted(labels.items()))
+        key = (window_start, labels_key)
+
+        if not values:
+            if key in self._data:
+                del self._data[key]
+            if key in rollup_states:
+                del rollup_states[key]
+            if self._data:
+                self._latest_window = max(k[0] for k in self._data.keys())
+            else:
+                self._latest_window = float("-inf")
+            return
+
+        if key not in rollup_states:
+            rollup_states[key] = RollupState(window_start=window_start)
+
+        state = rollup_states[key]
+        state.rebuild_from_values(values)
+
+        aggregate = state.to_aggregate(labels)
+        if aggregate is not None:
+            self._data[key] = aggregate
+            if window_start > self._latest_window:
+                self._latest_window = window_start
+
+    def remove_window(
+        self,
+        window_start: float,
+        labels: dict[str, str],
+        rollup_states: dict[tuple[float, tuple], RollupState],
+    ) -> None:
+        labels_key = tuple(sorted(labels.items()))
+        key = (window_start, labels_key)
+
+        if key in self._data:
+            del self._data[key]
+        if key in rollup_states:
+            del rollup_states[key]
+
+        if self._data:
+            self._latest_window = max(k[0] for k in self._data.keys())
+        else:
+            self._latest_window = float("-inf")
 
 
 class MultiResolutionStore:
@@ -242,7 +282,13 @@ class MultiResolutionStore:
             raise OutOfOrderWriteError(ts, self._latest_raw_timestamp)
 
         idx = bisect_left(self._raw_timestamps, ts)
-        if idx < len(self._raw_timestamps) and self._raw_timestamps[idx] == ts:
+        is_overwrite = (
+            idx < len(self._raw_timestamps) and self._raw_timestamps[idx] == ts
+        )
+
+        old_point = None
+        if is_overwrite:
+            old_point = self._raw_data[idx]
             self._raw_data[idx] = point
         else:
             self._raw_data.insert(idx, point)
@@ -251,9 +297,60 @@ class MultiResolutionStore:
         if ts > self._latest_raw_timestamp:
             self._latest_raw_timestamp = ts
 
-        self._rollup(point)
+        if is_overwrite:
+            self._handle_rollup_overwrite(old_point, point)
+        else:
+            self._rollup(point)
 
         return point
+
+    def _handle_rollup_overwrite(self, old_point: DataPoint, new_point: DataPoint) -> None:
+        ts = old_point.timestamp
+
+        affected_keys: dict[str, set[tuple[float, tuple]]] = {}
+
+        for name, granularity in self._granularities.items():
+            if name == "raw":
+                continue
+
+            old_window_start = granularity.align_timestamp(ts)
+            old_labels_key = tuple(sorted(old_point.labels.items()))
+            old_key = (old_window_start, old_labels_key)
+
+            new_window_start = granularity.align_timestamp(ts)
+            new_labels_key = tuple(sorted(new_point.labels.items()))
+            new_key = (new_window_start, new_labels_key)
+
+            if name not in affected_keys:
+                affected_keys[name] = set()
+            affected_keys[name].add(old_key)
+            affected_keys[name].add(new_key)
+
+        new_values: dict[str, dict[tuple[float, tuple], list[float]]] = {}
+        for name in affected_keys:
+            new_values[name] = {key: [] for key in affected_keys[name]}
+
+        for p in self._raw_data:
+            for name, granularity in self._granularities.items():
+                if name == "raw" or name not in affected_keys:
+                    continue
+                window_start = granularity.align_timestamp(p.timestamp)
+                labels_key = tuple(sorted(p.labels.items()))
+                key = (window_start, labels_key)
+                if key in new_values[name]:
+                    new_values[name][key].append(p.value)
+
+        for name, granularity in self._granularities.items():
+            if name == "raw" or name not in new_values:
+                continue
+            series = self._aggregate_series[name]
+            states = self._rollup_states[name]
+
+            for key, values in new_values[name].items():
+                window_start = key[0]
+                labels_key = key[1]
+                labels_dict = dict(labels_key)
+                series.rebuild_window(window_start, labels_dict, states, values)
 
     def write_many(
         self,

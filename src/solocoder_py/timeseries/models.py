@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import math
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -88,7 +89,7 @@ class Granularity:
             raise ValueError("retention_seconds must be positive or None")
 
     def align_timestamp(self, timestamp: float) -> float:
-        return float(int(timestamp / self.window_seconds) * self.window_seconds)
+        return float(math.floor(timestamp / self.window_seconds) * self.window_seconds)
 
 
 @dataclass
@@ -126,6 +127,17 @@ class RollupState:
             self.min = other.min
         if other.max > self.max:
             self.max = other.max
+
+    def reset(self) -> None:
+        self.sum = 0.0
+        self.count = 0
+        self.min = float("inf")
+        self.max = float("-inf")
+
+    def rebuild_from_values(self, values: list[float]) -> None:
+        self.reset()
+        for v in values:
+            self.update(v)
 
     def to_aggregate(
         self, labels: Optional[dict[str, str]] = None

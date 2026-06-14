@@ -84,11 +84,21 @@ class MultiDimCounter:
             return
 
         with self._lock:
+            leaf_key = path_parts
+            old_leaf = self._counts.get(leaf_key, 0)
+            new_leaf = old_leaf + delta
+            if new_leaf < 0:
+                new_leaf = 0
+            actual_delta = new_leaf - old_leaf
+
+            if actual_delta == 0:
+                return
+
             for i in range(1, len(path_parts) + 1):
                 ancestor = path_parts[:i]
-                self._counts[ancestor] = self._counts.get(ancestor, 0) + delta
-                if self._counts[ancestor] < 0:
-                    self._counts[ancestor] = 0
+                self._counts[ancestor] = (
+                    self._counts.get(ancestor, 0) + actual_delta
+                )
 
     def decrement(self, path: str, delta: int = 1) -> None:
         if delta < 0:

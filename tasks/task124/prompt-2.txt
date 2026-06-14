@@ -1,0 +1,5 @@
+你实现的语音编码索引域存在缺陷，需要修复：
+1. metaphone.py 的 metaphone 函数在处理 ck 字母组合时存在逻辑错误。当字母 C 后紧跟字母 K 时，C 分支不做任何编码输出，K 分支又因为前一个字符是 C 而跳过 K 的编码，导致整个 ck 组合被丢弃。metaphone("Jackson") 返回 "JSN" 而正确结果应为 "JKSN"。需要修复 ck 组合的编码逻辑。
+2. 修复后需要为 ck 组合场景补充单元测试，覆盖 Jackson、Back、Mack 等包含 ck 的姓名。测试代码放在 tests/phonetic/ 下。
+3. 更新 README.md，说明修复后的 ck 组合编码规则。
+4. 重新运行 poetry run pytest tests/phonetic/ -q，确保所有测试通过。

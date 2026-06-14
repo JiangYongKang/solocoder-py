@@ -78,7 +78,11 @@ class FreeList:
         current = self.head
         while current is not None:
             if current.block.size >= size:
-                if best is None or current.block.size < best.block.size:
+                if best is None:
+                    best = current
+                elif current.block.size < best.block.size:
+                    best = current
+                elif current.block.size == best.block.size and current.block.start > best.block.start:
                     best = current
             current = current.next
         return best

@@ -1,0 +1,7 @@
+你实现的时序内存存储存在一些缺陷，需要修复：
+1. MultiResolutionStore 的 write 方法在相同时间戳覆盖写入时，只替换了 _raw_data 中的数据点但未撤销旧数据点在上卷数据中的增量贡献。相同标签覆盖时上卷的 count 和 sum 会被重复累加导致翻倍，不同标签覆盖时旧标签的上卷状态会被保留形成幽灵数据。需要修复覆盖写入时的上卷数据一致性。
+2. AggregateTimeSeries 的 write_aggregate 方法中存在无意义的死代码分支，且 _rebuild_index 方法每次重建的 _windows 列表从未被 query 使用，产生冗余开销。需要清理这些无效代码和未使用的状态。
+3. Granularity.align_timestamp 和 aggregator.py 的 align_timestamp 函数使用 int() 做窗口对齐，Python 的 int() 对负数向零截断，当时间戳为小负数时对齐结果错误。需要改为向负无穷方向取整，保证正负时间戳的对齐行为一致。
+4. 修复后需要为覆盖写入的上卷一致性和负时间戳对齐补充单元测试。测试代码放在 tests/timeseries/ 下。
+5. 更新 README.md，说明修复后的覆盖写入上卷保证和死代码清理内容。
+6. 重新运行 poetry run pytest tests/timeseries/ -q，确保所有测试通过。

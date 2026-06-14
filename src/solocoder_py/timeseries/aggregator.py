@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Iterable, Optional
 
 from .exceptions import InvalidAggregationTypeError
@@ -7,7 +8,7 @@ from .models import AggregateValue, DataPoint
 
 
 def align_timestamp(timestamp: float, window_seconds: int) -> float:
-    return float(int(timestamp / window_seconds) * window_seconds)
+    return float(math.floor(timestamp / window_seconds) * window_seconds)
 
 
 def aggregate_points(
