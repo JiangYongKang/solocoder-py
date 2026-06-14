@@ -34,7 +34,7 @@ class TestGetFilteredItemsCallCount:
         assert result.total_count == 18
         assert call_count[0] == 1
 
-    def test_one_active_filter_calls_at_most_twice(self):
+    def test_one_active_filter_calls_once(self):
         engine, products = build_engine_with_products()
         engine.add_filter("category", "手机")
 
@@ -52,10 +52,9 @@ class TestGetFilteredItemsCallCount:
 
         assert result.total_count == 6
         assert result.active_filters == {"category": ["手机"]}
-        assert call_count[0] <= 2
-        assert call_count[0] == len(engine._active_filters) + 1
+        assert call_count[0] == 1
 
-    def test_two_active_filters_calls_at_most_three_times(self):
+    def test_two_active_filters_calls_once(self):
         engine, products = build_engine_with_products()
         engine.add_filter("category", "手机")
         engine.add_filter("brand", "苹果")
@@ -74,10 +73,9 @@ class TestGetFilteredItemsCallCount:
 
         assert result.total_count == 2
         assert set(result.active_filters.keys()) == {"category", "brand"}
-        assert call_count[0] <= 3
-        assert call_count[0] == len(engine._active_filters) + 1
+        assert call_count[0] == 1
 
-    def test_three_active_filters_calls_at_most_four_times(self):
+    def test_three_active_filters_calls_once(self):
         engine, products = build_engine_with_products()
         engine.add_filter("category", "手机")
         engine.add_filter("brand", "苹果")
@@ -97,10 +95,9 @@ class TestGetFilteredItemsCallCount:
 
         assert result.total_count == 1
         assert set(result.active_filters.keys()) == {"category", "brand", "color"}
-        assert call_count[0] <= 4
-        assert call_count[0] == len(engine._active_filters) + 1
+        assert call_count[0] == 1
 
-    def test_mixed_categorical_and_numeric_filters_call_count(self):
+    def test_mixed_categorical_and_numeric_filters_calls_once(self):
         engine, products = build_engine_with_products()
         engine.add_filter("category", "手机")
         engine.add_filter("price", "3000-6000")
@@ -119,54 +116,9 @@ class TestGetFilteredItemsCallCount:
 
         assert result.total_count == 3
         assert set(result.active_filters.keys()) == {"category", "price"}
-        assert call_count[0] <= 3
-        assert call_count[0] == len(engine._active_filters) + 1
+        assert call_count[0] == 1
 
-    def test_call_count_with_multiple_values_in_one_field(self):
-        engine, products = build_engine_with_products()
-        engine.add_filter("category", "手机")
-        engine.add_filter("category", "笔记本")
-
-        original_get_filtered_items = engine._get_filtered_items
-        call_count = [0]
-
-        def counting_get_filtered_items(exclude_field=None):
-            call_count[0] += 1
-            return original_get_filtered_items(exclude_field)
-
-        with patch.object(
-            engine, "_get_filtered_items", side_effect=counting_get_filtered_items
-        ):
-            result = engine.search()
-
-        assert result.total_count == 10
-        assert result.active_filters.keys() == {"category"}
-        assert set(result.active_filters["category"]) == {"手机", "笔记本"}
-        assert call_count[0] <= 2
-        assert call_count[0] == len(engine._active_filters) + 1
-
-    def test_no_results_call_count_still_optimized(self):
-        engine, products = build_engine_with_products()
-        engine.add_filter("category", "相机")
-
-        original_get_filtered_items = engine._get_filtered_items
-        call_count = [0]
-
-        def counting_get_filtered_items(exclude_field=None):
-            call_count[0] += 1
-            return original_get_filtered_items(exclude_field)
-
-        with patch.object(
-            engine, "_get_filtered_items", side_effect=counting_get_filtered_items
-        ):
-            result = engine.search()
-
-        assert result.total_count == 0
-        assert result.active_filters == {"category": ["相机"]}
-        assert call_count[0] <= 2
-        assert call_count[0] == len(engine._active_filters) + 1
-
-    def test_all_fields_filtered_call_count(self):
+    def test_all_fields_filtered_calls_once(self):
         engine, products = build_engine_with_products()
         engine.add_filter("category", "手机")
         engine.add_filter("brand", "苹果")
@@ -189,8 +141,189 @@ class TestGetFilteredItemsCallCount:
 
         assert result.total_count == 1
         assert len(result.active_filters) == 6
-        assert call_count[0] <= 7
-        assert call_count[0] == len(engine._active_filters) + 1
+        assert call_count[0] == 1
+
+
+class TestIncrementalScanOptimization:
+    def test_incremental_scan_checks_only_non_matched_items(self):
+        engine, products = build_engine_with_products()
+        engine.add_filter("category", "手机")
+
+        original_matches_all_filters = engine._matches_all_filters
+        matches_calls = []
+
+        def tracking_matches_all_filters(item, exclude_field=None):
+            matches_calls.append((item["id"], exclude_field))
+            return original_matches_all_filters(item, exclude_field)
+
+        with patch.object(
+            engine,
+            "_matches_all_filters",
+            side_effect=tracking_matches_all_filters,
+        ):
+            result = engine.search()
+
+        assert result.total_count == 6
+
+        first_call_exclude_none = [
+            call for call in matches_calls if call[1] is None
+        ]
+        assert len(first_call_exclude_none) == 18
+
+        incremental_calls = [
+            call for call in matches_calls if call[1] == "category"
+        ]
+        assert len(incremental_calls) == 12
+        assert len(incremental_calls) == 18 - result.total_count
+
+    def test_incremental_scan_with_multiple_active_filters(self):
+        engine, products = build_engine_with_products()
+        engine.add_filter("category", "手机")
+        engine.add_filter("brand", "苹果")
+
+        original_matches_all_filters = engine._matches_all_filters
+        matches_calls = []
+
+        def tracking_matches_all_filters(item, exclude_field=None):
+            matches_calls.append((item["id"], exclude_field))
+            return original_matches_all_filters(item, exclude_field)
+
+        with patch.object(
+            engine,
+            "_matches_all_filters",
+            side_effect=tracking_matches_all_filters,
+        ):
+            result = engine.search()
+
+        assert result.total_count == 2
+
+        first_call_exclude_none = [
+            call for call in matches_calls if call[1] is None
+        ]
+        assert len(first_call_exclude_none) == 18
+
+        category_incremental_calls = [
+            call for call in matches_calls if call[1] == "category"
+        ]
+        assert len(category_incremental_calls) == 16
+        assert len(category_incremental_calls) == 18 - result.total_count
+
+        brand_incremental_calls = [
+            call for call in matches_calls if call[1] == "brand"
+        ]
+        assert len(brand_incremental_calls) == 16
+        assert len(brand_incremental_calls) == 18 - result.total_count
+
+    def test_incremental_scan_total_checks_count(self):
+        engine, products = build_engine_with_products()
+        engine.add_filter("category", "手机")
+        engine.add_filter("brand", "苹果")
+        engine.add_filter("color", "黑色")
+
+        original_matches_all_filters = engine._matches_all_filters
+        total_calls = [0]
+
+        def counting_matches_all_filters(item, exclude_field=None):
+            total_calls[0] += 1
+            return original_matches_all_filters(item, exclude_field)
+
+        with patch.object(
+            engine,
+            "_matches_all_filters",
+            side_effect=counting_matches_all_filters,
+        ):
+            result = engine.search()
+
+        assert result.total_count == 1
+
+        num_active_filters = len(engine._active_filters)
+        total_items = 18
+        expected_calls = total_items + num_active_filters * (
+            total_items - result.total_count
+        )
+        assert total_calls[0] == expected_calls
+        assert total_calls[0] == 18 + 3 * 17
+
+    def test_incremental_scan_with_no_results(self):
+        engine, products = build_engine_with_products()
+        engine.add_filter("category", "相机")
+
+        original_matches_all_filters = engine._matches_all_filters
+        matches_calls = []
+
+        def tracking_matches_all_filters(item, exclude_field=None):
+            matches_calls.append((item["id"], exclude_field))
+            return original_matches_all_filters(item, exclude_field)
+
+        with patch.object(
+            engine,
+            "_matches_all_filters",
+            side_effect=tracking_matches_all_filters,
+        ):
+            result = engine.search()
+
+        assert result.total_count == 0
+
+        first_call_exclude_none = [
+            call for call in matches_calls if call[1] is None
+        ]
+        assert len(first_call_exclude_none) == 18
+
+        incremental_calls = [
+            call for call in matches_calls if call[1] == "category"
+        ]
+        assert len(incremental_calls) == 18
+
+    def test_incremental_scan_skips_matched_items(self):
+        engine, products = build_engine_with_products()
+        engine.add_filter("category", "手机")
+
+        original_matches_all_filters = engine._matches_all_filters
+        checked_item_ids = []
+
+        def tracking_matches_all_filters(item, exclude_field=None):
+            if exclude_field == "category":
+                checked_item_ids.append(item["id"])
+            return original_matches_all_filters(item, exclude_field)
+
+        with patch.object(
+            engine,
+            "_matches_all_filters",
+            side_effect=tracking_matches_all_filters,
+        ):
+            result = engine.search()
+
+        matched_item_ids = {item["id"] for item in result.items}
+
+        for item_id in checked_item_ids:
+            assert item_id not in matched_item_ids
+
+        for item_id in matched_item_ids:
+            assert item_id not in checked_item_ids
+
+    def test_no_active_filters_no_incremental_scan(self):
+        engine, products = build_engine_with_products()
+
+        original_matches_all_filters = engine._matches_all_filters
+        matches_calls = []
+
+        def tracking_matches_all_filters(item, exclude_field=None):
+            matches_calls.append((item["id"], exclude_field))
+            return original_matches_all_filters(item, exclude_field)
+
+        with patch.object(
+            engine,
+            "_matches_all_filters",
+            side_effect=tracking_matches_all_filters,
+        ):
+            result = engine.search()
+
+        assert result.total_count == 18
+
+        assert len(matches_calls) == 0
+
+        for call in matches_calls:
+            assert call[1] is None
 
 
 class TestOptimizationCorrectness:
@@ -281,28 +414,3 @@ class TestOptimizationCorrectness:
         brand_facet = get_facet_by_name(result, "brand")
         assert get_facet_value_count(brand_facet, "苹果") == 1
         assert get_facet_value_count(brand_facet, "联想") == 0
-
-
-class TestCallCountWithExcludeField:
-    def test_calls_with_exclude_field_only_for_active_filters(self):
-        engine, products = build_engine_with_products()
-        engine.add_filter("category", "手机")
-        engine.add_filter("price", "3000-6000")
-
-        exclude_fields_called = []
-        original_get_filtered_items = engine._get_filtered_items
-
-        def tracking_get_filtered_items(exclude_field=None):
-            exclude_fields_called.append(exclude_field)
-            return original_get_filtered_items(exclude_field)
-
-        with patch.object(
-            engine, "_get_filtered_items", side_effect=tracking_get_filtered_items
-        ):
-            engine.search()
-
-        assert exclude_fields_called[0] is None
-
-        active_filter_fields = {"category", "price"}
-        exclude_fields_in_facet_computation = exclude_fields_called[1:]
-        assert set(exclude_fields_in_facet_computation) == active_filter_fields

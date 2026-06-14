@@ -1,0 +1,3 @@
+内存块分配器的修复仍有遗漏，需要继续修复：
+1. allocator.py 的 deallocate 方法在释放内存块时只将 allocated 标记为 False 并重新插入自由链表，但没有将 block.written 重置为 0。而 README.md 的"写入范围追踪机制"表格中声称 deallocate 后 free_list_info 返回的 written 字段恒为 0。文档描述与代码实际行为不一致：释放后的块在 free_list_info 中仍携带上一次分配期间的 written 旧值。需要在 deallocate 方法中补充 `block.written = 0` 使代码与文档一致。
+2. 修复后重新运行 poetry run pytest tests/allocator/ -q，确保所有测试通过。

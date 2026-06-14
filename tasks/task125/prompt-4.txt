@@ -1,0 +1,3 @@
+分面搜索引擎的遍历优化仍有缺陷，需要继续修复：
+1. engine.py 的 _compute_facets 方法虽然已接收 search 传来的 matched_items 参数，但对有活动过滤条件的分面字段仍然调用 _get_filtered_items(exclude_field=field_name) 做完整的全量遍历（遍历 self._items.values() 的全部条目），并未以 matched_items 为基础做增量补充扫描。提示词要求的是：以 matched_items 为起点，仅对当前字段有活动过滤条件时补充扫描被该字段独立排除的条目——即被当前字段过滤掉但满足其他所有过滤条件的条目。当前实现将调用次数从 F 降为 N+1，但每次调用的遍历复杂度仍是 O(N)，未实现减少遍历量的目标。需要修改 _compute_facets，对于有活动过滤的字段，以 matched_items 集合为基础，只遍历不在 matched_items 中的条目来检查是否满足除当前字段外的其他过滤条件，将这些补充条目与 matched_items 合并后传给分面计算。
+2. 修复后重新运行 poetry run pytest tests/facet/ -q，确保所有测试通过。

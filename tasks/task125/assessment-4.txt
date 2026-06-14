@@ -1,0 +1,6 @@
+产物不满意：
+1. test_performance_optimization.py 的 test_no_active_filters_no_incremental_scan 方法在断言 `matches_calls` 列表长度为 0 之后，紧接着一个 `for call in matches_calls: assert call[1] is None` 的循环体。由于列表已经断言为空，该 for 循环体内断言永远不会被执行，成为一段死代码。如果未来代码变更导致 _matches_all_filters 在无过滤条件下被意外调用，`assert len(matches_calls) == 0` 这一行就会直接失败，后面的 for 循环依然不会执行，该断言对验证 `_matches_all_filters` 被调用时的 exclude_field 参数值起不到任何保护作用。根因是模型在编写测试时机械地照搬了同类测试的模式而忽略了空列表的特殊性，正确的做法是删除这段无效循环体，或者将两个断言合并为一次性验证逻辑。
+
+过程不满意：
+1. 模型在思考过程中对 TodoList 进行了 5 次更新操作：刚理解完提示词后创建了 3 项子任务，阅读 engine.py 后又更新一次，修改 engine.py 后更新一次，读取测试文件后更新一次，最终运行测试后标记完成。对于本轮的修改范围（engine.py 中 _compute_facets 一处方法的改造和测试文件的适配），5 次 TodoList 更新明显过度，属于仪式性使用而非常规规划驱动。其中首次 TodoList 创建在阅读 engine.py 代码之前，仅基于提示词的理解就划分子任务，虽然第一步表达了正确的优化思路，但后续的实际执行与初始计划并无明确对应关系。正确做法是先阅读 engine.py 确认当前实现状态，再一次性制定实施计划，执行过程中仅在遇到阻塞性变更时才更新计划。
+2. 模型在修改 test_performance_optimization.py 时使用了 Write 工具对整个文件进行了完整重写，而非通过 edit_file_search_replace 做针对性编辑。从 git diff 看测试文件变更确实涉及多处结构调整（TestGetFilteredItemsCallCount 类的断言值修正、删除 TestCallCountWithExcludeField 整个类、新增 TestIncrementalScanOptimization 类），整体重写在本轮场景下结果正确，但模型没有先评估哪些测试可以直接保留、哪些需要小幅修改、哪些需要新增，缺少对变更范围的拆分评估就直接覆盖了整个文件。合理做法是先区分修改类和新增类，对已有测试做最小化断言修正，对新测试单独追加到文件末尾，保持变更粒度可控。

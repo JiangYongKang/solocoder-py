@@ -104,6 +104,7 @@ class MemoryPoolAllocator:
             return False
 
         block.allocated = False
+        block.written = 0
 
         node = FreeListNode(block)
         block.free_node = node

@@ -247,11 +247,16 @@ class FacetSearchEngine:
     ) -> List[FacetResult]:
         facets: List[FacetResult] = []
 
+        matched_ids = {item["id"] for item in matched_items}
+
         for field_name, config in self._facet_configs.items():
             if field_name in self._active_filters:
-                items_for_facet = self._get_filtered_items(
-                    exclude_field=field_name
-                )
+                items_for_facet = list(matched_items)
+                for item_id, item in self._items.items():
+                    if item_id in matched_ids:
+                        continue
+                    if self._matches_all_filters(item, exclude_field=field_name):
+                        items_for_facet.append(item)
             else:
                 items_for_facet = matched_items
 
