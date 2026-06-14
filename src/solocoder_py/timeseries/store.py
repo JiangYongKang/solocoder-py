@@ -161,25 +161,6 @@ class AggregateTimeSeries:
             if window_start > self._latest_window:
                 self._latest_window = window_start
 
-    def remove_window(
-        self,
-        window_start: float,
-        labels: dict[str, str],
-        rollup_states: dict[tuple[float, tuple], RollupState],
-    ) -> None:
-        labels_key = tuple(sorted(labels.items()))
-        key = (window_start, labels_key)
-
-        if key in self._data:
-            del self._data[key]
-        if key in rollup_states:
-            del rollup_states[key]
-
-        if self._data:
-            self._latest_window = max(k[0] for k in self._data.keys())
-        else:
-            self._latest_window = float("-inf")
-
 
 class MultiResolutionStore:
     def __init__(self, name: str = "default") -> None:

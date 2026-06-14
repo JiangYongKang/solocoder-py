@@ -1,0 +1,4 @@
+内存块分配器的修复仍有遗漏，需要继续修复：
+1. README.md 在第2轮中完全未被更新，所有声称补充的"写入范围追踪机制""最佳适应策略次级选择规则"等章节实际不存在。需要更新 README.md：在 BlockInfo 字段表中补充 written 字段描述、在 read 方法描述中说明不传 size 时默认返回已写入范围而非整个块、补充 best_fit 在等大空闲块场景下的次级选择策略说明（如选地址最大的块而非最小），并在使用示例中体现上述行为的差异。
+2. allocator.py 的 all_blocks_info 方法和 free_list_info 方法在构造 BlockInfo 时未传入 written 字段，而 block_info 单块查询已正确传播 written 值，两个批量查询与单块查询的返回字段不一致。需要为这两个方法补充 written 字段的传播。
+3. 修复后重新运行 poetry run pytest tests/allocator/ -q，确保所有测试通过。

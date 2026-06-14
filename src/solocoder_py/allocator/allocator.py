@@ -205,12 +205,12 @@ class MemoryPoolAllocator:
         result = []
         for node in self._free_list.nodes():
             result.append(
-                BlockInfo(start=node.block.start, size=node.block.size, allocated=False)
+                BlockInfo(start=node.block.start, size=node.block.size, allocated=False, written=node.block.written)
             )
         return result
 
     def all_blocks_info(self) -> list[BlockInfo]:
         return [
-            BlockInfo(start=b.start, size=b.size, allocated=b.allocated)
+            BlockInfo(start=b.start, size=b.size, allocated=b.allocated, written=b.written)
             for b in self._blocks
         ]

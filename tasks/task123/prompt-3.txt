@@ -1,0 +1,4 @@
+你对 N-Gram 索引模块的优化仍有遗漏，需要修复：
+1. index.py 的 update_document 方法中，grams_to_update 循环内存在 `if gram not in self._index` 判断分支，但 grams_to_update 是旧 gram 集合与新 gram 集合的交集，这些 gram 由 add_document 写入时已在 _index 中存在且不可能在 remove 步骤中被清理，该 if 分支永远不会触发。需要移除这段冗余的分支代码。
+2. 提示词要求避免 remove_document 重复调用 _extract_grams，你在第2轮通过 _doc_grams 缓存实现了该优化，但未为优化行为本身补充验证测试。需要补充单元测试，使用 mock 或 spy 方式验证 remove_document 路径上 _extract_grams 未被再次调用，防止后续维护中意外退化。测试代码放在 tests/ngram/ 下。
+3. 修复后重新运行 poetry run pytest tests/ngram/ -q，确保所有测试通过。

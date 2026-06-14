@@ -3,6 +3,7 @@ from .exceptions import (
     EmptyWordError,
     InvalidPrefixError,
     InvalidWeightError,
+    WordConflictError,
 )
 from .models import Candidate, SearchResult, TrieNode
 from .trie import TrieAutocomplete
@@ -16,4 +17,5 @@ __all__ = [
     "EmptyWordError",
     "InvalidWeightError",
     "InvalidPrefixError",
+    "WordConflictError",
 ]

@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
-from .exceptions import EmptyWordError, InvalidPrefixError, InvalidWeightError
+from .exceptions import EmptyWordError, InvalidPrefixError, InvalidWeightError, WordConflictError
 from .models import Candidate, SearchResult, TrieNode
 
 
@@ -256,10 +256,20 @@ class TrieAutocomplete:
                 return False
 
             if old_normalized == new_normalized:
-                self._word_originals[old_normalized] = new_word
+                old_original = self._word_originals[old_normalized]
+                if old_original == new_word:
+                    return True
                 weight = self._word_weights[old_normalized]
-                self._update_word_in_trie(old_normalized, weight, original_word=new_word)
+                self._delete_word_from_trie(old_normalized, original_word=old_original)
+                self._word_originals[old_normalized] = new_word
+                self._insert_word(old_normalized, weight, original_word=new_word)
                 return True
+
+            if new_normalized in self._word_weights:
+                raise WordConflictError(
+                    f"cannot rename '{old_word}' to '{new_word}': "
+                    f"'{self._word_originals[new_normalized]}' already exists"
+                )
 
             weight = self._word_weights[old_normalized]
             old_original = self._word_originals[old_normalized]

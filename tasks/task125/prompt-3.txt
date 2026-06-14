@@ -1,0 +1,5 @@
+你对分面搜索引擎的修复仍有遗漏，需要继续修复：
+1. engine.py 的 search 方法在调用 _compute_facets 前已通过 _get_filtered_items 获得了完全过滤后的 matched_items 列表，当前版本将 matched_items 计算完就丢弃了，_compute_facets 内部又逐字段重复调用 _get_filtered_items 做全量扫描。需要将 matched_items 传入 _compute_facets，在计算每个分面时以 matched_items 为基础，仅对当前字段有活动过滤条件时补充扫描被该字段独立排除的条目，避免每个分面都重复做 O(N) 的全量遍历。
+2. test_edge_cases.py 文件头部存在未使用的 `is_facet_value_selected` 导入，需要清理。
+3. 修复后需要为遍历优化补充单元测试，验证 _get_filtered_items 在分面计算过程中的调用次数不超过当前活动过滤的字段数加一次。测试代码放在 tests/facet/ 下。
+4. 重新运行 poetry run pytest tests/facet/ -q，确保所有测试通过。

@@ -239,6 +239,91 @@ results = autocomplete.search("c")
 assert results[0].word == "cat"
 ```
 
+### 大小写归一化示例
+
+```python
+from solocoder_py.autocomplete import TrieAutocomplete
+
+# 默认大小写不敏感模式
+autocomplete = TrieAutocomplete()
+
+# 首次插入决定原始词的大小写形式
+autocomplete.insert("HelloWorld", weight=10)
+
+# 不同大小写形式被视为同一个词
+assert autocomplete.size == 1
+assert autocomplete.contains("helloworld") is True
+assert autocomplete.contains("HELLOWORLD") is True
+assert autocomplete.get_weight("Hello") == 10
+
+# 重复插入累加热度，不会创建新词条
+autocomplete.insert("helloworld", weight=5)
+assert autocomplete.size == 1
+assert autocomplete.get_weight("HELLOWORLD") == 15
+
+# 使用任意大小写形式都可以更新热度
+autocomplete.update_weight("HELLOworld", weight=5, accumulate=True)
+assert autocomplete.get_weight("helloworld") == 20
+
+# 使用任意大小写形式都可以删除
+autocomplete.delete("HELLOWORLD")
+assert autocomplete.size == 0
+assert autocomplete.contains("HelloWorld") is False
+
+# 搜索结果中返回的是首次插入的原始大小写形式
+autocomplete.insert("ApplePie", weight=10)
+results = autocomplete.search("apple")
+assert results[0].word == "ApplePie"
+
+# 获取原始大小写形式
+assert autocomplete.get_original_word("applepie") == "ApplePie"
+```
+
+### 候选词文本更新示例
+
+```python
+from solocoder_py.autocomplete import TrieAutocomplete
+
+autocomplete = TrieAutocomplete()
+autocomplete.insert("apple", weight=42)
+
+# 基本文本更新 - 保留热度值
+assert autocomplete.update_word("apple", "banana") is True
+assert autocomplete.contains("apple") is False
+assert autocomplete.contains("banana") is True
+assert autocomplete.get_weight("banana") == 42
+
+# 更新后搜索结果也随之变化
+results = autocomplete.search("ban")
+assert len(results) == 1
+assert results[0].word == "banana"
+assert results[0].weight == 42
+
+# 更新不存在的词返回 False
+assert autocomplete.update_word("nonexistent", "new") is False
+
+# 仅修改大小写（归一化后相同）
+autocomplete.insert("test", weight=10)
+assert autocomplete.update_word("test", "Test") is True
+assert autocomplete.size == 1
+assert autocomplete.get_original_word("test") == "Test"
+results = autocomplete.search("te")
+assert results[0].word == "Test"
+
+# 中文文本更新
+autocomplete.insert("中国", weight=100)
+assert autocomplete.update_word("中国", "中华人民共和国") is True
+assert autocomplete.get_weight("中华人民共和国") == 100
+results = autocomplete.search("中华")
+assert results[0].word == "中华人民共和国"
+
+# 修正拼写错误
+autocomplete.insert("Helo", weight=25)
+assert autocomplete.update_word("Helo", "Hello") is True
+assert autocomplete.contains("Hello") is True
+assert autocomplete.get_weight("Hello") == 25
+```
+
 ### 拼写容错示例
 
 ```python

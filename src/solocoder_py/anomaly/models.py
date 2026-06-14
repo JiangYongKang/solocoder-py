@@ -12,7 +12,7 @@ class AnomalyPoint:
     value: float
     timestamp: float
     is_anomaly: bool
-    deviation: Optional[float] = None
+    deviation: float = 0.0
 
 
 @dataclass(frozen=True)

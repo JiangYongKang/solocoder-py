@@ -1,0 +1,3 @@
+你清理时序存储死代码时引入了新问题，需要修复：
+1. store.py 的 AggregateTimeSeries 类中新增的 remove_window 方法从未被任何调用方使用，仓库中所有覆盖写入场景统一走的是 rebuild_window 的空值分支。第2轮在移除 _windows 和 _rebuild_index 等旧死代码的同时又引入了新的死代码，与清理无效代码的目标矛盾。需要移除这个未使用的 remove_window 方法，将 _handle_rollup_overwrite 中 rebuild_window 的空值清空逻辑保留在 rebuild_window 内部即可，不需要额外的独立方法。
+2. 修复后重新运行 poetry run pytest tests/timeseries/ -q，确保所有测试通过。

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 from solocoder_py.ngram import (
@@ -570,3 +572,77 @@ class TestUpdateDocument:
         resp_aaa = idx.search("aaa")
         assert resp_aaa.total_count == 1
         assert resp_aaa.results[0].hit_positions == [0, 4]
+
+
+class TestPerformanceOptimizations:
+    def test_remove_does_not_reextract_grams(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello world")
+
+        with patch.object(
+            idx, "_extract_grams", wraps=idx._extract_grams
+        ) as spy:
+            idx.remove_document("doc1")
+            assert spy.call_count == 0
+
+    def test_remove_after_multiple_adds_no_reextract(self):
+        idx = NGramIndex(n=3)
+        idx.add_document("doc1", "the quick brown")
+        idx.add_document("doc2", "fox jumps over")
+        idx.add_document("doc3", "the lazy dog")
+
+        with patch.object(
+            idx, "_extract_grams", wraps=idx._extract_grams
+        ) as spy:
+            idx.remove_document("doc2")
+            assert spy.call_count == 0
+            idx.remove_document("doc1")
+            assert spy.call_count == 0
+
+    def test_update_extracts_grams_once_for_new_content(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello world")
+
+        with patch.object(
+            idx, "_extract_grams", wraps=idx._extract_grams
+        ) as spy:
+            idx.update_document("doc1", "hello python")
+            assert spy.call_count == 1
+
+    def test_add_extracts_grams_once(self):
+        idx = NGramIndex(n=2)
+
+        with patch.object(
+            idx, "_extract_grams", wraps=idx._extract_grams
+        ) as spy:
+            idx.add_document("doc1", "hello world")
+            assert spy.call_count == 1
+
+    def test_search_short_query_does_not_extract_grams_on_docs(self):
+        idx = NGramIndex(n=3)
+        idx.add_document("doc1", "hello world")
+        idx.add_document("doc2", "hello python")
+
+        with patch.object(
+            idx, "_extract_grams", wraps=idx._extract_grams
+        ) as spy:
+            call_count_before = spy.call_count
+            idx.search("h")
+            assert spy.call_count == call_count_before + 1
+
+    def test_remove_doc_grams_cache_cleared(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello world")
+        assert "doc1" in idx._doc_grams
+        idx.remove_document("doc1")
+        assert "doc1" not in idx._doc_grams
+
+    def test_update_doc_grams_cache_updated(self):
+        idx = NGramIndex(n=2)
+        idx.add_document("doc1", "hello world")
+        old_cache = dict(idx._doc_grams["doc1"])
+        idx.update_document("doc1", "hello python")
+        new_cache = idx._doc_grams["doc1"]
+        assert old_cache != new_cache
+        assert "wo" not in new_cache
+        assert "py" in new_cache

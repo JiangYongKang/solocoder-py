@@ -1,0 +1,5 @@
+你对自动补全索引的修复仍有遗漏，需要继续修复：
+1. trie.py 的 update_word 方法在处理大小写不敏感模式下新旧词归一化为同一键但原始大小写不同的场景时（如 update_word("apple", "Apple")），只更新了 _word_originals 字典并调用 _update_word_in_trie，但 add_candidate 按 original_word 匹配旧候选项，大小写变更后新旧 original_word 不相等，导致 Trie 节点中旧候选项未被移除，搜索结果出现重复条目。需要修复该场景下的候选项清理逻辑。
+2. update_word 方法在目标词归一化后对应的键已存在于 _word_weights 中时，会静默覆盖已存在的词条数据。例如已存在 "banana" 热度为 5，调用 update_word("apple", "banana") 后原 "banana" 的热度 5 被直接丢弃。当新旧键相同时这种行为是合理的文本更新，但当新旧键不同时应在目标键已存在时抛出异常或给出明确处理策略，而非静默覆盖导致数据丢失。
+3. 修复后需要为上述两个场景补充单元测试：验证大小写变更不产生重复候选项、验证跨键更新在目标已存在时的正确行为。测试代码放在 tests/autocomplete/ 下。
+4. 重新运行 poetry run pytest tests/autocomplete/ -q，确保所有测试通过。

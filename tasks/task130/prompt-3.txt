@@ -1,0 +1,5 @@
+你对异常检测器的修复仍有遗漏，需要继续修复：
+1. models.py 中 AnomalyPoint 的 deviation 字段类型注解仍为 Optional[float] = None，但 detector.py 的 add_point 方法在空窗口场景下已将 deviation 固定设为 0.0，不会产生 None 值。类型注解与实际行为不一致，需要将 deviation 的类型改为 float，去掉 Optional 包裹和 None 默认值。
+2. README.md 中 AnomalyPoint 表格的 deviation 字段描述仍写"窗口为空时为 None"，与代码中 0.0 的实际取值直接矛盾。需要修正该描述，说明空窗口场景下 deviation 为 0.0 的具体含义。
+3. 第2轮提示词要求说明修复后的 deviation 计算规则和告警异常列表语义，但 README.md 中这些内容并未实际写入。需要在 README 中补充 deviation 的计算规则说明（窗口不为空时 deviation 等于数据点与移动平均值的绝对差、窗口为空时为 0.0），以及告警异常列表的语义说明（列表长度以触发告警时的连续异常计数为准而非 flags 队列总长度）。
+4. 修复后重新运行 poetry run pytest tests/anomaly/ -q，确保所有测试通过。

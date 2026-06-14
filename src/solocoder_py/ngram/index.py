@@ -91,8 +91,6 @@ class NGramIndex:
 
         for gram in grams_to_update:
             if old_grams[gram] != new_grams[gram]:
-                if gram not in self._index:
-                    self._index[gram] = {}
                 self._index[gram][doc_id] = new_grams[gram]
 
         self._documents[doc_id] = new_content

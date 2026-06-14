@@ -15,3 +15,7 @@ class InvalidWeightError(AutocompleteError):
 
 class InvalidPrefixError(AutocompleteError):
     pass
+
+
+class WordConflictError(AutocompleteError):
+    pass

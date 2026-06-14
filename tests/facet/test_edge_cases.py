@@ -12,7 +12,6 @@ from .conftest import (
     build_engine_with_products,
     get_facet_by_name,
     get_facet_value_count,
-    is_facet_value_selected,
 )
 
 

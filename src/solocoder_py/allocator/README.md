@@ -12,6 +12,8 @@
 
 4. **分配失败处理**：当空闲内存总量足够但没有足够大的连续空闲块时（即碎片化导致分配失败），分配器返回 `None` 作为分配失败标记，而不是崩溃。调用方可在碎片整理后重试分配。
 
+5. **写入范围追踪**：分配器为每个已分配块维护 `written` 计数器，记录从块起始位置开始显式写入的最远字节位置。`read()` 不传 `size` 时仅返回 `[0, written)` 范围内的数据，避免调用方把未初始化的空白内存误判为显式写入的零值；显式传入 `size` 时仍可读取块内任意范围。
+
 ## 核心类职责
 
 ### `MemoryPoolAllocator`（[allocator.py](allocator.py)）
@@ -24,9 +26,9 @@
 | `allocate(size)` | 分配指定大小的内存块，成功返回整数句柄，失败返回 `None` |
 | `deallocate(handle)` | 释放指定句柄对应的内存块，成功返回 `True`，失败返回 `False` |
 | `compact()` | 执行碎片整理，将已分配块向内存池起始端移动，聚合空闲空间 |
-| `read(handle, size=None)` | 读取指定句柄对应内存块的内容，`size` 可选，默认读取整个块 |
-| `write(handle, data)` | 向指定句柄对应内存块写入数据，超出块大小的部分会被截断 |
-| `block_info(handle)` | 获取指定句柄对应块的元信息（起始地址、大小、是否已分配） |
+| `read(handle, size=None)` | 读取指定句柄对应内存块的内容；不传 `size` 时默认只返回已写入范围（`[0, written)`）的数据，显式传 `size` 可读取超出范围的原始内存 |
+| `write(handle, data)` | 向指定句柄对应内存块写入数据，超出块大小的部分会被截断；同步更新该块的 `written` 计数器（只增不减，保留最远写入点） |
+| `block_info(handle)` | 获取指定句柄对应块的元信息（起始地址、大小、是否已分配、已写入字节数 written） |
 | `allocated_count()` | 获取当前已分配块的数量 |
 | `free_list_info()` | 获取自由链表中所有空闲块的元信息列表 |
 | `all_blocks_info()` | 获取内存池中所有块（含已分配和空闲）的元信息列表 |
@@ -45,8 +47,8 @@
 
 分配策略枚举：
 
-- `FIRST_FIT`：首次适应，从自由链表头部开始查找第一个满足大小的空闲块
-- `BEST_FIT`：最佳适应，遍历整个自由链表，选择满足大小要求且最小的空闲块
+- `FIRST_FIT`：首次适应，从自由链表头部开始查找第一个满足大小的空闲块（地址最小优先）
+- `BEST_FIT`：最佳适应，遍历整个自由链表，选择满足大小要求且最小的空闲块；当多个块大小相同时，次级策略选择**地址最大**的块（使两种策略在等大空闲块场景下产生可观测差异）
 
 ### `Block`（[models.py](models.py)）
 
@@ -59,6 +61,7 @@
 - `start`：块在内存池中的起始偏移
 - `size`：块的大小（字节）
 - `allocated`：是否已分配
+- `written`：从块起始位置开始已显式写入的最远字节数（仅对已分配块有效；新分配块初始为 0，写入只增不减）
 
 ### `FreeList` / `FreeListNode`（[free_list.py](free_list.py)）
 
@@ -137,6 +140,31 @@
 3. 从内存块列表中删除右块
 4. 为合并后的新块创建自由链表节点并重新插入
 
+### 最佳适应（BEST_FIT）的等大块次级选择策略
+
+当多个空闲块均满足分配请求的尺寸时，`BEST_FIT` 策略采用两级决策：
+
+1. **主规则（优先）**：选择满足 `block.size >= size` 的所有块中尺寸**最小**的（最紧凑匹配，减少内部碎片）
+2. **次级规则（平局决胜）**：当存在多个尺寸相同的最小满足块时，在其中选择**起始地址最大**的块
+
+与之对比，`FIRST_FIT` 始终选择链表中地址最小的第一个满足要求的块。因此在存在多个等大空闲块的场景下，两种策略会返回不同地址的块，产生可观测的行为差异。
+
+### 写入范围追踪机制
+
+为避免调用方混淆"显式写入了零字节"与"从未写入的空白内存"，分配器为每个 `Block` 维护 `written` 计数器：
+
+| 操作 | `written` 的行为 |
+|------|-----------------|
+| 新分配（`allocate` 成功） | `written = 0`，表示块内无任何显式写入 |
+| `write(handle, data)` 成功 | 若实际写入长度 > 当前 `written`，则将 `written` 推进到写入末端；**写入更短的数据不会缩小 `written`**（保留最远写入点语义） |
+| `write` 被截断（`data` 比块大） | `written = block.size`（整个块都被视为已写入） |
+| `read(handle)` 不传 `size` | 只返回 `[0, written)` 范围内的数据；`written=0` 时返回空字节串 |
+| `read(handle, size=N)` 传 `size` | 忽略 `written`，按 `min(N, block.size)` 读取原始内存，可用于显式检查未初始化区域 |
+| `compact()` 碎片整理 | `written` 值与块数据一起移动，整理后保持不变 |
+| `deallocate` 释放 | 块进入空闲态，`written` 无意义（`free_list_info` 中仍携带字段但恒为 0） |
+
+通过 `block_info(handle)`、`all_blocks_info()`、`free_list_info()` 返回的 `BlockInfo` 均包含 `written` 字段，可直接用于判断块内哪些位置经过了显式写入。
+
 ## 碎片整理策略
 
 碎片整理采用**向起始端压缩**的策略，将所有已分配块按原有相对顺序紧凑排列到内存池的起始位置（从偏移 0 开始），所有空闲空间聚合到末尾形成一个大的连续空闲块。
@@ -186,46 +214,65 @@ allocator.deallocate(h1)
 print(f"释放后空闲: {allocator.total_free} 字节")       # 824
 ```
 
-### 使用最佳适应策略
+### 首次适应 vs 最佳适应的行为差异
 
 ```python
-allocator = MemoryPoolAllocator(
-    pool_size=1000,
-    strategy=AllocationStrategy.BEST_FIT,
-)
+from solocoder_py.allocator import MemoryPoolAllocator, AllocationStrategy
 
-# 分配并释放若干块制造碎片
-h1 = allocator.allocate(100)
-h2 = allocator.allocate(200)
-h3 = allocator.allocate(100)
-allocator.deallocate(h1)
-allocator.deallocate(h3)
+# 构造两个相同布局的内存池：[F(40)][A(40)][F(40)][A(40)][F(40)][A(100)]
+pool_ff = MemoryPoolAllocator(pool_size=300, strategy=AllocationStrategy.FIRST_FIT)
+pool_bf = MemoryPoolAllocator(pool_size=300, strategy=AllocationStrategy.BEST_FIT)
 
-# 此时自由链表中有大小为 100 和 100 的两个空闲块
-# 最佳适应会选择刚好满足需求的块
-h4 = allocator.allocate(80)
-info = allocator.block_info(h4)
-print(f"分配块起始位置: {info.start}, 大小: {info.size}")
+for p in (pool_ff, pool_bf):
+    h0 = p.allocate(40)
+    h1 = p.allocate(40)
+    h2 = p.allocate(40)
+    h3 = p.allocate(40)
+    h4 = p.allocate(40)
+    _tail = p.allocate(100)
+    p.deallocate(h0)   # 释放 start=0, size=40
+    p.deallocate(h2)   # 释放 start=80, size=40
+    p.deallocate(h4)   # 释放 start=160, size=40
+
+# 分配 30 字节：三个等大空闲块 (40) 都满足
+h_ff = pool_ff.allocate(30)
+h_bf = pool_bf.allocate(30)
+
+# FIRST_FIT 选择地址最小的
+assert pool_ff.block_info(h_ff).start == 0
+# BEST_FIT 在等大块中选择地址最大的
+assert pool_bf.block_info(h_bf).start == 160
 ```
 
-### 读写内存块内容
+### 读写内存块内容与写入范围追踪
 
 ```python
 allocator = MemoryPoolAllocator(pool_size=1024)
 
 h = allocator.allocate(32)
 
+# 新分配的块 written=0，读取返回空字节
+assert allocator.read(h) == b""
+assert allocator.block_info(h).written == 0
+
 # 写入数据
 data = b"Hello, Memory Allocator!"
 allocator.write(h, data)
 
-# 读取数据（指定长度）
-read_data = allocator.read(h, size=len(data))
+# 不指定 size 时，仅返回已写入范围
+read_data = allocator.read(h)
 assert read_data == data
+assert len(read_data) == len(data) == 24
 
-# 读取整个块（32 字节，含未写入部分）
-full_data = allocator.read(h)
+# 显式指定 size 时，可读取超出已写入的原始内存（含未初始化区域）
+full_data = allocator.read(h, size=32)
 assert len(full_data) == 32
+assert full_data[:24] == data
+
+# 再次写入更短的数据不会缩小 written（保留最远写入点）
+allocator.write(h, b"hi")
+assert allocator.block_info(h).written == 24
+assert allocator.read(h) == b"hillo, Memory Allocator!"
 ```
 
 ### 相邻块合并

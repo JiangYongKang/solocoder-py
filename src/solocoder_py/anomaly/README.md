@@ -39,7 +39,7 @@
 | `value` | `float` | 数据点数值 |
 | `timestamp` | `float` | 数据点时间戳 |
 | `is_anomaly` | `bool` | 是否为异常点 |
-| `deviation` | `Optional[float]` | 与当前均值的偏差绝对值（窗口为空时为 None） |
+| `deviation` | `float` | 与当前均值的偏差绝对值；窗口为空时为 0.0（首个点作为基线起点，相对于自身无偏离） |
 
 ### `AlertEvent`（[models.py](models.py)）
 
@@ -365,6 +365,65 @@ assert point.is_anomaly is True
 # 完全相同才正常
 point, _ = detector.add_point(10.0)
 assert point.is_anomaly is False
+```
+
+### 窗口有 2 个数据点时的异常判定
+
+窗口有 2 个不同值的数据点时，样本标准差可以正常计算，异常判定逻辑完全可用：
+
+```python
+from solocoder_py.anomaly import AnomalyConfig, AnomalyDetector
+from solocoder_py.seat.clock import ManualClock
+
+clock = ManualClock()
+config = AnomalyConfig(
+    window_size=10,
+    k_sigma=2.0,
+    consecutive_threshold=1,
+)
+detector = AnomalyDetector(config=config, clock=clock)
+
+# 填充 2 个不同值的数据点建立基线
+detector.add_point(10.0)
+detector.add_point(20.0)
+
+assert detector.get_window_size() == 2
+assert detector.get_mean() == 15.0
+assert detector.get_std() > 0  # 样本标准差可正常计算
+
+# 第三个严重偏离的点会被正确标记为异常
+point, alert = detector.add_point(1000.0)
+assert point.is_anomaly is True
+assert alert is not None
+
+# 异常点未污染基线
+assert detector.get_window_size() == 2
+assert detector.get_mean() == 15.0
+```
+
+### 空窗口 Deviation 计算规则
+
+首个数据点的 deviation 为 0.0，不会丢失偏离信息：
+
+```python
+from solocoder_py.anomaly import AnomalyConfig, AnomalyDetector
+
+config = AnomalyConfig(window_size=10)
+detector = AnomalyDetector(config=config)
+
+# 首个数据点，deviation 为 0.0
+point1, _ = detector.add_point(42.0)
+assert point1.deviation == 0.0
+assert point1.is_anomaly is False
+
+# 第二个点的 deviation 相对于首个点计算
+point2, _ = detector.add_point(52.0)
+assert point2.deviation == 10.0  # |52.0 - 42.0| = 10.0
+
+# 重置后，新的首个点 deviation 仍为 0.0
+detector.reset()
+point3, _ = detector.add_point(100.0)
+assert point3.deviation == 0.0
 ```
 
 ## 运行测试

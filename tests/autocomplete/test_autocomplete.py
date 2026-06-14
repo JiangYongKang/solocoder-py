@@ -8,6 +8,7 @@ from solocoder_py.autocomplete import (
     InvalidPrefixError,
     InvalidWeightError,
     TrieAutocomplete,
+    WordConflictError,
 )
 from solocoder_py.autocomplete.models import TrieNode
 
@@ -1021,3 +1022,145 @@ class TestUpdateWord:
         results_after = empty_trie.search("")
         assert results_after[0].word == "z"
         assert results_after[0].weight == 20
+
+    def test_update_word_case_change_no_duplicates(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        results_before = empty_trie.search("app")
+        assert len(results_before) == 1
+        assert results_before[0].word == "apple"
+
+        assert empty_trie.update_word("apple", "Apple") is True
+        results_after = empty_trie.search("app")
+        assert len(results_after) == 1
+        assert results_after[0].word == "Apple"
+        assert results_after[0].weight == 10
+
+        all_words = empty_trie.get_all_words()
+        assert all_words == ["Apple"]
+        assert empty_trie.size == 1
+
+    def test_update_word_case_change_all_prefix_nodes_cleaned(self, empty_trie):
+        empty_trie.insert("test", weight=15)
+        empty_trie.update_word("test", "Test")
+
+        for prefix in ["t", "te", "tes", "test"]:
+            results = empty_trie.search(prefix)
+            assert len(results) == 1, f"Prefix '{prefix}' has {len(results)} results, expected 1"
+            assert results[0].word == "Test"
+            words = [r.word for r in results]
+            assert "test" not in words, f"Prefix '{prefix}' still contains old word 'test'"
+
+    def test_update_word_case_change_original_words_set_updated(self, empty_trie):
+        empty_trie.insert("hello", weight=10)
+        empty_trie.update_word("hello", "Hello")
+
+        assert empty_trie.get_original_word("hello") == "Hello"
+        assert empty_trie.contains("hello") is True
+        assert empty_trie.contains("Hello") is True
+        assert empty_trie.get_weight("hello") == 10
+
+    def test_update_word_case_change_fuzzy_search_uses_new_word(self, empty_trie):
+        empty_trie.insert("world", weight=10)
+        empty_trie.update_word("world", "World")
+        results = empty_trie.search("Worle", fuzzy=True, fuzzy_threshold=1)
+        assert len(results) == 1
+        assert results[0].word == "World"
+        assert results[0].is_fuzzy is True
+
+    def test_update_word_case_sensitive_case_change_is_full_update(self):
+        trie = TrieAutocomplete(case_sensitive=True)
+        trie.insert("apple", weight=10)
+        trie.insert("Apple", weight=5)
+
+        assert trie.update_word("apple", "APPLE") is True
+        assert trie.size == 2
+        assert trie.contains("apple") is False
+        assert trie.contains("APPLE") is True
+        assert trie.get_weight("APPLE") == 10
+        assert trie.contains("Apple") is True
+        assert trie.get_weight("Apple") == 5
+
+        results = trie.search("APP")
+        assert len(results) == 1
+        assert results[0].word == "APPLE"
+
+    def test_update_word_multiple_case_changes(self, empty_trie):
+        empty_trie.insert("test", weight=10)
+        empty_trie.update_word("test", "Test")
+        empty_trie.update_word("Test", "TEST")
+        empty_trie.update_word("TEST", "tEsT")
+
+        assert empty_trie.size == 1
+        assert empty_trie.get_original_word("test") == "tEsT"
+        results = empty_trie.search("te")
+        assert len(results) == 1
+        assert results[0].word == "tEsT"
+
+    def test_update_word_cross_key_target_exists_raises(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        empty_trie.insert("banana", weight=5)
+
+        with pytest.raises(WordConflictError, match="cannot rename 'apple' to 'banana': 'banana' already exists"):
+            empty_trie.update_word("apple", "banana")
+
+        assert empty_trie.size == 2
+        assert empty_trie.get_weight("apple") == 10
+        assert empty_trie.get_weight("banana") == 5
+
+    def test_update_word_cross_key_target_exists_case_insensitive(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        empty_trie.insert("Banana", weight=5)
+
+        with pytest.raises(WordConflictError, match="cannot rename 'apple' to 'banana': 'Banana' already exists"):
+            empty_trie.update_word("apple", "banana")
+
+        assert empty_trie.size == 2
+        assert empty_trie.get_original_word("banana") == "Banana"
+        assert empty_trie.get_weight("Banana") == 5
+
+    def test_update_word_cross_key_target_exists_case_sensitive(self):
+        trie = TrieAutocomplete(case_sensitive=True)
+        trie.insert("apple", weight=10)
+        trie.insert("Apple", weight=5)
+
+        with pytest.raises(WordConflictError, match="cannot rename 'apple' to 'Apple': 'Apple' already exists"):
+            trie.update_word("apple", "Apple")
+
+        assert trie.size == 2
+        assert trie.get_weight("apple") == 10
+        assert trie.get_weight("Apple") == 5
+
+    def test_update_word_same_key_target_exists_is_allowed(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        assert empty_trie.update_word("apple", "Apple") is True
+        assert empty_trie.size == 1
+        assert empty_trie.get_weight("Apple") == 10
+
+    def test_update_word_cross_key_target_not_exists_allowed(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        assert empty_trie.update_word("apple", "banana") is True
+        assert empty_trie.size == 1
+        assert empty_trie.contains("banana") is True
+        assert empty_trie.get_weight("banana") == 10
+
+    def test_update_word_cross_key_conflict_preserves_both_words(self, empty_trie):
+        empty_trie.insert("apple", weight=10)
+        empty_trie.insert("banana", weight=20)
+
+        try:
+            empty_trie.update_word("apple", "banana")
+        except WordConflictError:
+            pass
+
+        results = empty_trie.search("")
+        assert len(results) == 2
+        words = sorted([r.word for r in results])
+        assert words == ["apple", "banana"]
+        weights = {r.word: r.weight for r in results}
+        assert weights["apple"] == 10
+        assert weights["banana"] == 20
+
+    def test_update_word_word_conflict_error_is_autocomplete_error(self):
+        from solocoder_py.autocomplete import AutocompleteError
+
+        assert issubclass(WordConflictError, AutocompleteError)
