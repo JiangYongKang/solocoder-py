@@ -1,5 +1,5 @@
 产物不满意：
-1. update_document 方法的 grams_to_update 循环中（index.py 第 94 行）添加了 `if gram not in self._index` 判断并在条件成立时创建空字典。但实际上任何同时存在于新旧 gram 集合中的 gram 必然已经在 `_index` 中存在，由 add_document 写入，且 grams_to_update 集合与 grams_to_remove 集合互斥，该 gram 不可能在之前的 remove 步骤中被清理，这个判断永远不会为 True。虽然不影响功能正确性，但它属于永远不会执行的冗余分支代码，反映了模型对内部状态不变量推理不充分，未仔细分析 gram 在 _index、_doc_grams、_documents 三个数据结构之间的存在性约束关系。
+1. update_document 方法的 grams_to_update 循环中添加了 `if gram not in self._index` 判断来创建空字典。但任何同时存在于新旧 gram 集合中的 gram 必然已在 `_index` 中由 add_document 写入，且 grams_to_update 与 grams_to_remove 互斥，该 gram 不可能被删除，这个判断永远不会为 True。虽然不影响功能正确，但属于永不执行的冗余分支代码，反映了模型对 _index、_doc_grams、_documents 三者间的存在性约束关系推理不充分。
 2. 提示词第 1 条要求 remove_document 避免重复调用 _extract_grams 提取 gram，但模型未针对此优化行为本身补充验证测试。现有的 69 个测试验证的是删除和更新后的搜索正确性，属于功能性测试，无法直接证明 _extract_grams 在 remove_document 路径上确实没有被再次调用。如果后续维护中不小心在 remove_document 中加回了 _extract_grams 调用，现有测试套件完全无法发现这种性能退化。应使用 mock 技术验证 _extract_grams 在删除路径上未被调用，确保优化承诺可被自动化测试保护。
 
 过程不满意：

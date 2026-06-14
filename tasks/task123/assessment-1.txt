@@ -1,5 +1,5 @@
 产物不满意：
-1. 经逐条对照提示词需求审查，ngram 包下 index.py 中 NGramIndex 类实现完整正确：_extract_grams 按可配置 N 值切分 gram 并记录位置，add_document 和 remove_document 增量维护倒排索引结构，_find_candidate_docs 通过 gram 文档集求交实现亚线性候选筛选，_merge_gram_positions 合并位置序列回溯命中偏移后再由 _verify_and_locate 做精确子串验证，_extract_highlighted_fragment 安全处理越界上下文并包裹高亮标记。54 个单测全部通过，覆盖 bigram 搜索、N 等于大于文本长度、unigram、空文本、不存在子串、单字符查询、删除后不可搜索、跨文档不误匹配、位置不污染、高亮越界安全等全部边界条件和异常分支。未发现逻辑错误或需求遗漏。
+1. 经逐条对照提示词需求审查，ngram 包下 NGramIndex 类实现完整正确：_extract_grams 按 N 值切分 gram 记录位置，add/remove 增量维护倒排索引，_find_candidate_docs 通过求交实现亚线性筛选，_merge_gram_positions 合并位置回溯后由 _verify_and_locate 做精确子串验证，高亮片段安全处理越界上下文。54 个单测全部通过，覆盖 bigram、空文本、删除后不可搜索、跨文档不误匹配、高亮越界等边界条件。未发现逻辑错误或需求遗漏。
 
 过程不满意：
 1. 模型在收到实现 N-Gram 索引的提示词后，第一步就用 view_files 读取了 ngram 包下已存在的 index.py、models.py、exceptions.py 和测试文件，发现代码和测试均已存在，随后仅运行 pytest 看到 54 个测试通过便断言"代码实现已经完整"。模型从头到尾没有将提示词需求逐条与代码做对照分析，没有审查位置合并逻辑是否正确、候选筛选是否真的亚线性、高亮越界处理是否安全，完全以测试通过作为正确性的唯一依据。属于目标理解偏差，把"测试通过"等同于"需求实现正确"，忽略了测试覆盖可能不全面或测试本身存在缺陷的可能。

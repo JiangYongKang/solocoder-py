@@ -1,5 +1,5 @@
 产物不满意：
-1. 本轮会话的产物实现完整正确，提示词三条要求均被满足。index.py 的 update_document 方法中 grams_to_update 循环内的冗余 `if gram not in self._index` 分支已被准确移除，逻辑上 grams_to_update 是 old_grams 与 new_grams 的交集，这些 gram 在 add_document 时已写入 _index 且不在 grams_to_remove 差集中被清理，因此必然存在，移除后不影响正确性。TestPerformanceOptimizations 类使用 unittest.mock.patch.object 配合 wraps 参数实现了 spy 模式，test_remove_does_not_reextract_grams 在 spy 激活后执行 remove_document 并断言 spy.call_count 等于 0，test_remove_after_multiple_adds_no_reextract 覆盖了多次删除场景，两个用例均有效验证了 remove_document 路径不会再次调用 _extract_grams，能防止后续维护中优化意外退化。poetry run pytest tests/ngram/ -q 全部 76 个测试通过，未发现产物质量缺陷。
+1. 本轮实现完整正确，三条要求均被满足。update_document 中冗余 `if gram not in self._index` 分支已被移除，gram 在 add 时写入且不在 remove 差集中、必然存在。TestPerformanceOptimizations 使用 mock.patch.object 配合 wraps 实现 spy 模式，验证了 remove_document 不会再次调用 _extract_grams，能防止优化退化。`poetry run pytest tests/ngram/ -q` 全部 76 测试通过，未发现产物缺陷。
 
 过程不满意：
-1. 模型在收到提示词后未做任何代码分析就直接执行了 todo_write 创建 3 项任务列表，思考过程中明确写道"先创建任务列表，然后逐一处理"，随后才开始查看 index.py。这违反了标注规范中"不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划"的要求。虽然本轮任务规模较小且提示词已明确指出两个修复点，但模型先规划后分析的习惯意味着 TodoList 中的子任务划分完全基于对提示词的直接翻译而非对代码实际状态的理解。在本轮中这个行为未导致严重规划偏差，因为提示词指令足够具体且修改范围极小，但在更复杂的任务场景下这种模式会导致 TodoList 粒度与实际模块边界不匹配、遗漏关键前置分析步骤。正确做法是先查看 index.py 和 test_ngram.py 的当前代码状态，确认冗余分支的具体位置和现有测试结构，再根据分析结果制定执行计划并创建 TodoList。
+1. 模型在收到提示词后未做任何代码分析就直接执行了 todo_write 创建 3 项任务列表，随后才开始查看 index.py。这违反了"不能刚收到任务就直接创建 TodoList，应先分析问题再规划"的要求。虽然本轮任务规模小且提示词已明确指出两个修复点，但先规划后分析的习惯意味着 TodoList 划分基于对提示词的直接翻译而非对代码实际状态的理解。正确做法是先查看 index.py 和 test_ngram.py 的当前代码状态，确认冗余分支位置和现有测试结构后再制定执行计划。

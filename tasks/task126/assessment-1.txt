@@ -1,5 +1,5 @@
 产物不满意：
-1. trie.py 的 insert 方法在大小写不敏感模式下使用原始单词做 _word_weights 字典的键而非归一化后的键，导致 "Apple" 和 "apple" 被当作两个不同的词条分别插入。实际验证时 size 为 2 而非期望的 1，get_weight("apple") 返回 5 而 get_weight("Apple") 返回 10，两者未能合并累加为 15。同样的缺陷扩散到 contains、get_weight、update_weight 和 delete 方法，delete("hello") 在插入 "Hello" 后返回 False 无法删除词条，update_weight("test") 在插入 "Test" 后不会更新已有词条而是新建条目。根本原因是大小写不敏感模式只对 Trie 路径做了归一化但字典键仍保留原始大小写，应在 _word_weights 所有读写操作前统一调用 _normalize 处理键名。
+1. trie.py 的 insert 在大小写不敏感模式下用原始单词做 _word_weights 键而非归一化键，导致 "Apple" 和 "apple" 被当两个词条插入。实测 size=2 而非 1，两者权重未能合并。同样缺陷扩散到 contains、update_weight、delete 方法。根因是只对 Trie 路径做了归一化但字典键保留原始大小写，应在 _word_weights 所有读写前统一调用 _normalize 处理键名。
 2. 提示词要求"更新候选项的热度或文本"，但整个 autocomplete 包只实现了 update_weight 方法来更新热度，没有任何方法支持修改候选项的文本内容。如果要改文本，只能先 delete 再 insert，但这样会丢失原有热度值。根本原因是模型在设计 update 接口时只考虑了热度维度而忽略了文本维度，应在 TrieAutocomplete 中增加 update_word 方法接收新旧文本参数，在保留热度的前提下更新 Trie 中的词条文本和 _word_weights 中的键名。
 过程不满意：
 1. 模型在收到提示词后，未经需求分析就直接用 todo_write 创建了 6 项子任务计划，带着计划去读代码而不是先理解需求再规划。这导致后续步骤中模型声称"现有代码的实现实际上符合用户需求"，将在同一会话中刚写完的代码误认为已有的正确实现，跳过对照提示词逐条验证的环节，最终未能发现大小写归一化键不一致和文本更新缺失这两个缺陷。正确做法是先逐条分析提示词的 4 项功能需求和 6 项测试要求，理清功能边界后再制订执行计划。
