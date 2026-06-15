@@ -1,0 +1,4 @@
+你实现的记录去重引擎模块新增了功能代码但缺乏对应的测试验证，需要修复：
+1. engine.py 中新增的 _resolve_group 方法有 KEEP_FIRST、KEEP_LAST、KEEP_MOST_COMPLETE、KEEP_BY_FIELD、KEEP_MERGE 共五个策略分支，但所有现有 149 个测试都只走默认 KEEP_MERGE 路径，四个非合并策略分支从未被任何测试命中。需要为 DedupEngine 在 record_selection_strategy 配置为不同保留策略时的行为添加测试覆盖，验证每条分支都能正确选择对应的保留策略。
+2. DedupEngine.dedup 方法在通过 _resolve_group 调用 merge_group 获取 MergeResult 后仅提取了 .record 字段，丢弃了 fallback_fields 信息。提示词要求调用方可以感知哪些字段走了兜底合并，但通过引擎 dedup() 调用时用户无法获知该信息。兜底字段信息需要传递到 DedupResult 或引擎调用方可访问的位置。
+3. 修复后需要重新运行 poetry run pytest tests/dedup/ -v，需要让所有测试通过。

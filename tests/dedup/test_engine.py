@@ -9,6 +9,12 @@ from solocoder_py.dedup import (
     STRATEGY_LAST,
     STRATEGY_LONGEST_STRING,
     STRATEGY_CUSTOM,
+    KEEP_FIRST,
+    KEEP_LAST,
+    KEEP_MOST_COMPLETE,
+    KEEP_BY_FIELD,
+    KEEP_MERGE,
+    UnknownStrategyError,
 )
 
 
@@ -394,3 +400,319 @@ class TestEngineGroups:
         fuzzy_groups = [g for g in result.groups if len(g.records) > 1]
         assert len(fuzzy_groups) == 1
         assert len(fuzzy_groups[0].fuzzy_pairs) >= 1
+
+
+class TestEngineRecordSelectionStrategy:
+    def test_keep_first_strategy(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            record_selection_strategy=KEEP_FIRST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "Alice", "age": 30},
+            {"id": 1, "name": "Bob", "age": 25},
+            {"id": 1, "name": "Charlie", "age": 35},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 1
+        assert result.unique_records[0]["name"] == "Alice"
+        assert result.unique_records[0]["age"] == 30
+
+    def test_keep_last_strategy(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            record_selection_strategy=KEEP_LAST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "Alice", "age": 30},
+            {"id": 1, "name": "Bob", "age": 25},
+            {"id": 1, "name": "Charlie", "age": 35},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 1
+        assert result.unique_records[0]["name"] == "Charlie"
+        assert result.unique_records[0]["age"] == 35
+
+    def test_keep_most_complete_strategy(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            record_selection_strategy=KEEP_MOST_COMPLETE,
+        )
+        engine.add_records([
+            {"id": 1, "name": "Alice"},
+            {"id": 1, "name": "Bob", "age": 25, "email": "bob@test.com"},
+            {"id": 1, "name": "Charlie", "age": None},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 1
+        assert result.unique_records[0]["name"] == "Bob"
+        assert result.unique_records[0]["age"] == 25
+        assert result.unique_records[0]["email"] == "bob@test.com"
+
+    def test_keep_by_field_desc_strategy(self):
+        engine = DedupEngine(
+            exact_match_keys=["user_id"],
+            record_selection_strategy=KEEP_BY_FIELD,
+            record_selection_field="updated_at",
+            record_selection_desc=True,
+        )
+        engine.add_records([
+            {"user_id": "u1", "updated_at": 100, "data": "old"},
+            {"user_id": "u1", "updated_at": 300, "data": "newest"},
+            {"user_id": "u1", "updated_at": 200, "data": "middle"},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 1
+        assert result.unique_records[0]["updated_at"] == 300
+        assert result.unique_records[0]["data"] == "newest"
+
+    def test_keep_by_field_asc_strategy(self):
+        engine = DedupEngine(
+            exact_match_keys=["user_id"],
+            record_selection_strategy=KEEP_BY_FIELD,
+            record_selection_field="score",
+            record_selection_desc=False,
+        )
+        engine.add_records([
+            {"user_id": "u1", "score": 95, "name": "Charlie"},
+            {"user_id": "u1", "score": 80, "name": "Alice"},
+            {"user_id": "u1", "score": 90, "name": "Bob"},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 1
+        assert result.unique_records[0]["score"] == 80
+        assert result.unique_records[0]["name"] == "Alice"
+
+    def test_keep_merge_strategy_default(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            record_selection_strategy=KEEP_MERGE,
+            merge_strategy=STRATEGY_LAST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "Alice", "age": 30},
+            {"id": 1, "name": "Bob", "age": 25},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 1
+        assert result.unique_records[0]["name"] == "Bob"
+        assert result.unique_records[0]["age"] == 25
+
+    def test_invalid_record_selection_strategy_raises(self):
+        with pytest.raises(UnknownStrategyError):
+            DedupEngine(
+                exact_match_keys=["id"],
+                record_selection_strategy="invalid_strategy",
+            )
+
+    def test_keep_by_field_without_field_raises(self):
+        with pytest.raises(InvalidConfigError):
+            DedupEngine(
+                exact_match_keys=["id"],
+                record_selection_strategy=KEEP_BY_FIELD,
+            )
+
+    def test_keep_strategy_with_multiple_groups(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            record_selection_strategy=KEEP_FIRST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "A1"},
+            {"id": 1, "name": "A2"},
+            {"id": 2, "name": "B1"},
+            {"id": 2, "name": "B2"},
+            {"id": 3, "name": "C1"},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 3
+        names = [r["name"] for r in result.unique_records]
+        assert sorted(names) == sorted(["A1", "B1", "C1"])
+
+    def test_keep_strategy_single_record_groups_unchanged(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            record_selection_strategy=KEEP_LAST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "Only"},
+            {"id": 2, "name": "First"},
+            {"id": 2, "name": "Last"},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 2
+        records_by_id = {r["id"]: r for r in result.unique_records}
+        assert records_by_id[1]["name"] == "Only"
+        assert records_by_id[2]["name"] == "Last"
+
+    def test_keep_most_complete_with_tie_prefers_first(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            record_selection_strategy=KEEP_MOST_COMPLETE,
+        )
+        engine.add_records([
+            {"id": 1, "a": 1, "b": 2},
+            {"id": 1, "x": 10, "y": 20},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 1
+        assert "a" in result.unique_records[0]
+        assert result.unique_records[0]["a"] == 1
+
+
+class TestEngineFallbackFieldsPropagation:
+    def test_fallback_fields_empty_when_no_fallback(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            merge_strategy=STRATEGY_FIRST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "Alice", "age": 30},
+            {"id": 1, "name": "Bob", "age": 25},
+        ])
+        result = engine.dedup()
+        assert result.fallback_fields == {}
+
+    def test_fallback_fields_propagated_from_merge_group(self):
+        def bad_merge(field, values):
+            raise RuntimeError("merge failed")
+
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            merge_strategy=STRATEGY_CUSTOM,
+            custom_merge=bad_merge,
+            fallback_merge_strategy=STRATEGY_LAST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "Alice", "age": 30},
+            {"id": 1, "name": "Bob", "age": 25},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 1
+        assert 0 in result.fallback_fields
+        assert set(result.fallback_fields[0]) == {"name", "age"}
+        assert result.unique_records[0]["name"] == "Bob"
+        assert result.unique_records[0]["age"] == 25
+
+    def test_fallback_fields_multiple_groups(self):
+        def bad_merge(field, values):
+            if field == "name":
+                raise RuntimeError("name merge failed")
+            return values[0]
+
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            merge_strategy=STRATEGY_CUSTOM,
+            custom_merge=bad_merge,
+            fallback_merge_strategy=STRATEGY_LAST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "A1", "age": 30},
+            {"id": 1, "name": "A2", "age": 25},
+            {"id": 2, "name": "B1", "age": 40},
+            {"id": 2, "name": "B2", "age": 45},
+        ])
+        result = engine.dedup()
+        assert result.total_unique == 2
+        assert 0 in result.fallback_fields
+        assert result.fallback_fields[0] == ["name"]
+        assert 1 in result.fallback_fields
+        assert result.fallback_fields[1] == ["name"]
+        assert result.unique_records[0]["name"] == "A2"
+        assert result.unique_records[1]["name"] == "B2"
+
+    def test_fallback_fields_empty_for_single_record_groups(self):
+        def bad_merge(field, values):
+            raise RuntimeError("failed")
+
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            merge_strategy=STRATEGY_CUSTOM,
+            custom_merge=bad_merge,
+            fallback_merge_strategy=STRATEGY_LAST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "Only"},
+            {"id": 2, "name": "First"},
+            {"id": 2, "name": "Last"},
+        ])
+        result = engine.dedup()
+        assert 0 not in result.fallback_fields
+        assert 1 in result.fallback_fields
+        assert result.fallback_fields[1] == ["name"]
+        assert result.unique_records[1]["name"] == "Last"
+
+    def test_keep_strategies_have_empty_fallback_fields(self):
+        for strategy in [KEEP_FIRST, KEEP_LAST, KEEP_MOST_COMPLETE]:
+            engine = DedupEngine(
+                exact_match_keys=["id"],
+                record_selection_strategy=strategy,
+            )
+            engine.add_records([
+                {"id": 1, "name": "A", "age": 30},
+                {"id": 1, "name": "B", "age": 25},
+            ])
+            result = engine.dedup()
+            assert result.fallback_fields == {}
+
+    def test_keep_by_field_has_empty_fallback_fields(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            record_selection_strategy=KEEP_BY_FIELD,
+            record_selection_field="age",
+            record_selection_desc=True,
+        )
+        engine.add_records([
+            {"id": 1, "name": "A", "age": 30},
+            {"id": 1, "name": "B", "age": 25},
+        ])
+        result = engine.dedup()
+        assert result.fallback_fields == {}
+
+    def test_fallback_fields_not_present_when_no_conflicts(self):
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            merge_strategy=STRATEGY_CUSTOM,
+            custom_merge=lambda f, v: "should not be called",
+        )
+        engine.add_records([
+            {"id": 1, "name": "Alice"},
+            {"id": 1, "name": "Alice"},
+        ])
+        result = engine.dedup()
+        assert result.fallback_fields == {}
+
+    def test_fallback_fields_with_field_specific_custom_strategy(self):
+        def bad_merge(field, values):
+            raise RuntimeError("failed")
+
+        engine = DedupEngine(
+            exact_match_keys=["id"],
+            merge_strategy=STRATEGY_FIRST,
+            custom_merge=bad_merge,
+            field_merge_strategies={
+                "name": STRATEGY_CUSTOM,
+            },
+            fallback_merge_strategy=STRATEGY_LAST,
+        )
+        engine.add_records([
+            {"id": 1, "name": "First", "age": 30},
+            {"id": 1, "name": "Last", "age": 25},
+        ])
+        result = engine.dedup()
+        assert 0 in result.fallback_fields
+        assert result.fallback_fields[0] == ["name"]
+        assert result.unique_records[0]["name"] == "Last"
+        assert result.unique_records[0]["age"] == 30
+
+    def test_dedupresult_fallback_fields_default_empty(self):
+        from solocoder_py.dedup import DedupResult
+
+        result = DedupResult(
+            unique_records=[],
+            groups=[],
+            total_input=0,
+            total_unique=0,
+            total_duplicates=0,
+        )
+        assert result.fallback_fields == {}

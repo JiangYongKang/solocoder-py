@@ -1,0 +1,4 @@
+你实现的批窗口处理器模块引入了新的缺陷，需要修复：
+1. _is_event_droppable 方法的窗口存在性检查存在逻辑缺陷：新增的 window_start 参数在检查完窗口不在 _windows 中后，两个分支最终都无条件返回 True，新增的检查形同虚设。当窗口确实存在于 _windows 中时，需要区分窗口已关闭和未关闭两种场景——窗口已关闭时应走 WindowAlreadyClosedError 路径而非直接判定为丢弃。
+2. on_event 方法中判断顺序调整为先路径2（丢弃）后路径3（拒绝）后，当窗口存在于 _windows 中且 is_closed 为 True 时，事件被 _is_event_droppable 拦截并抛出 LateEventDroppedError，永远无法到达 WindowAlreadyClosedError 分支。这导致 _dropped_late_count 和 _rejected_closed_count 两个计数器发生交叉污染——本应计入拒绝的场景被错误计入了丢弃。
+3. 修复后需要重新运行 poetry run pytest tests/batch_window/ -v，需要让所有测试通过。

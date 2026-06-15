@@ -67,6 +67,79 @@ class TestAgeGeneralization:
         assert generalize_age("27", 1) == "25-34"
 
 
+class TestAgeGeneralizationDynamicStep:
+    def test_age_dynamic_step_level_0_exact_value(self):
+        assert generalize_age(27, 0, step_years=5) == "27"
+        assert generalize_age(0, 0, step_years=5) == "0"
+        assert generalize_age(99, 0, step_years=5) == "99"
+
+    def test_age_dynamic_step_5_years_level_1(self):
+        assert generalize_age(27, 1, step_years=5) == "25-30"
+        assert generalize_age(25, 1, step_years=5) == "25-30"
+        assert generalize_age(29, 1, step_years=5) == "25-30"
+        assert generalize_age(30, 1, step_years=5) == "30-35"
+        assert generalize_age(17, 1, step_years=5) == "15-20"
+        assert generalize_age(0, 1, step_years=5) == "0-5"
+        assert generalize_age(99, 1, step_years=5) == "95-100"
+
+    def test_age_dynamic_step_5_years_level_2(self):
+        assert generalize_age(27, 2, step_years=5) == "20-30"
+        assert generalize_age(25, 2, step_years=5) == "20-30"
+        assert generalize_age(34, 2, step_years=5) == "30-40"
+        assert generalize_age(17, 2, step_years=5) == "10-20"
+        assert generalize_age(0, 2, step_years=5) == "0-10"
+        assert generalize_age(99, 2, step_years=5) == "90-100"
+
+    def test_age_dynamic_step_5_years_level_3(self):
+        assert generalize_age(17, 3, step_years=5) == "minor"
+        assert generalize_age(18, 3, step_years=5) == "adult"
+        assert generalize_age(27, 3, step_years=5) == "adult"
+        assert generalize_age(99, 3, step_years=5) == "adult"
+
+    def test_age_dynamic_step_5_years_level_4_full_suppression(self):
+        assert generalize_age(27, 4, step_years=5) == "*"
+        assert generalize_age(50, 4, step_years=5) == "*"
+        assert generalize_age(99, 4, step_years=5) == "*"
+
+    def test_age_dynamic_step_higher_levels_suppression(self):
+        for level in range(4, 10):
+            assert generalize_age(27, level, step_years=5) == "*"
+
+    def test_age_dynamic_step_none_value(self):
+        assert generalize_age(None, 1, step_years=5) == ""
+
+    def test_age_dynamic_step_negative_value(self):
+        assert generalize_age(-5, 1, step_years=5) == "invalid"
+
+    def test_age_dynamic_step_non_numeric_value(self):
+        assert generalize_age("not_a_number", 1, step_years=5) == "not_a_number"
+
+    def test_age_dynamic_step_string_numeric_value(self):
+        assert generalize_age("27", 1, step_years=5) == "25-30"
+
+    def test_age_dynamic_step_1_year(self):
+        assert generalize_age(27, 1, step_years=1) == "27-28"
+        assert generalize_age(27, 2, step_years=1) == "26-28"
+
+    def test_age_dynamic_step_10_years(self):
+        assert generalize_age(27, 1, step_years=10) == "20-30"
+        assert generalize_age(27, 2, step_years=10) == "20-40"
+
+    def test_age_dynamic_step_zero_falls_back_to_default(self):
+        assert generalize_age(27, 1, step_years=0) == "25-34"
+        assert generalize_age(25, 1, step_years=0) == "25-34"
+
+    def test_age_dynamic_step_none_falls_back_to_default(self):
+        assert generalize_age(27, 1, step_years=None) == "25-34"
+        assert generalize_age(25, 1, step_years=None) == "25-34"
+
+    def test_age_dynamic_step_boundary_values(self):
+        assert generalize_age(5, 1, step_years=5) == "5-10"
+        assert generalize_age(4, 1, step_years=5) == "0-5"
+        assert generalize_age(9, 1, step_years=5) == "5-10"
+        assert generalize_age(10, 1, step_years=5) == "10-15"
+
+
 class TestZipcodeGeneralization:
     def test_zipcode_level_0_exact(self):
         assert generalize_zipcode("100081", 0) == "100081"
@@ -296,3 +369,55 @@ class TestGeneralizationStrategyClass:
     def test_category_field_type(self):
         generalizer = GeneralizationStrategy(field_type="category")
         assert generalizer.generalize("male", level=1) == "male"
+
+
+class TestGeneralizationStrategyDynamicAgeStep:
+    def test_create_age_generalizer_with_step_5(self):
+        generalizer = GeneralizationStrategy.create_age_generalizer(
+            default_level=1, step_years=5
+        )
+        assert generalizer.current_level == 1
+        assert generalizer.generalize(27) == "25-30"
+        assert generalizer.generalize(25) == "25-30"
+        assert generalizer.generalize(29) == "25-30"
+
+    def test_create_age_generalizer_with_step_5_level_2(self):
+        generalizer = GeneralizationStrategy.create_age_generalizer(
+            default_level=2, step_years=5
+        )
+        assert generalizer.current_level == 2
+        assert generalizer.generalize(27) == "20-30"
+        assert generalizer.generalize(25) == "20-30"
+
+    def test_create_age_generalizer_with_step_5_set_level(self):
+        generalizer = GeneralizationStrategy.create_age_generalizer(
+            default_level=0, step_years=5
+        )
+        generalizer.set_level(1)
+        assert generalizer.generalize(27) == "25-30"
+        generalizer.set_level(3)
+        assert generalizer.generalize(27) == "adult"
+
+    def test_create_age_generalizer_without_step_uses_default(self):
+        generalizer = GeneralizationStrategy.create_age_generalizer(default_level=1)
+        assert generalizer.generalize(27) == "25-34"
+
+    def test_create_age_generalizer_with_step_10(self):
+        generalizer = GeneralizationStrategy.create_age_generalizer(
+            default_level=1, step_years=10
+        )
+        assert generalizer.generalize(27) == "20-30"
+
+    def test_create_age_generalizer_step_5_description(self):
+        generalizer = GeneralizationStrategy.create_age_generalizer(
+            default_level=1, step_years=5
+        )
+        levels = generalizer.config.levels
+        assert levels[1].description == "5-year ranges"
+        assert levels[2].description == "10-year ranges"
+
+    def test_create_age_generalizer_no_step_description(self):
+        generalizer = GeneralizationStrategy.create_age_generalizer(default_level=1)
+        levels = generalizer.config.levels
+        assert levels[1].description == "10-year ranges"
+        assert levels[2].description == "20-year ranges"

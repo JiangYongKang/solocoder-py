@@ -552,3 +552,274 @@ class TestEngineEdgeCases:
         record_dict = record.to_dict()
         assert record_dict["id"] == "1"
         assert record_dict["data"]["name"] == "张三"
+
+
+class TestEngineMaskTypeRouting:
+    def test_mask_type_phone_routes_to_mask_phone(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="phone",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "phone"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"phone": "13812345678"})
+        masked = engine.mask_record(record)
+        result = masked.get("phone")
+
+        assert result == "138****5678"
+        assert len(result) == 11
+        assert result[:3] == "138"
+        assert result[-4:] == "5678"
+
+    def test_mask_type_phone_short_number(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="phone",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "phone"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"phone": "12345"})
+        masked = engine.mask_record(record)
+        result = masked.get("phone")
+
+        assert result == "*****"
+        assert len(result) == 5
+
+    def test_mask_type_phone_empty_value(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="phone",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "phone"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"phone": ""})
+        masked = engine.mask_record(record)
+        result = masked.get("phone")
+
+        assert result == ""
+
+    def test_mask_type_id_card_routes_to_mask_id_card(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="id_card",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "id_card"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"id_card": "110101199001011234"})
+        masked = engine.mask_record(record)
+        result = masked.get("id_card")
+
+        assert result == "1****************4"
+        assert len(result) == 18
+        assert result[0] == "1"
+        assert result[-1] == "4"
+        assert all(c == "*" for c in result[1:-1])
+
+    def test_mask_type_id_card_short_value(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="id_card",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "id_card"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"id_card": "1"})
+        masked = engine.mask_record(record)
+        result = masked.get("id_card")
+
+        assert result == "*"
+
+    def test_mask_type_id_card_empty_value(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="id_card",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "id_card"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"id_card": ""})
+        masked = engine.mask_record(record)
+        result = masked.get("id_card")
+
+        assert result == ""
+
+    def test_mask_type_email_routes_to_mask_email(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="email",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "email"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"email": "zhangsan@example.com"})
+        masked = engine.mask_record(record)
+        result = masked.get("email")
+
+        assert "@" in result
+        username, domain = result.split("@")
+        assert username[0] == "z"
+        assert username[-1] == "n"
+        assert "*" in username
+        assert domain == "example.com"
+
+    def test_mask_type_email_short_username(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="email",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "email"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"email": "ab@example.com"})
+        masked = engine.mask_record(record)
+        result = masked.get("email")
+
+        assert result == "**@example.com"
+
+    def test_mask_type_email_empty_value(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="email",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "email"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"email": ""})
+        masked = engine.mask_record(record)
+        result = masked.get("email")
+
+        assert result == ""
+
+    def test_mask_type_unknown_falls_back_to_generic(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="custom_field",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "unknown_type"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"custom_field": "1234567890"})
+        masked = engine.mask_record(record)
+        result = masked.get("custom_field")
+
+        assert result == "123***7890"
+        assert len(result) == 10
+        assert result[:3] == "123"
+        assert result[-4:] == "7890"
+
+    def test_mask_type_not_specified_uses_generic(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="phone",
+                strategy=StrategyType.MASKING,
+            )
+        )
+
+        record = DataRecord(id="1", data={"phone": "13812345678"})
+        masked = engine.mask_record(record)
+        result = masked.get("phone")
+
+        assert result == "138****5678"
+
+    def test_mask_type_all_three_types_same_record(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="phone",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "phone"},
+            )
+        )
+        engine.add_rule(
+            FieldRule(
+                field_name="id_card",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "id_card"},
+            )
+        )
+        engine.add_rule(
+            FieldRule(
+                field_name="email",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "email"},
+            )
+        )
+
+        record = DataRecord(
+            id="1",
+            data={
+                "phone": "13812345678",
+                "id_card": "110101199001011234",
+                "email": "zhangsan@example.com",
+            },
+        )
+        masked = engine.mask_record(record)
+
+        assert masked.get("phone") == "138****5678"
+        assert masked.get("id_card") == "1****************4"
+        assert masked.get("email").endswith("@example.com")
+
+    def test_mask_type_with_keep_prefix_override(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="phone",
+                strategy=StrategyType.MASKING,
+                config={
+                    "mask_type": "phone",
+                    "keep_prefix": 2,
+                    "keep_suffix": 2,
+                },
+            )
+        )
+
+        record = DataRecord(id="1", data={"phone": "13812345678"})
+        masked = engine.mask_record(record)
+        result = masked.get("phone")
+
+        assert result == "138****5678"
+        assert len(result) == 11
+
+    def test_mask_type_case_sensitive(self):
+        engine = DataMaskingEngine()
+        engine.add_rule(
+            FieldRule(
+                field_name="id_card",
+                strategy=StrategyType.MASKING,
+                config={"mask_type": "ID_CARD"},
+            )
+        )
+
+        record = DataRecord(id="1", data={"id_card": "110101199001011234"})
+        masked = engine.mask_record(record)
+        result = masked.get("id_card")
+
+        assert result == "110***********1234"
+        assert len(result) == 18
+        assert result[:3] == "110"
+        assert result[-4:] == "1234"

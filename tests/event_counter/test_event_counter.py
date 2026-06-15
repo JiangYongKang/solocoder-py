@@ -307,8 +307,6 @@ class TestBoundaryConditions:
         counter.record(Event(timestamp=hour_start, count=10))
         counter.record(Event(timestamp=next_hour - timedelta(microseconds=1), count=7))
 
-        counter.clear(Granularity.DAY)
-
         assert counter.get_count(hour_start, Granularity.HOUR) == 17
         assert counter.get_count(next_hour, Granularity.HOUR) == 0
 

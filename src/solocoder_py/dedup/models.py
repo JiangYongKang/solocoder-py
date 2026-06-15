@@ -32,6 +32,7 @@ class DedupResult:
     total_input: int
     total_unique: int
     total_duplicates: int
+    fallback_fields: dict[int, list[str]] = field(default_factory=dict)
 
 
 @dataclass

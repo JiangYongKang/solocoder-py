@@ -96,11 +96,15 @@ class DedupEngine:
         groups = self._group_records(records)
 
         unique_records: list[Record] = []
-        for group in groups:
+        fallback_fields: dict[int, list[str]] = {}
+        for group_idx, group in enumerate(groups):
             if len(group.records) == 1:
                 unique_records.append(group.records[0])
             else:
-                unique_records.append(self._resolve_group(group))
+                resolved_record, group_fallback = self._resolve_group(group)
+                unique_records.append(resolved_record)
+                if group_fallback:
+                    fallback_fields[group_idx] = group_fallback
 
         total_unique = len(unique_records)
         total_duplicates = n - total_unique
@@ -111,23 +115,24 @@ class DedupEngine:
             total_input=n,
             total_unique=total_unique,
             total_duplicates=total_duplicates,
+            fallback_fields=fallback_fields,
         )
 
-    def _resolve_group(self, group: DedupGroup) -> Record:
+    def _resolve_group(self, group: DedupGroup) -> tuple[Record, list[str]]:
         strategy = self.record_selection_strategy
 
         if strategy == KEEP_FIRST:
-            return keep_first(group)
+            return keep_first(group), []
         elif strategy == KEEP_LAST:
-            return keep_last(group)
+            return keep_last(group), []
         elif strategy == KEEP_MOST_COMPLETE:
-            return keep_most_complete(group)
+            return keep_most_complete(group), []
         elif strategy == KEEP_BY_FIELD:
             return keep_by_field(
                 group,
                 field=self.record_selection_field or "",
                 desc=self.record_selection_desc,
-            )
+            ), []
         else:
             merge_result = merge_group(
                 group,
@@ -136,7 +141,7 @@ class DedupEngine:
                 field_strategies=self.field_merge_strategies,
                 fallback_strategy=self.fallback_merge_strategy,
             )
-            return merge_result.record
+            return merge_result.record, list(merge_result.fallback_fields)
 
     def _group_records(self, records: list[Record]) -> list[DedupGroup]:
         if self.exact_match_keys and not self.use_fuzzy:

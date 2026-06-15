@@ -1,0 +1,7 @@
+产物不满意：
+1. engine.py 的 _resolve_group 方法中 KEEP_BY_FIELD 分支存在冗余死代码。调用 keep_by_field 时传入 `field=self.record_selection_field or ""`，但 __post_init__ 已在 constructor 中校验当 record_selection_strategy 为 KEEP_BY_FIELD 时 record_selection_field 不允许为 None，因此 `or ""` 永远不可能被触发。根因是模型在编写代码时添加了无效的防御逻辑，没有对 __post_init__ 的约束条件与分发处的参数传递做一致性检查，应从代码中移除 `or ""` 避免对后续维护者产生误导。
+2. tests/dedup/test_engine.py 中 TestEngineFallbackFieldsPropagation 类的 test_dedupresult_fallback_fields_default_empty 方法使用了局部导入 `from solocoder_py.dedup import DedupResult`，而文件顶部已通过 `from solocoder_py.dedup import (...)` 导入大量符号但唯独遗漏了 DedupResult。局部导入与文件其余部分保持一致的模块级导入风格不统一，也不利于一眼看清测试文件的全部外部依赖。
+
+过程不满意：
+1. 模型在会话第一步就用 todo_write 创建了 6 项子任务，然后才开始用 view_files 读取 engine.py 和 models.py。这与 assessment-1 指出的问题（"模型在刚收到任务后未分析需求就直接创建了 6 项 TodoList"）和 assessment-2 再次指出的问题（"模型在刚收到提示词后未经需求分析就直接用 todo_write 创建了 6 项 TodoList"）完全一致。连续三轮在同一个 process issue 上未做改进，说明模型在跨 session 的行为模式修正上存在根本性缺陷。正确做法是先理解 engine.py 中 _resolve_group 和 dedup 的当前实现，再制定修改计划。
+2. 模型在编写 test_fallback_fields_propagated_from_merge_group 测试时使用了返回 None 的 bad_merge 函数期望触发 fallback 标记，但 _apply_strategy 方法中 custom_merge 返回 None 被视为策略成功执行而不会标记为 fallback。模型直到运行测试看到失败后才将 bad_merge 改为 raise RuntimeError。这是因为模型在编写测试前没有阅读 _apply_strategy 的实现逻辑，对"什么条件触发兜底"的理解不准确。正确做法是先理解 _apply_strategy 中 fallback 的触发条件（custom_merge 抛异常或返回 FallbackMarker），再据此设计测试的 mock 行为。

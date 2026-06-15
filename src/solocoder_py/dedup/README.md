@@ -80,8 +80,11 @@ engine = DedupEngine(
 
 - `Record`：记录类型，别名 `dict[str, Any]`
 - `DedupGroup`：去重分组，包含记录列表、原始索引、匹配得分等
-- `DedupResult`：去重结果，包含唯一记录、分组、统计信息
-- `FuzzyMatchPair`：模糊匹配对，包含两条记录的索引和匹配得分
+- `DedupResult`：去重结果，包含唯一记录、分组、统计信息、兜底字段信息
+  - `unique_records`：去重后的唯一记录列表
+  - `groups`：所有分组列表
+  - `total_input` / `total_unique` / `total_duplicates`：统计信息
+  - `fallback_fields`：字典，key 为组索引，value 为该组使用兜底策略的字段列表
 - `MergeResult`：合并结果，包含合并后的记录、冲突字段列表、成功合并字段列表、兜底字段列表
   - `record`：合并后的记录
   - `conflict_fields`：存在冲突的字段列表

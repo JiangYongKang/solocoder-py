@@ -1,0 +1,8 @@
+产物不满意：
+1. tests/masking/test_edge_cases.py 中 TestEngineMaskTypeRouting 类的 test_mask_type_phone_routes_to_mask_phone 测试使用了 11 位手机号 `13812345678` 作为输入，但通用 mask（默认 keep_prefix=3 keep_suffix=4）和 mask_phone 对此长度的输入产生完全相同的输出 `138****5678`。如果 _apply_strategy 中 `mask_type == "phone"` 分支因拼写错误失效，引擎会静默回退到通用 mask 而测试依然通过，提示词第二条要求"验证输出符合对应专用遮盖方法的格式而非通用遮盖格式"在该场景下形同虚设。同样的选择性验证缺陷也存在于 test_mask_type_not_specified_uses_generic 中——使用相同长度的输入且期望值与 phone 专用格式一致，无法区分是否真的走了通用路径。根因是测试输入长度选择不当使两个路径的输出无法区分，应选用不同长度或结构的输入使专用格式与通用格式产生可区分的差异。
+2. tests/masking/test_edge_cases.py 中 test_mask_type_with_keep_prefix_override 的测试名称暗示 keep_prefix 可覆盖专用方法行为，而实际断言的是 mask_type="phone" 时输出固定为 `138****5678`（即专用方法忽略 keep_prefix=2 和 keep_suffix=2 的配置），验证的是专用方法优先级高于通用配置而非通用配置覆盖专用方法。测试名称与实际验证行为恰好相反，会误导后续维护者对该测试意图的理解。
+
+过程不满意：
+1. 模型在刚收到提示词后的第一个工具调用就是 todo_write 创建了 4 项子任务，此时尚未读取任何现有测试文件的具体内容。这与 assessment-2 中标注的"模型在第二步尚未读取任何源文件和测试文件的具体内容就直接用 todo_write 创建了子任务计划"是完全相同的行为模式。连续两轮未纠正先规划后分析的错误，说明模型没有从上一轮标注中吸取教训。正确做法是先读取 test_generalization.py 和 test_edge_cases.py 了解现有测试的结构和 fixture 模式，再制定测试编写计划。
+2. 模型在对 test_mask_type_case_sensitive 测试的编写过程中进行了三次反复修改——先写好初版并注意到"大小写不匹配会导致回退到通用 mask"，然后认为该测试"是错误的"并修改断言，最后又再次修正回到与初版类似的逻辑。同一测试在未运行验证的情况下三改其弦，暴露出模型在编写测试断言时对 _apply_strategy 中 mask_type 字符串匹配行为缺乏清晰预判，依赖的是"调整—怀疑—再调整"的试错思维。正确做法是先梳理 _apply_strategy 中字符串相等比较逻辑，确认大小写敏感性和回退路径后再一次性确定断言值。
+3. 模型首次运行测试后有 2 个测试失败，自述"都是我计算通用 mask 结果时犯了错误"后直接修改了断言预期值，没有先阅读失败堆栈分析具体是哪个输入字符数对应的 keep_prefix/keep_suffix 默认值计算出错。这是一种"看到红色就改数字"的试错式修复行为。正确做法是先按通用 mask 公式逐项核对每个失败测试中原始输入、keep_prefix 默认值、keep_suffix 默认值和预期输出之间的对应关系，再一次性修正所有断言。

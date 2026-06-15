@@ -210,16 +210,44 @@ class EventCounter:
 
                     base = coarser_count // num_finer_in_coarser
                     remainder = coarser_count % num_finer_in_coarser
-                    estimated = base + (1 if window_index < remainder else 0)
 
-                    return CountResult(
-                        window=target_window,
-                        count=estimated,
-                        is_estimated=True,
-                        source_granularity=coarser_granularity,
-                    )
+                    if base > 0:
+                        estimated = base + (1 if window_index < remainder else 0)
+                        return CountResult(
+                            window=target_window,
+                            count=estimated,
+                            is_estimated=True,
+                            source_granularity=coarser_granularity,
+                        )
+                    elif remainder > 0:
+                        if self._target_window_has_finer_data(target_window):
+                            if window_index < remainder:
+                                return CountResult(
+                                    window=target_window,
+                                    count=1,
+                                    is_estimated=True,
+                                    source_granularity=coarser_granularity,
+                                )
 
         return None
+
+    def _target_window_has_finer_data(self, target_window: TimeWindow) -> bool:
+        for finer_granularity in Granularity:
+            if not finer_granularity.is_finer_than(target_window.granularity):
+                continue
+
+            finer_start = TimeWindow.from_timestamp(
+                target_window.start, finer_granularity
+            )
+            finer_end_ts = target_window.end.timestamp()
+
+            current_finer = finer_start
+            while current_finer.start.timestamp() < finer_end_ts:
+                if self._store.get_count(current_finer) is not None:
+                    return True
+                current_finer = current_finer.next_window()
+
+        return False
 
     def cleanup(self, reference_time: Optional[datetime] = None) -> dict[Granularity, int]:
         with self._lock:

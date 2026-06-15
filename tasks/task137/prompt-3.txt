@@ -1,0 +1,4 @@
+你实现的数据脱敏引擎模块新增了代码路径但缺乏对应的测试验证，需要修复：
+1. generalize_age 函数新增了 step_years 参数和 _generalize_age_dynamic 函数，但 tests/masking/test_generalization.py 中所有年龄泛化用例都未传入 step_years 参数，新增的动态区间分组逻辑（如 step_years=5 时将 27 泛化为 "25-30"）未经任何测试验证。需要为 generalize_age 编写传入 step_years 参数的测试用例，覆盖各级别下的动态区间分组结果。
+2. engine.py 的 _apply_strategy 方法新增了根据 mask_type 配置值路由到 mask_phone、mask_id_card、mask_email 三个专用方法的分派逻辑，但没有对应的引擎级测试。如果分派条件中的字符串拼写错误，引擎会静默回退到通用 mask 方法而不会报错。需要添加测试：配置 mask_type 为 phone、id_card、email 后调用 mask_record，验证输出符合对应专用遮盖方法的格式而非通用遮盖格式。
+3. 修复后需要重新运行 poetry run pytest tests/masking/ -v，需要让所有测试通过。
