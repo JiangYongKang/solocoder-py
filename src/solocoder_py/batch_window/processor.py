@@ -98,11 +98,12 @@ class BatchWindowProcessor:
             is_late_update=is_late_update,
         )
 
-    def _is_event_late(self, event_timestamp: float, window_end: float) -> bool:
-        return self._watermark_generator.is_window_triggerable(window_end)
-
-    def _is_event_droppable(self, event_timestamp: float, window_end: float) -> bool:
-        return self._watermark_generator.is_window_expired(window_end, self._allowed_lateness)
+    def _is_event_droppable(self, event_timestamp: float, window_end: float, window_start: float) -> bool:
+        if not self._watermark_generator.is_window_expired(window_end, self._allowed_lateness):
+            return False
+        if window_start not in self._windows:
+            return True
+        return True
 
     def _add_event_to_window(self, event: Event, window_start: float) -> WindowState:
         window_end = window_start + self._window_size
@@ -158,13 +159,12 @@ class BatchWindowProcessor:
                     results.append(
                         self._create_result(state, OutputType.FINAL, is_late_update=state.is_fired)
                     )
+                state.is_closed = True
                 close_starts.append(window_start)
 
         for start in close_starts:
             if start in self._windows:
-                self._windows[start].is_closed = True
-                if self._windows[start].final_output_emitted:
-                    del self._windows[start]
+                del self._windows[start]
 
         return results
 
@@ -176,19 +176,19 @@ class BatchWindowProcessor:
 
         existing_state = self._windows.get(window_start)
 
-        if existing_state is not None and existing_state.is_closed:
-            self._rejected_closed_count += 1
-            closure_results = self._process_window_closures()
-            raise WindowAlreadyClosedError(window_start, window_end)
-
-        if self._is_event_droppable(event.timestamp, window_end):
+        if self._is_event_droppable(event.timestamp, window_end, window_start):
             self._dropped_late_count += 1
-            closure_results = self._process_window_closures()
+            self._process_window_closures()
             raise LateEventDroppedError(
                 event_timestamp=event.timestamp,
                 window_end=window_end,
                 allowed_lateness=self._allowed_lateness,
             )
+
+        if existing_state is not None and existing_state.is_closed:
+            self._rejected_closed_count += 1
+            self._process_window_closures()
+            raise WindowAlreadyClosedError(window_start, window_end)
 
         was_fired = False
         if existing_state is not None:
@@ -221,12 +221,11 @@ class BatchWindowProcessor:
             except WindowAlreadyClosedError:
                 continue
         if self._watermark_generator.max_event_time >= 0:
-            final_watermark = (
+            last_window_start = self._get_window_start(
                 self._watermark_generator.max_event_time
-                + self._watermark_generator.delay_seconds
-                + self._allowed_lateness
-                + self._window_size
             )
+            last_window_end = last_window_start + self._window_size
+            final_watermark = last_window_end + self._allowed_lateness
             final_results = self.advance_watermark(final_watermark)
             all_results.extend(final_results)
         return all_results

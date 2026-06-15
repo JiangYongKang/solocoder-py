@@ -1,0 +1,5 @@
+你实现的 API 版本内容协商器模块存在一些问题，需要修复：
+1. models.py 的 ParsedVersion.parse 方法将日期版本 v2024-01 的年份 2024 存入 major 字段，而普通语义化版本 v1 的 major 表示 API 主版本号。同时注册 v2024（普通版本）和 v2024-01（日期版本）时两者 major 均为 2024，仅靠 date_suffix 字段做区分，major 字段承担了两种语义不同的职责，版本类型需要明确标识区分。
+2. negotiator.py 的 register 方法使用原始 version 字符串直接作为内部字典键和 VersionProcessor.version 字段值，但 models.py 中 ParsedVersion.parse 会先 strip 再存 raw 值。若注册时传入带前导或尾随空格的版本号，processor.version 会保留空格而 parsed_version.raw 已规范化去空格，响应头 X-API-Version 会返回带空格的异常版本号。register 方法入口需要统一对 version 参数做规范化处理。
+3. negotiator.py 的 register 方法在注册时调用 ParsedVersion.parse(version) 做格式校验，校验通过的规范化字符串被丢弃，最终以原始未规范化的字符串存入字典键。这导致内部字典的键、processor.version 值和 parsed_version.raw 三者之间缺乏一致性保证，后续维护和调试时容易混淆。
+4. 修复后需要重新运行 poetry run pytest tests/version_negotiator/ -v，需要让所有测试通过。

@@ -1,0 +1,8 @@
+你实现的批窗口处理器模块存在一些问题，需要修复：
+1. 空窗口（count=0）在窗口关闭后被标记为 is_closed 但未从 _windows 字典中删除，长时间运行或窗口粒度较细的场景下会累积大量空窗口对象造成内存泄漏。清理逻辑需要在窗口过期时无论 count 是否为 0 都从 _windows 中移除窗口数据。
+2. on_event 方法中，当 existing_state 已关闭或事件迟到被丢弃的分支里会先调用 _process_window_closures() 再抛出异常，但返回的 closure_results 变量从未被使用，同时该变量命名与后续正常流程的 closure_results 冲突，增加代码阅读混淆。
+3. _is_event_droppable 方法在判断事件是否可丢弃时只基于水位线判断窗口是否过期，不检查事件所属窗口是否真实存在于 _windows 中。当传入事件时间戳极小（如远早于当前已处理事件）时，推算出的 window_end 对应的窗口从未创建，异常携带的 window_end 信息会误导下游。
+4. _is_event_late 方法在整个模块中从未被任何代码调用，属于死代码。它的功能已被 _is_event_droppable 完全覆盖，应清理掉未使用的定义。
+5. README.md 中描述的迟到事件三种处理路径的判断顺序与 processor.py 的 on_event 方法实际执行顺序不一致——文档先判断窗口已关闭再判断水位线过期，代码先判断丢弃再判断拒绝，修复文档或代码使两者一致。
+6. process_source 方法末尾最终水位线推进量使用了 max_event_time + delay + allowed_lateness + window_size 的四重叠加公式，在 window_size 较大时会将水位线推到极远位置导致输出大量不必要的最终结果，且未被文档或注释说明设计意图。
+7. 修复后需要重新运行 poetry run pytest tests/batch_window/ -v，需要让所有测试通过。

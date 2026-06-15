@@ -19,7 +19,6 @@ class TokenizationStrategy:
         self._config: TokenizationConfig = config or TokenizationConfig()
         self._secret_key: bytes = secret_key or secrets.token_bytes(32)
         self._token_map: dict[str, str] = {}
-        self._reverse_map: dict[str, str] = {}
 
     @property
     def config(self) -> TokenizationConfig:
@@ -41,7 +40,6 @@ class TokenizationStrategy:
             token = self._random_token(normalized_value)
 
         self._token_map[normalized_value] = token
-        self._reverse_map[token] = normalized_value
 
         return token
 
@@ -80,6 +78,7 @@ class TokenizationStrategy:
     def _random_token(self, value: str) -> str:
         prefix = self._config.token_prefix
         token_length = self._config.token_length
+        existing_tokens = set(self._token_map.values())
 
         while True:
             random_bytes = secrets.token_bytes(token_length)
@@ -90,31 +89,17 @@ class TokenizationStrategy:
             )
             token = prefix + token_body
 
-            if token not in self._reverse_map:
+            if token not in existing_tokens:
                 return token
 
     def tokenize(self, value: Any) -> str:
         return self._generate_token(value)
-
-    def detokenize(self, token: str) -> Optional[str]:
-        original = self._reverse_map.get(token)
-        if original == "__NONE__":
-            return None
-        if original == "__EMPTY__":
-            return ""
-        return original
-
-    def is_token(self, value: Any) -> bool:
-        if not isinstance(value, str):
-            return False
-        return value in self._reverse_map
 
     def get_token_count(self) -> int:
         return len(self._token_map)
 
     def clear(self) -> None:
         self._token_map.clear()
-        self._reverse_map.clear()
 
     def __call__(self, value: Any) -> str:
         return self.tokenize(value)

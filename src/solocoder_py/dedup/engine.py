@@ -3,8 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .exact_matcher import exact_group
-from .exceptions import EmptyMatchKeysError, InvalidConfigError, InvalidThresholdError
+from .exact_matcher import (
+    ALL_KEEP_STRATEGIES,
+    KEEP_BY_FIELD,
+    KEEP_FIRST,
+    KEEP_LAST,
+    KEEP_MERGE,
+    KEEP_MOST_COMPLETE,
+    exact_group,
+    keep_by_field,
+    keep_first,
+    keep_last,
+    keep_most_complete,
+)
+from .exceptions import EmptyMatchKeysError, InvalidConfigError, InvalidThresholdError, UnknownStrategyError
 from .fuzzy_matcher import fuzzy_group
 from .merge_strategies import (
     STRATEGY_FIRST,
@@ -24,6 +36,9 @@ class DedupEngine:
     custom_merge: MergeFunction | None = None
     field_merge_strategies: dict[str, str] | None = None
     fallback_merge_strategy: str = STRATEGY_LAST
+    record_selection_strategy: str = KEEP_MERGE
+    record_selection_field: str | None = None
+    record_selection_desc: bool = True
     use_fuzzy: bool = False
     _records: list[Record] = field(default_factory=list)
 
@@ -43,6 +58,14 @@ class DedupEngine:
                 raise InvalidThresholdError(
                     "fuzzy_threshold must be in (0, 1]"
                 )
+        if self.record_selection_strategy not in ALL_KEEP_STRATEGIES:
+            raise UnknownStrategyError(
+                f"Unknown record_selection_strategy: {self.record_selection_strategy}"
+            )
+        if self.record_selection_strategy == KEEP_BY_FIELD and self.record_selection_field is None:
+            raise InvalidConfigError(
+                "record_selection_field must be provided when record_selection_strategy is 'keep_by_field'"
+            )
 
     def add_record(self, record: Record) -> None:
         self._records.append(record)
@@ -77,14 +100,7 @@ class DedupEngine:
             if len(group.records) == 1:
                 unique_records.append(group.records[0])
             else:
-                merge_result = merge_group(
-                    group,
-                    strategy=self.merge_strategy,
-                    custom_merge=self.custom_merge,
-                    field_strategies=self.field_merge_strategies,
-                    fallback_strategy=self.fallback_merge_strategy,
-                )
-                unique_records.append(merge_result.record)
+                unique_records.append(self._resolve_group(group))
 
         total_unique = len(unique_records)
         total_duplicates = n - total_unique
@@ -96,6 +112,31 @@ class DedupEngine:
             total_unique=total_unique,
             total_duplicates=total_duplicates,
         )
+
+    def _resolve_group(self, group: DedupGroup) -> Record:
+        strategy = self.record_selection_strategy
+
+        if strategy == KEEP_FIRST:
+            return keep_first(group)
+        elif strategy == KEEP_LAST:
+            return keep_last(group)
+        elif strategy == KEEP_MOST_COMPLETE:
+            return keep_most_complete(group)
+        elif strategy == KEEP_BY_FIELD:
+            return keep_by_field(
+                group,
+                field=self.record_selection_field or "",
+                desc=self.record_selection_desc,
+            )
+        else:
+            merge_result = merge_group(
+                group,
+                strategy=self.merge_strategy,
+                custom_merge=self.custom_merge,
+                field_strategies=self.field_merge_strategies,
+                fallback_strategy=self.fallback_merge_strategy,
+            )
+            return merge_result.record
 
     def _group_records(self, records: list[Record]) -> list[DedupGroup]:
         if self.exact_match_keys and not self.use_fuzzy:

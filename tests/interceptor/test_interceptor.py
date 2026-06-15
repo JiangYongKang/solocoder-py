@@ -479,29 +479,33 @@ class TestExceptionHandling:
         self,
         sample_request: Request,
     ):
+        from solocoder_py.interceptor.models import BaseInterceptor
+
         writer = ContextWritingInterceptor("writer", "user_id", "user-456")
         exc = ExceptionInterceptor("fail", ValueError("oops"))
 
-        chain = InterceptorChain(interceptors=[writer, exc])
-
         captured_after = {}
 
-        class CaptureAfterInterceptor:
+        class CaptureAfterInterceptor(BaseInterceptor):
             name = "capture_after"
+
+            def __init__(self) -> None:
+                self.after_called = False
 
             def before_request(self, ctx: RequestContext) -> None:
                 pass
 
             def after_request(self, ctx: RequestContext) -> None:
+                self.after_called = True
                 captured_after["user_id"] = ctx.get("user_id")
 
         capture_after = CaptureAfterInterceptor()
-        chain2 = InterceptorChain(interceptors=[writer, capture_after, exc])
+        chain = InterceptorChain(interceptors=[writer, capture_after, exc])
 
         with pytest.raises(ValueError):
-            chain2.execute(sample_request, lambda ctx: Response(status_code=200))
+            chain.execute(sample_request, lambda ctx: Response(status_code=200))
 
-        assert capture_after.after_called if hasattr(capture_after, "after_called") else True
+        assert capture_after.after_called is True
         assert captured_after["user_id"] == "user-456"
 
     def test_exception_in_after_request_does_not_affect_other_after(

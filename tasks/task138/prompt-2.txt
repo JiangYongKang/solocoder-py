@@ -1,0 +1,7 @@
+你实现的 API 客户端限流器模块存在一些问题，需要修复：
+1. RateLimiter.acquire 方法在持有外层锁的情况下调用 _bucket.acquire，而 _bucket.acquire 内部会执行 time.sleep 阻塞等待令牌补充。外层锁在 sleep 期间一直持有，导致其他线程连 available_tokens 这样的只读操作也被阻塞，并发场景下所有 RateLimiter 操作完全串行化。sleep 等待不应被纳入外层锁的临界区。
+2. TokenBucket.acquire 方法在首次 try_acquire 失败后释放了锁并执行 time.sleep 等待，等待结束后再次 try_acquire。由于两次尝试之间锁被释放，其他线程可能在 sleep 期间消费掉足够多的令牌，导致等待线程在完整等待时间后仍因令牌不足而再次失败形成饿死。
+3. TokenBucket.__init__ 中显式调用了 config.validate()，但 TokenBucketConfig 类在 __post_init__ 中已经执行过完全相同的验证逻辑，导致每次实例化时配置校验被执行两遍，属于冗余调用。
+4. RateLimiter 类中 update_from_response_headers 和 update_from_headers_object 两个方法内部的策略分发逻辑几乎完全一致，唯一的差异仅在输入来源是原始 dict 还是已解析的 RateLimitHeaders 对象。同一份同步逻辑分别在两个方法中维护增加了不一致风险，应抽取公共逻辑避免重复。
+5. TokenBucket.sync_with_server 方法中对 server_reset_time 的判断使用了 if server_reset_time > current_time: pass; else: 恢复满桶的结构，pass 空操作分支是多余的代码噪声。
+6. 修复后需要重新运行 poetry run pytest tests/rate_limiter/ -v，需要让所有测试通过。

@@ -36,6 +36,45 @@
 | `custom_merge` | `MergeFunction \| None` | 自定义合并函数 |
 | `field_merge_strategies` | `dict[str, str] \| None` | 按字段指定合并策略 |
 | `fallback_merge_strategy` | `str` | 兜底合并策略，默认 `last` |
+| `record_selection_strategy` | `str` | 记录级保留策略，默认 `merge` |
+| `record_selection_field` | `str \| None` | 按字段保留时的参考字段 |
+| `record_selection_desc` | `bool` | 按字段保留时是否降序，默认 `True` |
+
+### 记录级保留策略
+
+当去重组内存在多条重复记录时，除了字段级冲突合并（`merge`）外，还可以选择直接保留组内某一条完整记录：
+
+| 策略常量 | 说明 |
+|----------|------|
+| `KEEP_MERGE` | 字段级冲突合并（默认） |
+| `KEEP_FIRST` | 保留组内最早出现的记录 |
+| `KEEP_LAST` | 保留组内最后出现的记录 |
+| `KEEP_MOST_COMPLETE` | 保留非空字段最多的记录 |
+| `KEEP_BY_FIELD` | 按指定字段排序后保留首条（需配合 `record_selection_field` 使用） |
+
+**示例：保留字段最完整的一条**
+
+```python
+from solocoder_py.dedup import DedupEngine, KEEP_MOST_COMPLETE
+
+engine = DedupEngine(
+    exact_match_keys=["id"],
+    record_selection_strategy=KEEP_MOST_COMPLETE,
+)
+```
+
+**示例：按更新时间保留最新一条**
+
+```python
+from solocoder_py.dedup import DedupEngine, KEEP_BY_FIELD
+
+engine = DedupEngine(
+    exact_match_keys=["user_id"],
+    record_selection_strategy=KEEP_BY_FIELD,
+    record_selection_field="updated_at",
+    record_selection_desc=True,
+)
+```
 
 ### 数据模型
 
@@ -43,7 +82,11 @@
 - `DedupGroup`：去重分组，包含记录列表、原始索引、匹配得分等
 - `DedupResult`：去重结果，包含唯一记录、分组、统计信息
 - `FuzzyMatchPair`：模糊匹配对，包含两条记录的索引和匹配得分
-- `MergeResult`：合并结果，包含合并后的记录、冲突字段列表
+- `MergeResult`：合并结果，包含合并后的记录、冲突字段列表、成功合并字段列表、兜底字段列表
+  - `record`：合并后的记录
+  - `conflict_fields`：存在冲突的字段列表
+  - `merged_fields`：成功应用合并策略的字段列表
+  - `fallback_fields`：使用兜底策略的字段列表（调用方可感知哪些字段走了兜底）
 
 ### 子模块
 
@@ -128,6 +171,31 @@ engine = DedupEngine(
 1. **字段级策略**：`field_merge_strategies` 中为该字段指定的策略（最高优先级）
 2. **全局默认策略**：`merge_strategy` 参数指定的默认策略
 3. **兜底策略**：`fallback_merge_strategy`，当指定策略不可用时的回退方案
+
+### 兜底策略与可观测性
+
+当以下情况发生时，合并会自动回退到 `fallback_merge_strategy`：
+- 指定 `custom` 策略但 `custom_merge` 函数抛出异常
+- 指定 `custom` 策略但 `custom_merge` 为 `None`
+- 指定的策略名称不存在
+- 策略 resolver 执行时抛出异常
+
+使用兜底策略的字段会被记录在 `MergeResult.fallback_fields` 列表中，调用方可通过该字段感知哪些字段走了兜底逻辑。
+
+```python
+from solocoder_py.dedup import DedupGroup, merge_group, STRATEGY_CUSTOM
+
+def bad_merge(field, values):
+    raise ValueError("oops")
+
+group = DedupGroup(
+    records=[{"id": 1, "name": "A"}, {"id": 1, "name": "B"}],
+    indices=[0, 1],
+    is_exact=True,
+)
+result = merge_group(group, strategy=STRATEGY_CUSTOM, custom_merge=bad_merge)
+print(result.fallback_fields)  # ["id", "name"]
+```
 
 ### 自定义合并函数
 
@@ -242,4 +310,3 @@ engine = DedupEngine(
 - `InvalidThresholdError`：阈值无效
 - `UnknownStrategyError`：未知的合并策略
 - `MergeConflictError`：合并冲突错误
-- `RecordNotFoundError`：记录未找到

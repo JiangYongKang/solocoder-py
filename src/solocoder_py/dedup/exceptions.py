@@ -23,7 +23,3 @@ class UnknownStrategyError(InvalidConfigError):
 
 class MergeConflictError(DedupError):
     pass
-
-
-class RecordNotFoundError(DedupError):
-    pass

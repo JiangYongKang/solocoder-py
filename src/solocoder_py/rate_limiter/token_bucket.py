@@ -21,7 +21,6 @@ class TokenBucket:
         config: TokenBucketConfig,
         clock: Optional[Clock] = None,
     ) -> None:
-        config.validate()
         self._config: TokenBucketConfig = config
         self._clock: Clock = clock or SystemClock()
         self._tokens: float = float(
@@ -121,24 +120,41 @@ class TokenBucket:
     def acquire(self, tokens: int = 1, timeout: Optional[float] = None) -> AcquireResult:
         if tokens <= 0:
             raise ValueError("tokens must be positive")
+        if timeout is not None and timeout < 0:
+            raise ValueError("timeout must be non-negative")
 
-        result = self.try_acquire(tokens)
-        if result.acquired:
-            return result
-
-        if timeout is not None and timeout <= 0:
+        if timeout is not None and timeout == 0:
+            result = self.try_acquire(tokens)
+            if result.acquired:
+                return result
             raise TokenExhaustedError(retry_after=result.retry_after)
 
-        wait_time = result.retry_after if result.retry_after is not None else 0
-        if timeout is not None and wait_time > timeout:
-            raise WaitTimeoutError(waited=0.0, timeout=timeout)
+        waited = 0.0
+        while True:
+            result = self.try_acquire(tokens)
+            if result.acquired:
+                result.wait_time = waited
+                return result
 
-        if isinstance(self._clock, SystemClock):
-            time.sleep(wait_time)
-            return self.try_acquire(tokens)
-        else:
-            self._clock.advance(wait_time)
-            return self.try_acquire(tokens)
+            if timeout is not None and waited >= timeout:
+                raise WaitTimeoutError(waited=waited, timeout=timeout)
+
+            wait_time = result.retry_after if result.retry_after is not None else 0.0
+
+            if timeout is not None:
+                remaining = timeout - waited
+                if wait_time > remaining:
+                    wait_time = remaining
+
+            if wait_time <= 0:
+                wait_time = 0.001
+
+            if isinstance(self._clock, SystemClock):
+                time.sleep(wait_time)
+            else:
+                self._clock.advance(wait_time)
+
+            waited += wait_time
 
     def set_tokens(self, token_count: int) -> None:
         if token_count < 0:
@@ -162,9 +178,7 @@ class TokenBucket:
 
             if server_reset_time is not None:
                 current_time = self._clock.now()
-                if server_reset_time > current_time:
-                    pass
-                else:
+                if server_reset_time <= current_time:
                     self._tokens = self._config.capacity
 
             self._last_refill_time = self._clock.now()

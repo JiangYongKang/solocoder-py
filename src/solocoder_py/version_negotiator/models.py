@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Literal, Optional, Protocol
 
 from .exceptions import InvalidVersionFormatError
 
@@ -12,10 +12,13 @@ VERSION_PATTERN = re.compile(
     r"^v(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-(\d{2}(?:-\d{2})?))?$"
 )
 
+VersionType = Literal["semantic", "date"]
+
 
 @dataclass(frozen=True)
 class ParsedVersion:
     raw: str
+    version_type: VersionType
     major: int
     minor: int = 0
     patch: int = 0
@@ -25,26 +28,45 @@ class ParsedVersion:
     def parse(cls, version_str: str) -> "ParsedVersion":
         if not version_str:
             raise InvalidVersionFormatError(version_str)
-        match = VERSION_PATTERN.match(version_str.strip())
+        normalized = version_str.strip()
+        match = VERSION_PATTERN.match(normalized)
         if not match:
             raise InvalidVersionFormatError(version_str)
         major = int(match.group(1))
         minor = int(match.group(2)) if match.group(2) else 0
         patch = int(match.group(3)) if match.group(3) else 0
         date_partial = match.group(4)
-        date_suffix = None
+
         if date_partial is not None:
             date_suffix = f"{major}-{date_partial}"
-        return cls(
-            raw=version_str.strip(),
-            major=major,
-            minor=minor,
-            patch=patch,
-            date_suffix=date_suffix,
-        )
+            return cls(
+                raw=normalized,
+                version_type="date",
+                major=major,
+                minor=minor,
+                patch=patch,
+                date_suffix=date_suffix,
+            )
+        else:
+            return cls(
+                raw=normalized,
+                version_type="semantic",
+                major=major,
+                minor=minor,
+                patch=patch,
+                date_suffix=None,
+            )
+
+    @property
+    def is_date_version(self) -> bool:
+        return self.version_type == "date"
+
+    @property
+    def is_semantic_version(self) -> bool:
+        return self.version_type == "semantic"
 
     def is_compatible_with(self, requested: "ParsedVersion") -> bool:
-        if self.date_suffix or requested.date_suffix:
+        if self.is_date_version or requested.is_date_version:
             return self.raw == requested.raw
         if self.major != requested.major:
             return False
@@ -139,6 +161,7 @@ class VersionNegotiatorConfig:
 
 __all__ = [
     "VERSION_PATTERN",
+    "VersionType",
     "ParsedVersion",
     "VersionHandler",
     "VersionedRequest",

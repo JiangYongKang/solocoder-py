@@ -1,0 +1,6 @@
+你实现的记录去重引擎模块存在一些问题，需要修复：
+1. exact_matcher.py 中已实现了 keep_first、keep_last、keep_most_complete、keep_by_field 四个保留策略函数并对外导出，但 DedupEngine 的 dedup 方法始终只执行字段级冲突合并（merge_group），没有提供接口让用户配置"保留最早的一条"或"保留字段最完整的一条"这类记录级保留策略，导致提示词中要求的保留策略功能缺失。
+2. engine.py 中 fallback_merge_strategy 的默认值为 "last"，而 merge_strategies.py 的 merge_group 函数中 fallback_strategy 默认值为 "first"。两个核心组件的同一语义参数默认值不同，用户绕过引擎直接调用 merge_group 会得到与引擎调用不一致的兜底行为。
+3. exceptions.py 中定义了 RecordNotFoundError 异常类并对外导出，但在整个 dedup 模块的所有源文件中该异常从未被任何函数抛出或使用，属于死代码。
+4. merge_strategies.py 的 _apply_strategy 方法在冲突字段所有策略均失败时的兜底处理采用了隐式静默回退——直接返回 field_values[0]，合并后用户无法知道哪些字段走了兜底逻辑。合并结果中需要记录哪些字段使用了兜底合并以便调用方感知。
+5. 修复后需要重新运行 poetry run pytest tests/dedup/ -v，需要让所有测试通过。

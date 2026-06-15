@@ -6,6 +6,21 @@ from .exceptions import EmptyMatchKeysError
 from .models import DedupGroup, Record
 
 
+KEEP_FIRST = "keep_first"
+KEEP_LAST = "keep_last"
+KEEP_MOST_COMPLETE = "keep_most_complete"
+KEEP_BY_FIELD = "keep_by_field"
+KEEP_MERGE = "merge"
+
+ALL_KEEP_STRATEGIES = [
+    KEEP_FIRST,
+    KEEP_LAST,
+    KEEP_MOST_COMPLETE,
+    KEEP_BY_FIELD,
+    KEEP_MERGE,
+]
+
+
 def _make_hashable(value: Any) -> Any:
     if isinstance(value, (list, set)):
         return tuple(_make_hashable(v) for v in value)

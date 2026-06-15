@@ -46,6 +46,10 @@ class VersionNegotiator:
         self._processors: Dict[str, VersionProcessor] = {}
         self._parsed_versions: Dict[str, ParsedVersion] = {}
 
+    @staticmethod
+    def _normalize_version(version: str) -> str:
+        return version.strip()
+
     def register(
         self,
         version: str,
@@ -56,46 +60,54 @@ class VersionNegotiator:
         deprecation_message: Optional[str] = None,
         compatible_with: Optional[List[str]] = None,
     ) -> VersionProcessor:
-        if version in self._processors:
-            raise DuplicateVersionError(version)
+        normalized_version = self._normalize_version(version)
+        if normalized_version in self._processors:
+            raise DuplicateVersionError(normalized_version)
 
         parsed = ParsedVersion.parse(version)
-        self._parsed_versions[version] = parsed
+        normalized_version = parsed.raw
+        self._parsed_versions[normalized_version] = parsed
 
         compatible_versions = compatible_with or []
+        normalized_compatible = []
         for compat_version in compatible_versions:
-            if compat_version not in self._processors:
-                raise InvalidCompatibilityError(compat_version, version)
+            normalized_compat = self._normalize_version(compat_version)
+            if normalized_compat not in self._processors:
+                raise InvalidCompatibilityError(normalized_compat, normalized_version)
+            normalized_compatible.append(normalized_compat)
 
         processor = VersionProcessor(
-            version=version,
+            version=normalized_version,
             parsed_version=parsed,
             handler=handler,
             is_deprecated=is_deprecated,
             sunset_at=sunset_at,
             deprecated_at=deprecated_at,
             deprecation_message=deprecation_message,
-            compatible_with=compatible_versions,
+            compatible_with=normalized_compatible,
         )
 
-        self._processors[version] = processor
+        self._processors[normalized_version] = processor
         return processor
 
     def unregister(self, version: str) -> None:
-        if version in self._processors:
-            del self._processors[version]
-            del self._parsed_versions[version]
+        normalized_version = self._normalize_version(version)
+        if normalized_version in self._processors:
+            del self._processors[normalized_version]
+            del self._parsed_versions[normalized_version]
 
     def get_processor(self, version: str) -> Optional[VersionProcessor]:
-        return self._processors.get(version)
+        normalized_version = self._normalize_version(version)
+        return self._processors.get(normalized_version)
 
     def list_versions(self) -> List[str]:
         return list(self._processors.keys())
 
     def set_default_version(self, version: str) -> None:
-        if version not in self._processors:
-            raise VersionNotFoundError(version, self.list_versions())
-        self._config.default_version = version
+        normalized_version = self._normalize_version(version)
+        if normalized_version not in self._processors:
+            raise VersionNotFoundError(normalized_version, self.list_versions())
+        self._config.default_version = normalized_version
 
     def get_default_version(self) -> str:
         if self._config.default_version is None:
@@ -210,7 +222,7 @@ class VersionNegotiator:
         current_best: VersionProcessor,
         requested: ParsedVersion,
     ) -> bool:
-        if requested.date_suffix:
+        if requested.is_date_version:
             return False
 
         cand_parsed = candidate.parsed_version
@@ -252,7 +264,8 @@ class VersionNegotiator:
         return len(self._processors)
 
     def __contains__(self, version: str) -> bool:
-        return version in self._processors
+        normalized_version = self._normalize_version(version)
+        return normalized_version in self._processors
 
 
 __all__ = [

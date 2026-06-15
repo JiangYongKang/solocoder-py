@@ -39,3 +39,4 @@ class MergeResult:
     record: Record
     conflict_fields: list[str]
     merged_fields: list[str]
+    fallback_fields: list[str] = field(default_factory=list)

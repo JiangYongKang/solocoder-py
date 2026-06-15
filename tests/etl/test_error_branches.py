@@ -14,11 +14,13 @@ from solocoder_py.etl import (
     IdentityTransformer,
     InMemoryExtractor,
     InMemoryLoader,
+    StageNotReachableError,
     Transformer,
     Loader,
     Extractor,
     STAGE_EXTRACT,
     STAGE_TRANSFORM,
+    STAGE_COMPLETED,
 )
 
 
@@ -75,12 +77,14 @@ class TestFatalErrorTermination:
         result = pipeline.run()
         assert result.completed is False
         assert isinstance(result.fatal_error, FatalEtlError)
-        assert "Extractor failed" in str(result.fatal_error)
+        assert "Extractor failed after 3 rows" in str(result.fatal_error)
         assert result.rows_extracted == 3
-        assert result.rows_failed == 3
-        assert len(result.error_records) == 3
-        for rec in result.error_records:
-            assert rec.stage == STAGE_EXTRACT
+        assert result.rows_failed == 0
+        assert len(result.error_records) == 0
+        cp = checkpoint_store.load("fatal_extract")
+        assert cp is not None
+        assert cp.last_completed_stage == ""
+        assert cp.rows_extracted == 3
 
     def test_transformer_fatal_error_stops_job(
         self, checkpoint_store
@@ -265,9 +269,7 @@ class TestErrorRecordDetails:
         assert rec.error_message == "wrong type"
         assert rec.stage == STAGE_TRANSFORM
 
-    def test_extractor_error_record_timestamp_set(self):
-        from datetime import datetime
-
+    def test_extractor_fatal_error_no_error_records(self):
         pipeline = ETLPipeline(
             job_id="err_ts",
             extractor=FatalExtractor(fail_after=1),
@@ -275,5 +277,178 @@ class TestErrorRecordDetails:
             loader=InMemoryLoader(),
         )
         result = pipeline.run()
-        assert len(result.error_records) >= 1
-        assert isinstance(result.error_records[0].timestamp, datetime)
+        assert result.completed is False
+        assert isinstance(result.fatal_error, FatalEtlError)
+        assert len(result.error_records) == 0
+        assert result.rows_extracted == 1
+
+
+class TestResumeAfterExtractorFailure:
+    def test_resume_uses_saved_extracted_rows(self, checkpoint_store):
+        job_id = "resume_after_extract_fail"
+
+        pipeline1 = ETLPipeline(
+            job_id=job_id,
+            extractor=FatalExtractor(fail_after=5),
+            transformer=IdentityTransformer(),
+            loader=InMemoryLoader(),
+            checkpoint_store=checkpoint_store,
+        )
+        result1 = pipeline1.run()
+        assert result1.completed is False
+        assert result1.rows_extracted == 5
+
+        cp = checkpoint_store.load(job_id)
+        assert cp is not None
+        assert cp.last_completed_stage == ""
+        assert cp.rows_extracted == 5
+
+        saved_rows = checkpoint_store.load_extracted(job_id)
+        assert saved_rows is not None
+        assert len(saved_rows) == 5
+        assert [r.row_id for r in saved_rows] == [0, 1, 2, 3, 4]
+
+        class SuccessfulExtractor(Extractor):
+            def extract(self):
+                for i in range(10):
+                    yield DataRow(row_id=i, data=i * 10)
+
+        loader2 = InMemoryLoader()
+        pipeline2 = ETLPipeline(
+            job_id=job_id,
+            extractor=SuccessfulExtractor(),
+            transformer=IdentityTransformer(),
+            loader=loader2,
+            checkpoint_store=checkpoint_store,
+        )
+        result2 = pipeline2.run()
+        assert result2.completed is True
+        assert result2.resumed_from_checkpoint is True
+        assert result2.rows_extracted == 5
+        assert result2.rows_transformed == 5
+        assert result2.rows_loaded == 5
+        assert loader2.loaded_count == 5
+        loaded_data = loader2.loaded_data
+        assert [item["original"] for item in loaded_data] == [0, 1, 2, 3, 4]
+
+
+class TestStageNotReachable:
+    def test_run_until_extract_when_already_completed_raises(self, checkpoint_store):
+        job_id = "stage_unreachable_extract"
+        pipeline1 = ETLPipeline(
+            job_id=job_id,
+            extractor=InMemoryExtractor([1, 2, 3]),
+            transformer=IdentityTransformer(),
+            loader=InMemoryLoader(),
+            checkpoint_store=checkpoint_store,
+        )
+        result1 = pipeline1.run(run_until_stage=STAGE_EXTRACT)
+        assert result1.rows_extracted == 3
+
+        pipeline2 = ETLPipeline(
+            job_id=job_id,
+            extractor=InMemoryExtractor([1, 2, 3]),
+            transformer=IdentityTransformer(),
+            loader=InMemoryLoader(),
+            checkpoint_store=checkpoint_store,
+        )
+        with pytest.raises(StageNotReachableError) as exc_info:
+            pipeline2.run(run_until_stage=STAGE_EXTRACT)
+        assert exc_info.value.stage == STAGE_EXTRACT
+
+    def test_run_until_transform_when_already_completed_raises(self, checkpoint_store):
+        job_id = "stage_unreachable_transform"
+        pipeline1 = ETLPipeline(
+            job_id=job_id,
+            extractor=InMemoryExtractor([1, 2, 3]),
+            transformer=IdentityTransformer(),
+            loader=InMemoryLoader(),
+            checkpoint_store=checkpoint_store,
+        )
+        result1 = pipeline1.run(run_until_stage=STAGE_TRANSFORM)
+        assert result1.rows_transformed == 3
+
+        pipeline2 = ETLPipeline(
+            job_id=job_id,
+            extractor=InMemoryExtractor([1, 2, 3]),
+            transformer=IdentityTransformer(),
+            loader=InMemoryLoader(),
+            checkpoint_store=checkpoint_store,
+        )
+        with pytest.raises(StageNotReachableError) as exc_info:
+            pipeline2.run(run_until_stage=STAGE_TRANSFORM)
+        assert exc_info.value.stage == STAGE_TRANSFORM
+
+    def test_run_until_invalid_stage_raises_value_error(self, checkpoint_store):
+        pipeline = ETLPipeline(
+            job_id="invalid_stage",
+            extractor=InMemoryExtractor([1]),
+            transformer=IdentityTransformer(),
+            loader=InMemoryLoader(),
+            checkpoint_store=checkpoint_store,
+        )
+        with pytest.raises(ValueError):
+            pipeline.run(run_until_stage="invalid_stage")
+
+    def test_run_until_extract_stops_after_extract(self, checkpoint_store):
+        job_id = "run_until_extract"
+        loader = InMemoryLoader()
+        pipeline = ETLPipeline(
+            job_id=job_id,
+            extractor=InMemoryExtractor([1, 2, 3]),
+            transformer=IdentityTransformer(),
+            loader=loader,
+            checkpoint_store=checkpoint_store,
+        )
+        result = pipeline.run(run_until_stage=STAGE_EXTRACT)
+        assert result.rows_extracted == 3
+        assert result.rows_transformed == 0
+        assert result.rows_loaded == 0
+        assert loader.loaded_count == 0
+        assert result.completed is False
+
+    def test_run_until_transform_stops_after_transform(self, checkpoint_store):
+        job_id = "run_until_transform"
+        loader = InMemoryLoader()
+        pipeline = ETLPipeline(
+            job_id=job_id,
+            extractor=InMemoryExtractor([1, 2, 3]),
+            transformer=IdentityTransformer(),
+            loader=loader,
+            checkpoint_store=checkpoint_store,
+        )
+        result = pipeline.run(run_until_stage=STAGE_TRANSFORM)
+        assert result.rows_extracted == 3
+        assert result.rows_transformed == 3
+        assert result.rows_loaded == 0
+        assert loader.loaded_count == 0
+        assert result.completed is False
+
+    def test_run_until_extract_then_continue(self, checkpoint_store):
+        job_id = "extract_then_continue"
+        loader = InMemoryLoader()
+
+        pipeline1 = ETLPipeline(
+            job_id=job_id,
+            extractor=InMemoryExtractor([1, 2, 3]),
+            transformer=IdentityTransformer(),
+            loader=InMemoryLoader(),
+            checkpoint_store=checkpoint_store,
+        )
+        result1 = pipeline1.run(run_until_stage=STAGE_EXTRACT)
+        assert result1.rows_extracted == 3
+
+        pipeline2 = ETLPipeline(
+            job_id=job_id,
+            extractor=InMemoryExtractor([1, 2, 3]),
+            transformer=IdentityTransformer(),
+            loader=loader,
+            checkpoint_store=checkpoint_store,
+        )
+        result2 = pipeline2.run()
+        assert result2.completed is True
+        assert result2.resumed_from_checkpoint is True
+        assert result2.rows_extracted == 3
+        assert result2.rows_transformed == 3
+        assert result2.rows_loaded == 3
+        assert loader.loaded_count == 3

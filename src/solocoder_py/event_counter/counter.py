@@ -47,28 +47,23 @@ class EventCounter:
 
     def record(self, event: Event) -> None:
         with self._lock:
-            timestamp = event.timestamp
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=timezone.utc)
-
-            for granularity in Granularity:
-                window = TimeWindow.from_timestamp(timestamp, granularity)
-                self._store.increment(window, event.count)
-
+            self._record_one(event)
             self._maybe_cleanup()
 
     def record_many(self, events: list[Event]) -> None:
         with self._lock:
             for event in events:
-                timestamp = event.timestamp
-                if timestamp.tzinfo is None:
-                    timestamp = timestamp.replace(tzinfo=timezone.utc)
-
-                for granularity in Granularity:
-                    window = TimeWindow.from_timestamp(timestamp, granularity)
-                    self._store.increment(window, event.count)
-
+                self._record_one(event)
             self._maybe_cleanup()
+
+    def _record_one(self, event: Event) -> None:
+        timestamp = event.timestamp
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+        for granularity in Granularity:
+            window = TimeWindow.from_timestamp(timestamp, granularity)
+            self._store.increment(window, event.count)
 
     def query(
         self,
@@ -145,6 +140,9 @@ class EventCounter:
             if not finer_granularity.is_finer_than(target_window.granularity):
                 continue
 
+            if not self._is_finer_data_complete(target_window, finer_granularity):
+                continue
+
             total = 0
             has_any_finer = False
 
@@ -171,6 +169,24 @@ class EventCounter:
 
         return None
 
+    def _is_finer_data_complete(
+        self, target_window: TimeWindow, finer_granularity: Granularity
+    ) -> bool:
+        config = self._configs[finer_granularity]
+        retention_cutoff = self._clock() - config.retention
+
+        if target_window.start >= retention_cutoff:
+            return True
+
+        if target_window.end <= retention_cutoff:
+            return False
+
+        overlap_duration = target_window.end - retention_cutoff
+        total_duration = target_window.end - target_window.start
+        overlap_ratio = overlap_duration.total_seconds() / total_duration.total_seconds()
+
+        return overlap_ratio >= 0.5
+
     def _try_resolve_from_coarser(self, target_window: TimeWindow) -> Optional[CountResult]:
         for coarser_granularity in Granularity:
             if not coarser_granularity.is_coarser_than(target_window.granularity):
@@ -185,9 +201,20 @@ class EventCounter:
                     / target_window.granularity.duration.total_seconds()
                 )
                 if num_finer_in_coarser > 0:
+                    offset_seconds = (
+                        target_window.start - coarser_window.start
+                    ).total_seconds()
+                    window_index = int(
+                        offset_seconds / target_window.granularity.duration.total_seconds()
+                    )
+
+                    base = coarser_count // num_finer_in_coarser
+                    remainder = coarser_count % num_finer_in_coarser
+                    estimated = base + (1 if window_index < remainder else 0)
+
                     return CountResult(
                         window=target_window,
-                        count=coarser_count // num_finer_in_coarser,
+                        count=estimated,
                         is_estimated=True,
                         source_granularity=coarser_granularity,
                     )

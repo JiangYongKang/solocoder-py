@@ -123,12 +123,12 @@ class TestMaskingStrategy:
     def test_empty_phone(self):
         masker = MaskingStrategy()
         result = masker.mask_phone("")
-        assert result == "***"
+        assert result == ""
 
     def test_empty_id_card(self):
         masker = MaskingStrategy()
         result = masker.mask_id_card("")
-        assert result == "***"
+        assert result == ""
 
     def test_whitespace_phone(self):
         masker = MaskingStrategy()

@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from .exceptions import (
     CheckpointCorruptedError,
     FatalEtlError,
+    StageNotReachableError,
 )
 from .models import (
     STAGE_COMPLETED,
@@ -239,9 +240,15 @@ class ETLPipeline:
         if self._checkpoint_store is not None:
             self._checkpoint_store.delete(self._job_id)
 
-    def run(self) -> PipelineResult:
+    def run(self, run_until_stage: Optional[str] = None) -> PipelineResult:
         with self._lock:
             result = PipelineResult()
+
+            valid_stages = {STAGE_EXTRACT, STAGE_TRANSFORM, STAGE_LOAD, None}
+            if run_until_stage is not None and run_until_stage not in valid_stages:
+                raise ValueError(
+                    f"run_until_stage must be one of {valid_stages}, got '{run_until_stage}'"
+                )
 
             checkpoint = self._new_checkpoint()
             try:
@@ -257,6 +264,12 @@ class ETLPipeline:
                 result.fatal_error.__cause__ = e
                 return result
 
+            if run_until_stage is not None and checkpoint.is_stage_completed(run_until_stage):
+                raise StageNotReachableError(
+                    stage=run_until_stage,
+                    completed_stage=checkpoint.last_completed_stage or "none",
+                )
+
             if checkpoint.is_job_completed():
                 result.completed = True
                 result.rows_extracted = checkpoint.rows_extracted
@@ -266,16 +279,26 @@ class ETLPipeline:
 
             try:
                 extracted_rows = self._run_extract(checkpoint, result)
+                if run_until_stage == STAGE_EXTRACT:
+                    result.rows_extracted = checkpoint.rows_extracted
+                    return result
+
                 transformed_pairs = self._run_transform(
                     checkpoint, extracted_rows, result
                 )
+                if run_until_stage == STAGE_TRANSFORM:
+                    result.rows_transformed = checkpoint.rows_transformed
+                    return result
+
                 self._run_load(checkpoint, transformed_pairs, result)
                 checkpoint.mark_stage_completed(STAGE_COMPLETED)
                 self._persist(checkpoint)
                 result.completed = True
             except FatalEtlError as e:
                 result.fatal_error = e
-            except BaseException as e:
+            except StageNotReachableError:
+                raise
+            except Exception as e:
                 msg = f"Unexpected fatal error: {e}"
                 result.fatal_error = FatalEtlError(msg)
                 result.fatal_error.__cause__ = e
@@ -295,25 +318,30 @@ class ETLPipeline:
                     return restored
             return rows
 
+        if (
+            checkpoint.rows_extracted > 0
+            and not checkpoint.is_stage_completed(STAGE_EXTRACT)
+            and self._checkpoint_store is not None
+        ):
+            restored = self._checkpoint_store.load_extracted(self._job_id)
+            if restored is not None and len(restored) == checkpoint.rows_extracted:
+                checkpoint.mark_stage_completed(STAGE_EXTRACT)
+                self._persist(checkpoint)
+                result.rows_extracted = checkpoint.rows_extracted
+                return restored
+
         try:
             for row in self._extractor.extract():
                 rows.append(row)
                 checkpoint.rows_extracted += 1
         except FatalEtlError:
             raise
-        except BaseException as e:
-            for row in rows:
-                result.error_records.append(ErrorRecord(
-                    original_row=row,
-                    stage=STAGE_EXTRACT,
-                    error_type=type(e).__name__,
-                    error_message=str(e),
-                ))
-                checkpoint.rows_failed += 1
-            checkpoint.mark_stage_completed(STAGE_EXTRACT)
+        except Exception as e:
+            if rows and self._checkpoint_store is not None:
+                self._checkpoint_store.save_extracted(self._job_id, rows)
             self._persist(checkpoint)
             result.rows_extracted = checkpoint.rows_extracted
-            raise FatalEtlError(f"Extractor failed: {e}") from e
+            raise FatalEtlError(f"Extractor failed after {len(rows)} rows: {e}") from e
 
         checkpoint.mark_stage_completed(STAGE_EXTRACT)
         if self._checkpoint_store is not None:
@@ -351,7 +379,7 @@ class ETLPipeline:
                 try:
                     pairs.append((row, row.data))
                     checkpoint.rows_transformed += 1
-                except BaseException as e:
+                except Exception as e:
                     result.error_records.append(ErrorRecord(
                         original_row=row,
                         stage=STAGE_TRANSFORM,
@@ -373,7 +401,7 @@ class ETLPipeline:
                 self._persist(checkpoint)
                 result.rows_transformed = checkpoint.rows_transformed
                 raise
-            except BaseException as e:
+            except Exception as e:
                 result.error_records.append(ErrorRecord(
                     original_row=row,
                     stage=STAGE_TRANSFORM,
@@ -415,7 +443,7 @@ class ETLPipeline:
                 self._persist(checkpoint)
                 result.rows_loaded = checkpoint.rows_loaded
                 raise
-            except BaseException as e:
+            except Exception as e:
                 result.error_records.append(ErrorRecord(
                     original_row=row,
                     stage=STAGE_LOAD,

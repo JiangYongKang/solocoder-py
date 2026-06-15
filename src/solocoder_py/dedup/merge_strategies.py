@@ -100,7 +100,7 @@ def merge_group(
     strategy: str = STRATEGY_FIRST,
     custom_merge: MergeFunction | None = None,
     field_strategies: dict[str, str] | None = None,
-    fallback_strategy: str = STRATEGY_FIRST,
+    fallback_strategy: str = STRATEGY_LAST,
 ) -> MergeResult:
     if not group.records:
         raise MergeConflictError("Cannot merge empty group")
@@ -121,29 +121,36 @@ def merge_group(
     merged: Record = {}
     conflict_fields: list[str] = []
     merged_fields: list[str] = []
+    fallback_fields: list[str] = []
 
     def _apply_strategy(
         field_name: str,
         field_values: list[Any],
         strat: str,
-    ) -> Any:
-        if strat == STRATEGY_CUSTOM and custom_merge is not None:
+    ) -> tuple[Any, bool]:
+        used_fallback = False
+        current_strat = strat
+
+        if current_strat == STRATEGY_CUSTOM and custom_merge is not None:
             try:
-                return custom_merge(field_name, field_values)
+                return custom_merge(field_name, field_values), False
             except Exception:
-                strat = fallback_strategy
+                current_strat = fallback_strategy
+                used_fallback = True
 
-        if strat == STRATEGY_CUSTOM and custom_merge is None:
-            strat = fallback_strategy
+        if current_strat == STRATEGY_CUSTOM and custom_merge is None:
+            current_strat = fallback_strategy
+            used_fallback = True
 
-        resolver = _STRATEGY_RESOLVERS.get(strat)
+        resolver = _STRATEGY_RESOLVERS.get(current_strat)
         if resolver is None:
-            resolver = _STRATEGY_RESOLVERS[fallback_strategy]
+            resolver = _STRATEGY_RESOLVERS.get(fallback_strategy)
+            used_fallback = True
 
         try:
-            return resolver(field_name, field_values)
+            return resolver(field_name, field_values), used_fallback
         except Exception:
-            return field_values[0]
+            return field_values[0], True
 
     for field in all_fields:
         values = [r.get(field) for r in records]
@@ -155,11 +162,15 @@ def merge_group(
         conflict_fields.append(field)
 
         field_strategy = (field_strategies or {}).get(field, strategy)
-        merged[field] = _apply_strategy(field, values, field_strategy)
+        merged_value, used_fallback = _apply_strategy(field, values, field_strategy)
+        merged[field] = merged_value
         merged_fields.append(field)
+        if used_fallback:
+            fallback_fields.append(field)
 
     return MergeResult(
         record=merged,
         conflict_fields=conflict_fields,
         merged_fields=merged_fields,
+        fallback_fields=fallback_fields,
     )

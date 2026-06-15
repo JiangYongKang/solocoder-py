@@ -130,9 +130,9 @@
   ↓
 计算事件所属窗口
   ↓
-窗口已关闭? → 是 → [路径3] 拒绝 (WindowAlreadyClosedError)
-  ↓ 否
 水位线 >= 窗口结束时间 + 允许迟到时间? → 是 → [路径2] 丢弃 (LateEventDroppedError)
+  ↓ 否
+窗口已关闭? → 是 → [路径3] 拒绝 (WindowAlreadyClosedError)
   ↓ 否
 水位线 >= 窗口结束时间? → 是 → [路径1] 归窗并输出中间更新
   ↓ 否

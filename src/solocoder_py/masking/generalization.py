@@ -6,7 +6,7 @@ from .exceptions import GeneralizationError, InvalidConfigurationError
 from .models import GeneralizationConfig, GeneralizationLevel
 
 
-def generalize_age(value: Any, level: int) -> str:
+def generalize_age(value: Any, level: int, step_years: Optional[int] = None) -> str:
     if value is None:
         return ""
 
@@ -17,6 +17,9 @@ def generalize_age(value: Any, level: int) -> str:
 
     if age < 0:
         return "invalid"
+
+    if step_years is not None and step_years > 0:
+        return _generalize_age_dynamic(age, level, step_years)
 
     if level == 0:
         return str(age)
@@ -44,6 +47,29 @@ def generalize_age(value: Any, level: int) -> str:
             return "35-54"
         else:
             return "55+"
+    elif level == 3:
+        if age < 18:
+            return "minor"
+        else:
+            return "adult"
+    elif level >= 4:
+        return "*"
+    else:
+        return str(age)
+
+
+def _generalize_age_dynamic(age: int, level: int, step: int) -> str:
+    if level == 0:
+        return str(age)
+    elif level == 1:
+        start = (age // step) * step
+        end = start + step
+        return f"{start}-{end}"
+    elif level == 2:
+        step2 = step * 2
+        start = (age // step2) * step2
+        end = start + step2
+        return f"{start}-{end}"
     elif level == 3:
         if age < 18:
             return "minor"
@@ -235,33 +261,40 @@ class GeneralizationStrategy:
 
     @classmethod
     def create_age_generalizer(
-        cls, default_level: int = 0
+        cls, default_level: int = 0, step_years: Optional[int] = None
     ) -> "GeneralizationStrategy":
+        if step_years and step_years > 0:
+            level1_desc = f"{step_years}-year ranges"
+            level2_desc = f"{step_years * 2}-year ranges"
+        else:
+            level1_desc = "10-year ranges"
+            level2_desc = "20-year ranges"
+
         levels = [
             GeneralizationLevel(
                 level=0,
                 description="Exact age",
-                generalize_func=lambda v: generalize_age(v, 0),
+                generalize_func=lambda v: generalize_age(v, 0, step_years=step_years),
             ),
             GeneralizationLevel(
                 level=1,
-                description="10-year ranges",
-                generalize_func=lambda v: generalize_age(v, 1),
+                description=level1_desc,
+                generalize_func=lambda v: generalize_age(v, 1, step_years=step_years),
             ),
             GeneralizationLevel(
                 level=2,
-                description="20-year ranges",
-                generalize_func=lambda v: generalize_age(v, 2),
+                description=level2_desc,
+                generalize_func=lambda v: generalize_age(v, 2, step_years=step_years),
             ),
             GeneralizationLevel(
                 level=3,
                 description="Adult/minor",
-                generalize_func=lambda v: generalize_age(v, 3),
+                generalize_func=lambda v: generalize_age(v, 3, step_years=step_years),
             ),
             GeneralizationLevel(
                 level=4,
                 description="Full suppression",
-                generalize_func=lambda v: generalize_age(v, 4),
+                generalize_func=lambda v: generalize_age(v, 4, step_years=step_years),
             ),
         ]
         return cls(

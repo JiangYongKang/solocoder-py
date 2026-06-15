@@ -11,6 +11,7 @@ from .exceptions import (
 from .models import (
     NegotiationResult,
     ParsedVersion,
+    VersionType,
     VersionHandler,
     VersionedRequest,
     VersionedResponse,
@@ -34,6 +35,7 @@ __all__ = [
     "VersionNotFoundError",
     "NegotiationResult",
     "ParsedVersion",
+    "VersionType",
     "VersionHandler",
     "VersionedRequest",
     "VersionedResponse",

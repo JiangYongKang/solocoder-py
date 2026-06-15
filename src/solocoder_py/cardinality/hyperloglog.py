@@ -54,6 +54,9 @@ def _count_leading_zeros_plus_one(value: int, width: int) -> int:
 
 
 class HyperLogLog:
+    _lock_seq = 0
+    _lock_seq_lock = threading.Lock()
+
     def __init__(self, standard_error: float | None = None, num_registers: int | None = None) -> None:
         if standard_error is not None and num_registers is None:
             p = _standard_error_to_p(standard_error)
@@ -73,6 +76,9 @@ class HyperLogLog:
         self._alpha = _alpha_m(self._m)
         self._registers = bytearray(self._m)
         self._lock = threading.RLock()
+        with HyperLogLog._lock_seq_lock:
+            HyperLogLog._lock_seq += 1
+            self._lock_id = HyperLogLog._lock_seq
         self._standard_error = 1.04 / math.sqrt(self._m)
 
     @property
@@ -110,9 +116,12 @@ class HyperLogLog:
     def cardinality(self) -> int:
         with self._lock:
             registers = list(self._registers)
+        return self._compute_cardinality_from(registers)
 
-        m = self._m
-        alpha = self._alpha
+    @staticmethod
+    def _compute_cardinality_from(registers: list[int]) -> int:
+        m = len(registers)
+        alpha = _alpha_m(m)
 
         harmonic_sum = 0.0
         zero_count = 0
@@ -144,8 +153,9 @@ class HyperLogLog:
 
     def merge(self: T, other: T) -> T:
         self._check_compatible(other)
-        with self._lock:
-            with other._lock:
+        first, second = (self, other) if self._lock_id <= other._lock_id else (other, self)
+        with first._lock:
+            with second._lock:
                 merged_registers = bytearray(self._m)
                 for i in range(self._m):
                     merged_registers[i] = max(self._registers[i], other._registers[i])
@@ -161,9 +171,17 @@ class HyperLogLog:
 
     def intersection_cardinality(self: T, other: T) -> int:
         self._check_compatible(other)
-        a_card = self.cardinality()
-        b_card = other.cardinality()
-        union_card = self.union(other).cardinality()
+        first, second = (self, other) if self._lock_id <= other._lock_id else (other, self)
+        with first._lock:
+            with second._lock:
+                a_registers = list(self._registers)
+                b_registers = list(other._registers)
+                merged_registers = bytearray(self._m)
+                for i in range(self._m):
+                    merged_registers[i] = max(a_registers[i], b_registers[i])
+        a_card = self._compute_cardinality_from(a_registers)
+        b_card = self._compute_cardinality_from(b_registers)
+        union_card = self._compute_cardinality_from(list(merged_registers))
         result = a_card + b_card - union_card
         return max(0, result)
 

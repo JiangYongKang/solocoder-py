@@ -72,12 +72,25 @@ class RateLimiter:
             return self._bucket.estimated_wait_time(tokens_needed)
 
     def try_acquire(self, tokens: int = 1) -> AcquireResult:
-        with self._lock:
-            return self._bucket.try_acquire(tokens)
+        return self._bucket.try_acquire(tokens)
 
     def acquire(self, tokens: int = 1, timeout: Optional[float] = None) -> AcquireResult:
-        with self._lock:
-            return self._bucket.acquire(tokens, timeout)
+        return self._bucket.acquire(tokens, timeout)
+
+    def _apply_sync_strategy(self, headers: RateLimitHeaders) -> None:
+        server_remaining = headers.remaining
+        server_reset = headers.reset
+
+        if self._sync_strategy == SyncStrategy.MIN:
+            self._bucket.sync_with_server(
+                server_remaining=server_remaining,
+                server_reset_time=server_reset,
+            )
+        elif self._sync_strategy == SyncStrategy.SERVER:
+            if server_remaining is not None:
+                self._bucket.set_tokens(max(0, min(server_remaining, self._bucket.capacity)))
+            if server_reset is not None and server_reset <= self._clock.now():
+                self._bucket.set_tokens(self._bucket.capacity)
 
     def update_from_response_headers(self, headers: Dict[str, Any]) -> None:
         with self._lock:
@@ -87,42 +100,12 @@ class RateLimiter:
                 raise
 
             self._last_headers = parsed
-
-            server_remaining = parsed.remaining
-            server_reset = parsed.reset
-
-            if self._sync_strategy == SyncStrategy.MIN:
-                self._bucket.sync_with_server(
-                    server_remaining=server_remaining,
-                    server_reset_time=server_reset,
-                )
-            elif self._sync_strategy == SyncStrategy.SERVER:
-                if server_remaining is not None:
-                    self._bucket.set_tokens(max(0, min(server_remaining, self._bucket.capacity)))
-                if server_reset is not None and server_reset <= self._clock.now():
-                    self._bucket.set_tokens(self._bucket.capacity)
-            elif self._sync_strategy == SyncStrategy.LOCAL:
-                pass
+            self._apply_sync_strategy(parsed)
 
     def update_from_headers_object(self, headers: RateLimitHeaders) -> None:
         with self._lock:
             self._last_headers = headers
-
-            server_remaining = headers.remaining
-            server_reset = headers.reset
-
-            if self._sync_strategy == SyncStrategy.MIN:
-                self._bucket.sync_with_server(
-                    server_remaining=server_remaining,
-                    server_reset_time=server_reset,
-                )
-            elif self._sync_strategy == SyncStrategy.SERVER:
-                if server_remaining is not None:
-                    self._bucket.set_tokens(max(0, min(server_remaining, self._bucket.capacity)))
-                if server_reset is not None and server_reset <= self._clock.now():
-                    self._bucket.set_tokens(self._bucket.capacity)
-            elif self._sync_strategy == SyncStrategy.LOCAL:
-                pass
+            self._apply_sync_strategy(headers)
 
     def reset(self) -> None:
         with self._lock:

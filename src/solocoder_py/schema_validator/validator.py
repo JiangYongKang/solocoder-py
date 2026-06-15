@@ -119,13 +119,19 @@ class SchemaValidator:
                         path=field_path,
                         error_type="type_mismatch",
                         message=(
-                            f"Expected type '{field_schema.type.value}' "
+                            f"Field '{field_path}' expected type '{field_schema.type.value}' "
                             f"but got '{type(value).__name__}'"
                         ),
                         expected=field_schema.type.value,
                         actual=type(value).__name__,
                     )
                 )
+                if field_schema.type == FieldType.OBJECT and field_schema.properties:
+                    self._report_nested_required_missing(
+                        parent_path=field_path,
+                        properties=field_schema.properties,
+                        errors=errors,
+                    )
                 continue
 
             if field_schema.type in (FieldType.INTEGER, FieldType.FLOAT):
@@ -299,27 +305,40 @@ class SchemaValidator:
         field_path: str,
         errors: list[ValidationErrorItem],
     ) -> None:
-        if field_schema.min_value is not None and value < field_schema.min_value:
+        has_min = field_schema.min_value is not None
+        has_max = field_schema.max_value is not None
+        if has_min and has_max:
+            range_str = f"[{field_schema.min_value}, {field_schema.max_value}]"
+        elif has_min:
+            range_str = f"[{field_schema.min_value}, +∞)"
+        elif has_max:
+            range_str = f"(-∞, {field_schema.max_value}]"
+        else:
+            range_str = "(-∞, +∞)"
+
+        if has_min and value < field_schema.min_value:
             errors.append(
                 ValidationErrorItem(
                     path=field_path,
                     error_type="value_out_of_range",
                     message=(
-                        f"Value {value} is less than minimum {field_schema.min_value}"
+                        f"Value {value} is less than minimum {field_schema.min_value} "
+                        f"(allowed range: {range_str}, current value: {value})"
                     ),
-                    expected=f">= {field_schema.min_value}",
+                    expected=range_str,
                     actual=str(value),
                 )
             )
-        if field_schema.max_value is not None and value > field_schema.max_value:
+        if has_max and value > field_schema.max_value:
             errors.append(
                 ValidationErrorItem(
                     path=field_path,
                     error_type="value_out_of_range",
                     message=(
-                        f"Value {value} is greater than maximum {field_schema.max_value}"
+                        f"Value {value} is greater than maximum {field_schema.max_value} "
+                        f"(allowed range: {range_str}, current value: {value})"
                     ),
-                    expected=f"<= {field_schema.max_value}",
+                    expected=range_str,
                     actual=str(value),
                 )
             )
@@ -332,28 +351,41 @@ class SchemaValidator:
         errors: list[ValidationErrorItem],
     ) -> None:
         length = len(value)
-        if field_schema.min_length is not None and length < field_schema.min_length:
+        has_min = field_schema.min_length is not None
+        has_max = field_schema.max_length is not None
+        if has_min and has_max:
+            range_str = f"[{field_schema.min_length}, {field_schema.max_length}]"
+        elif has_min:
+            range_str = f"[{field_schema.min_length}, +∞)"
+        elif has_max:
+            range_str = f"[0, {field_schema.max_length}]"
+        else:
+            range_str = "[0, +∞)"
+
+        if has_min and length < field_schema.min_length:
             errors.append(
                 ValidationErrorItem(
                     path=field_path,
                     error_type="length_out_of_range",
                     message=(
-                        f"String length {length} is less than minimum {field_schema.min_length}"
+                        f"String length {length} is less than minimum {field_schema.min_length} "
+                        f"(allowed length range: {range_str}, actual length: {length})"
                     ),
-                    expected=f"length >= {field_schema.min_length}",
-                    actual=f"length = {length}",
+                    expected=range_str,
+                    actual=f"length={length}",
                 )
             )
-        if field_schema.max_length is not None and length > field_schema.max_length:
+        if has_max and length > field_schema.max_length:
             errors.append(
                 ValidationErrorItem(
                     path=field_path,
                     error_type="length_out_of_range",
                     message=(
-                        f"String length {length} is greater than maximum {field_schema.max_length}"
+                        f"String length {length} is greater than maximum {field_schema.max_length} "
+                        f"(allowed length range: {range_str}, actual length: {length})"
                     ),
-                    expected=f"length <= {field_schema.max_length}",
-                    actual=f"length = {length}",
+                    expected=range_str,
+                    actual=f"length={length}",
                 )
             )
 

@@ -43,7 +43,7 @@ class MaskingStrategy:
             return ""
         str_phone = str(phone).strip()
         if not str_phone:
-            return "***"
+            return ""
         if len(str_phone) < 7:
             return "*" * len(str_phone)
         return str_phone[:3] + "*" * (len(str_phone) - 7) + str_phone[-4:]
@@ -53,7 +53,7 @@ class MaskingStrategy:
             return ""
         str_id = str(id_card).strip()
         if not str_id:
-            return "***"
+            return ""
         if len(str_id) < 2:
             return "*" * len(str_id)
         return str_id[0] + "*" * (len(str_id) - 2) + str_id[-1]

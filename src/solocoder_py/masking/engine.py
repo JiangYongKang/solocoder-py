@@ -109,9 +109,10 @@ class DataMaskingEngine:
             default_level = config.get("default_level", 0)
 
             if field_type == "age":
+                step_years = config.get("step_years")
                 self._generalization_strategies[field_name] = (
                     GeneralizationStrategy.create_age_generalizer(
-                        default_level=default_level
+                        default_level=default_level, step_years=step_years
                     )
                 )
             elif field_type == "zipcode":
@@ -153,7 +154,16 @@ class DataMaskingEngine:
         try:
             if rule.strategy == StrategyType.MASKING:
                 strategy = self._masking_strategies[field_name]
-                return strategy.mask(value)
+                mask_type = rule.config.get("mask_type") if rule.config else None
+
+                if mask_type == "phone":
+                    return strategy.mask_phone(value)
+                elif mask_type == "id_card":
+                    return strategy.mask_id_card(value)
+                elif mask_type == "email":
+                    return strategy.mask_email(value)
+                else:
+                    return strategy.mask(value)
 
             elif rule.strategy == StrategyType.TOKENIZATION:
                 strategy = self._tokenization_strategies[field_name]

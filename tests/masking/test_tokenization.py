@@ -59,44 +59,6 @@ class TestTokenizationStrategy:
             tokens.append(tokenizer.tokenize(value))
         assert all(t == tokens[0] for t in tokens)
 
-    def test_detokenize_returns_original_value(self):
-        tokenizer = TokenizationStrategy()
-        original = "张三"
-        token = tokenizer.tokenize(original)
-        detokenized = tokenizer.detokenize(token)
-        assert detokenized == original
-
-    def test_detokenize_none_value(self):
-        tokenizer = TokenizationStrategy()
-        token = tokenizer.tokenize(None)
-        detokenized = tokenizer.detokenize(token)
-        assert detokenized is None
-
-    def test_detokenize_empty_string(self):
-        tokenizer = TokenizationStrategy()
-        token = tokenizer.tokenize("")
-        detokenized = tokenizer.detokenize(token)
-        assert detokenized == ""
-
-    def test_detokenize_unknown_token(self):
-        tokenizer = TokenizationStrategy()
-        tokenizer.tokenize("known")
-        result = tokenizer.detokenize("unknown_token")
-        assert result is None
-
-    def test_is_token(self):
-        tokenizer = TokenizationStrategy()
-        token = tokenizer.tokenize("test")
-        assert tokenizer.is_token(token)
-        assert not tokenizer.is_token("not_a_token")
-        assert not tokenizer.is_token(123)
-
-    def test_contains_operator(self):
-        tokenizer = TokenizationStrategy()
-        tokenizer.tokenize("test_value")
-        assert "test_value" in tokenizer
-        assert "not_in_tokenizer" not in tokenizer
-
     def test_clear_cache(self):
         tokenizer = TokenizationStrategy()
         tokenizer.tokenize("value1")
@@ -109,6 +71,12 @@ class TestTokenizationStrategy:
         token1 = tokenizer.tokenize("value1")
         token2 = tokenizer.tokenize("value1")
         assert token1 == token2
+
+    def test_contains_operator(self):
+        tokenizer = TokenizationStrategy()
+        tokenizer.tokenize("test_value")
+        assert "test_value" in tokenizer
+        assert "not_in_tokenizer" not in tokenizer
 
     def test_get_token_count(self):
         tokenizer = TokenizationStrategy()
@@ -188,7 +156,8 @@ class TestTokenizationStrategy:
         for value in unicode_values:
             token = tokenizer.tokenize(value)
             assert token is not None
-            assert tokenizer.detokenize(token) == value
+            token2 = tokenizer.tokenize(value)
+            assert token == token2
 
     def test_special_characters(self):
         tokenizer = TokenizationStrategy()
@@ -204,7 +173,6 @@ class TestTokenizationStrategy:
             token1 = tokenizer.tokenize(value)
             token2 = tokenizer.tokenize(value)
             assert token1 == token2
-            assert tokenizer.detokenize(token1) == value
 
     def test_tokenization_config_validation(self):
         with pytest.raises(ValueError, match="token_length must be at least 8"):

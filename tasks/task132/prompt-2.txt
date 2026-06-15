@@ -1,0 +1,5 @@
+你实现的 HyperLogLog 基数估算器模块存在一些问题，需要修复：
+1. merge 方法在合并两个 HyperLogLog 实例时先获取 self._lock 再获取 other._lock，当两个线程同时调用 A.merge(B) 和 B.merge(A) 时会形成环形等待导致死锁。需要对多个锁的获取建立一致的全局顺序防止死锁。
+2. test_intersection_negative_fallback_to_zero 测试用例使用了两个完全不相交的大数据集，但断言只写了 assert result >= 0，仅验证交集结果不为负，没有验证完全不相交集合的交集估算值应为 0 或非常接近 0。如果交集计算逻辑存在 BUG 始终返回较大正数（如 500），该测试依然通过，无法真正验证负数兜底逻辑的正确性。断言条件需要足够严格才能验证功能。
+3. intersection_cardinality 方法在计算 a_card = self.cardinality() 和并集基数之间存在时间窗口，若在两次调用之间 self 或 other 被其他线程添加了新元素，a_card 反映旧状态而并集基数反映新状态，交集估算结果会偏离真实值。整个计算过程需要原子性保护防止并发写入干扰。
+4. 修复后需要重新运行 poetry run pytest tests/cardinality/ -v，需要让所有测试通过。
