@@ -414,3 +414,5 @@ class TestOptimizationCorrectness:
         brand_facet = get_facet_by_name(result, "brand")
         assert get_facet_value_count(brand_facet, "苹果") == 1
         assert get_facet_value_count(brand_facet, "联想") == 0
+acet_value_count(brand_facet, "苹果") == 1
+        assert get_facet_value_count(brand_facet, "联想") == 0
