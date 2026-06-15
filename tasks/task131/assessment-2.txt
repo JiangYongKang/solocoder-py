@@ -1,11 +1,8 @@
 产物不满意：
-1. processor.py 的 _is_event_droppable 方法修复存在逻辑缺陷。模型新增了 window_start 参数和 "window_start not in self._windows" 检查，但检查之后两个分支都无条件返回 True，新增的窗口存在性检查形同虚设——无论窗口是否存在于 _windows 中，只要水位线判定过期就一律返回 True。同时新增的 event_timestamp 参数在方法体内完全未被使用，属于冗余参数。根因是模型只模仿了"添加检查"的表面形式，却没有实现有区分度的分支逻辑。正确做法是在窗口存在于 _windows 的分支中根据窗口是否已关闭做进一步判断，而非与窗口不存在的情况合并为相同返回值。
-
-2. on_event 方法判断顺序调整为先路径2（丢弃）后路径3（拒绝）后，当窗口存在于 _windows 中且 is_closed 为 True 时，事件会被 _is_event_droppable 拦截抛出 LateEventDroppedError，永远无法到达 WindowAlreadyClosedError 分支。同时 _dropped_late_count 随之错误递增，而 _rejected_closed_count 在该场景下永远无法被触发，两个计数器发生交叉污染。根因是模型在调整顺序时只考虑了窗口不存在于 _windows 的简单场景，未分析窗口存在且已关闭这个交叉场景下两种异常类型的正确归属问题。
+1. processor.py 的 _is_event_droppable 方法修复存在逻辑缺陷。模型新增了 window_start 参数和 "window_start not in self._windows" 检查，但检查之后两个分支都无条件返回 True，窗口存在性检查形同虚设。同时新增的 event_timestamp 参数在方法体内完全未被使用。根因是模型只模仿了"添加检查"的表面形式，未实现有区分度的分支逻辑。
+2. on_event 方法判断顺序调整后，当窗口存在于 _windows 且 is_closed 为 True 时，事件会被 _is_event_droppable 拦截抛出 LateEventDroppedError，永远无法到达 WindowAlreadyClosedError 分支。_dropped_late_count 错误递增而 _rejected_closed_count 永远无法触发。根因是模型未分析窗口存在且已关闭这个交叉场景下两种异常的正确归属。
 
 过程不满意：
-1. 模型在刚收到提示词后未经任何分析直接用 todo_write 创建了8项子任务计划，然后才开始批量读取 processor.py、models.py、watermark.py 等全部源文件和测试文件。这种"先规划后分析"的顺序违反了基本工程排查原则——尚未理解问题全貌就制定了执行计划。该行为直接导致后续对问题5的分析出现了在同一逻辑点上反复推翻自己三次才做出决定的严重低效。正确做法是先通读提示词和代码再规划。
-
-2. 模型在分析问题5（README与代码判断顺序不一致）时出现了反复横跳的推理低效。它先认为"代码也是先路径3再路径2，和README一致"，然后推翻说"当 existing_state 为 None 时路径3不触发导致代码实际先走路径2"，接着继续分析后又觉得原顺序更合理，最终决定调转判断顺序。整个分析过程在同一问题上立场摇摆了三次才做出决定，说明模型缺乏系统性的场景分类方法。应先列出所有场景矩阵（窗口存在/不存在、已关闭/未关闭、已过期/未过期）再逐场景判断应走的路径和应抛出的异常类型。
-
-3. 模型修复 process_source 水位线公式时经历了两轮试错。第一次将公式从 "max_event_time + delay + allowed_lateness + window_size" 简化为 "max_event_time + delay + allowed_lateness"（直接去掉 window_size），运行测试后发现2个失败用例；第二次改用 last_window_start 和 last_window_end 的精确计算才通过。第一轮修改前模型未做数学推演就急于编码并运行测试，导致不必要的返工。正确做法是先分析最后一个窗口关闭所需的最小水位线值由窗口结束时间决定，再推导公式应为 last_window_end + allowed_lateness。
+1. 模型在刚收到提示词后未经分析就用 todo_write 创建了 8 项子任务，然后才开始读取代码。这种"先规划后分析"的顺序违反了基本工程排查原则，直接导致后续对同一逻辑点反复推翻三次才做出决定。正确做法是先通读提示词和代码再规划。
+2. 模型在分析 README 与代码判断顺序不一致问题时出现了反复横跳。先认为代码也与 README 一致，然后推翻说 existing_state 为 None 时路径 3 不触发，最后决定调转判断顺序。同一问题立场摇摆三次才决定。应先列出场景矩阵逐项判断应走的路径和异常类型。
+3. 模型修复 process_source 水位线公式时经历两轮试错。第一次将公式简化为 max_event_time + delay + allowed_lateness，测试失败后改用 last_window_start 和 last_window_end 的精确计算才通过。第一轮修改前未做数学推演就编码运行，导致不必要返工。

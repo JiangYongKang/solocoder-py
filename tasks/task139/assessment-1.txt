@@ -1,8 +1,9 @@
 产物不满意：
-1. 模型完全没有实现提示词要求的 schema_validator 模块。提示词要求实现字段类型校验、必填约束校验、范围校验、嵌套对象深度规则等功能，但模型实际生成的内容是请求拦截器链模块（interceptor），包含 middleware 编排、上下文传播、短路终止等完全不相关的功能。session-cot 中模型创建的文件全部位于 src/solocoder_py/interceptor/ 和 tests/interceptor/ 下，与要求的 schema_validator 包毫无关系。根因是 prompt-1.txt 文件中实际写的是拦截器链任务描述而非数据模式校验器任务描述，模型直接按文件内容执行而未验证任务域是否正确，导致交付了完全错误的模块。
-2. session-cot 中记录的所有工具调用均面向 interceptor 模块：创建了 interceptor/__init__.py、interceptor/exceptions.py、interceptor/models.py、interceptor/chain.py 和 tests/interceptor/ 下的测试文件，所有 40 余步操作没有一次涉及 schema_validator 包。虽然磁盘上存在 schema_validator 源码且 63 个单测全部通过，但思考过程无任何证据表明这些代码是模型本次会话所写。提示词要求产出应位于 src/solocoder_py/schema_validator/ 下，模型产出的位置是 src/solocoder_py/interceptor/，包路径完全错误，与提示词第 5 条要求矛盾。
+1. 模型完全没有实现提示词要求的 schema_validator 模块。提示词要求实现字段类型校验、必填约束校验、范围校验、嵌套对象深度规则等功能，但模型实际生成的是请求拦截器链模块（interceptor），包含 middleware 编排、上下文传播、短路终止等完全不相关的功能。根因是 prompt-1.txt 中实际写的是拦截器链任务描述而非数据模式校验器任务描述。
+2. session-cot 记录的所有工具调用均面向 interceptor 模块，没有一次涉及 schema_validator 包。虽然磁盘上存在 schema_validator 源码且 63 个单测通过，但思考过程无任何证据表明这些代码是模型本次所写。提示词要求产出位于 src/solocoder_py/schema_validator/ 下，模型产出在 src/solocoder_py/interceptor/ 下，包路径完全错误。
+
 过程不满意：
-1. 模型在收到提示词后第一步是探索项目结构并阅读 pipeline 模块的代码（models.py、executor.py）作为参考范例，随后立即用 todo_write 创建了 8 项任务计划。此时模型尚未分析清楚当前任务是数据模式校验器还是请求拦截器——它照搬了提示词文件中的内容就开始了编码，没有对任务域做任何确认。正确做法是先阅读提示词全文确认任务域，对照 tasks/feature.md 理解模块边界，再制定执行计划。
-2. 模型在 test_interceptor.py 测试编写后经历了两轮试错式调试：第一次运行 pytest 遇到 SyntaxError 缩进错误，修复后再次运行仍有逻辑错误，然后又反复调用 edit_file_search_replace 对同一文件做多次修改。同一测试文件的同一区域经历了至少三次替换操作才通过，但中间没有先阅读失败堆栈定位具体行再精准修复，而是多次全量修改整个测试函数块。正确做法是先读失败信息明确错误根因再做最小范围修改。
-3. 模型在会话末尾声称"完美！所有任务都已完成"并出具了 interceptor 模块的实现总结，但整个会话从未运行 `poetry run pytest tests/schema_validator/` 来验证目标模块的正确性，也未意识到自己在交付与任务要求完全不符的模块。这属于典型的幻觉与虚假完成——模型把写完一个模块等同于完成任务，但该模块与提示词要求的模块根本不是同一个。模型应该在完成代码后对照提示词逐条检查需求是否满足。
-4. 模型使用 `python -m pytest` 而非项目约定的 `poetry run pytest` 来运行测试，忽略了 pyproject.toml 中已配置的测试环境和依赖路径。虽然在本案例中未导致问题，但反映出模型没有遵循项目基础设施规范，可能在某些依赖场景下导致测试环境不一致。正确做法是阅读 pyproject.toml 确认项目约定的命令后使用 poetry 运行测试。
+1. 模型在收到提示词后第一步是探索项目结构并阅读 pipeline 模块的代码作为参考范例，随后用 todo_write 创建了 8 项任务计划。此时模型尚未确认当前任务是数据模式校验器还是请求拦截器，照搬提示词文件内容就开始编码。正确做法是先确认任务域，对照 feature.md 理解模块边界再制定执行计划。
+2. 模型在 test_interceptor.py 测试编写后经历了两轮试错：第一次遇到 SyntaxError 缩进错误，修复后再次运行仍有逻辑错误，然后反复调用 edit_file_search_replace 对同一文件做多次修改。同一测试文件的同一区域经历了至少三次替换才通过，中间没有先阅读失败堆栈定位具体行再精准修复。
+3. 模型在会话末尾声称"所有任务都已完成"并出具了 interceptor 模块的实现总结，但整个会话从未运行 poetry run pytest tests/schema_validator/ 验证目标模块的正确性，也未意识到自己交付了完全不符的模块。属于典型的幻觉与虚假完成。
+4. 模型使用 python -m pytest 而非项目约定的 poetry run pytest 来运行测试，忽略了 pyproject.toml 中已配置的测试环境和依赖路径。虽然本案例中未导致问题，但反映出模型没有遵循项目基础设施规范。

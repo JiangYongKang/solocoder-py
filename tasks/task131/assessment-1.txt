@@ -1,11 +1,11 @@
 产物不满意：
-1. processor.py 的 _process_window_closures 方法中，当窗口状态 count 为 0 时空窗口仅被标记 is_closed 但未被从 _windows 字典中删除。158 行的 if 条件限定 count > 0 时才会设置 final_output_emitted，而 163-167 行的清理循环中又仅在 final_output_emitted 为 True 时才 del 窗口，导致空窗口对象被标记关闭后仍滞留在 _windows 中。在长时间运行或窗口粒度较细的场景下，大量空窗口持续累积会造成内存泄漏。根因是空窗口的清理路径被遗漏，应在空窗口过期时直接从 _windows 中无条件删除。
-2. processor.py 的 on_event 方法 181-182 行中，当 existing_state 已关闭时，先执行 closure_results = self._process_window_closures() 再抛出 WindowAlreadyClosedError，但返回的 closure_results 变量从未被使用。同样的冗余调用也出现在 186 行的迟到丢弃分支。虽然 _process_window_closures 的副作用（闭窗标记）本身可能需要，但返回值被丢弃且该变量与后续 199 行的 was_fired 和 205 行的 closure_results 变量命名冲突，增加了阅读混淆度。应将这两个异常分支中的 _process_window_closures 调用改为不依赖返回值的纯副作用方法，或直接移除。
-3. processor.py 的 _is_event_droppable 方法（104 行）在检查事件是否可丢弃时直接委托给 WatermarkGenerator.is_window_expired 而不判断事件的时间戳是否真的属于该窗口。如果传入的事件时间戳非常小（如 ts=1000 时的 ts=5），_is_event_droppable 仍返回 True 抛出 LateEventDroppedError，但此时异常携带的 window_end 是根据事件时间戳推算出的（如 window_end=1010），而该窗口从未被创建过，异常信息可能误导下游。根因是丢弃判断未与窗口实际存在状态挂钩，应在 _is_event_droppable 中先检查 window_start 是否在 _windows 中再判断过期。
-4. processor.py 中定义了 _is_event_late 方法（101-102 行）但在整个模块中未被任何代码调用，属于死代码。该方法的功能已被 _is_event_droppable 完全覆盖，保留未使用的方法增加代码维护负担和读者困惑。应在代码审查时删除该方法或将其重新整合到 on_event 的判断流程中。
-5. README.md 中关于迟到事件的三种处理路径的判断流程图（126-140 行）与实际 processor.py 的 on_event 方法（171-206 行）实现逻辑不一致。README 先判断"窗口已关闭"再判断"水位线 >= 窗口结束时间 + 允许迟到时间"，而代码实现中先通过 _is_event_droppable 判断是否丢弃（即路径2），再通过 existing_state.is_closed 判断是否拒绝（路径3），判断顺序与文档描述相反。文档与代码的同步性不足可能导致使用者误解模块行为。
+1. processor.py 的 _process_window_closures 方法中，当窗口 count 为 0 时空窗口仅被标记 is_closed 但未被从 _windows 字典中删除，闭窗清理循环依赖 final_output_emitted 为 True 才触发 del，导致大量空窗口持续累积造成内存泄漏。根因是空窗口清理路径被遗漏，应在空窗口过期时直接从 _windows 中无条件删除。
+2. processor.py 的 on_event 方法中，当 existing_state 已关闭时先执行 _process_window_closures 获取返回值再抛 WorldowAlreadyClosedError，但返回值从未被使用且与后续变量命名冲突。迟到丢弃分支也存在相同冗余调用。应将这两个异常分支中的 _process_window_closures 调用改为纯副作用方法或移除。
+3. processor.py 的 _is_event_droppable 方法在检查事件是否可丢弃时直接委托给 WatermarkGenerator.is_window_expired，不判断事件时间戳是否真的属于该窗口。如果传入极小时戳，仍返回 True 抛出 LateEventDroppedError，但异常信息中的 window_end 对应的窗口从未创建过。应在 _is_event_droppable 中先检查 window_start 是否在 _windows 中再判断过期。
+4. processor.py 中定义了 _is_event_late 方法但在整个模块中未被任何代码调用，属于死代码。该方法的功能已被 _is_event_droppable 完全覆盖，保留未使用的方法增加代码维护负担和读者困惑。
+5. README.md 中迟到事件的判断流程图与 processor.py 的 on_event 方法实现逻辑顺序相反。README 先判断"窗口已关闭"再判断"水位线过期"，而代码先通过 _is_event_droppable 判断丢弃再通过 existing_state.is_closed 判断拒绝。文档与代码不同步可能误导使用者。
 
 过程不满意：
-1. 模型在收到提示词后第一个动作就是调用 todo_write 创建 9 项子任务，然后才开始查看项目目录结构和现有模块代码。这种在未分析需求就制定执行计划的做法导致后续反复调整任务粒度，模型在阅读 counter.py 和 stream_window 目录后，实际实现的是 event_counter 模块而非 batch_window 模块，与任务名称完全偏离。正确做法是先阅读需求提示词中指定的包路径（src/solocoder_py/batch_window/），理解任务目标后再规划实现步骤。
-2. 模型的整个思考过程（session-cot-1.md）都在围绕 event_counter 功能的实现展开，包括查看 src/solocoder_py/counter/ 下的现有代码、创建 event_counter 包、编写 61 个 event_counter 测试用例、修复 event_counter 的保留时间配置和查询范围循环条件等。但最终交付到仓库的却是 batch_window 包的 7 个源文件和 9 个测试文件（共 168 个用例），思考过程与产物完全不对应，无法追溯 batch_window 代码的设计决策和调试过程。这属于严重的可追溯性缺失，标注人员无法从思考轨迹中判断 batch_window 的实现质量和潜在问题。
-3. 模型在 process_source 方法（212-232 行）末尾计算最终水位线推进量时使用了 max_event_time + delay + allowed_lateness + window_size 的叠加公式（228 行），这个四重叠加的推进策略过于粗暴，在 window_size 较大（如 3600 秒）时会将水位线推至极远的位置，导致 process_source 方法返回大量不必要的 FINAL 结果。而且该公式也未被 README 或代码注释说明其设计意图。根因是缺乏对最终清理策略的精确模型推导，应设计更精确的判断条件而非简单叠加所有参数。
+1. 模型在收到提示词后第一个动作就是调用 todo_write 创建 9 项子任务，然后才开始查看项目目录和现有模块代码。这种未分析需求就定计划的次序导致后续反复调整任务粒度。正确做法是先阅读提示词中指定的包路径，理解任务目标后再规划实现步骤。
+2. 模型的整个思考过程围绕 event_counter 功能的实现展开，但最终交付到仓库的却是 batch_window 包的代码，思考过程与产物完全不对应，无法追溯 batch_window 代码的设计决策和调试过程，属于可追溯性缺失。
+3. 模型在 process_source 方法末尾计算水位线推进量时使用 max_event_time + delay + allowed_lateness + window_size 的四重叠加公式，在 window_size 较大时会把水位线推至极远的位置，导致返回大量不必要的 FINAL 结果。根因是缺乏精确推导，应设计更精确的判断条件。

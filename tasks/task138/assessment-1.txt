@@ -1,11 +1,11 @@
 产物不满意：
-1. RateLimiter.acquire 方法在持有 self._lock 外层锁的情况下调用 _bucket.acquire，当使用 SystemClock 时 _bucket.acquire 内部执行 time.sleep 阻塞等待。由于外层锁在 sleep 期间一直被持有，其他线程即使想调用 available_tokens 这类只读属性也会被阻塞，导致并发场景下所有 RateLimiter 操作完全串行化，吞吐量严重退化。根因是锁粒度过粗，sleep 等待不应被纳入临界区，只需对 TokenBucket 状态修改操作加锁同步即可。
-2. TokenBucket.acquire 方法在首次 try_acquire 失败后释放了 self._lock 锁，然后执行 time.sleep(wait_time) 等待，等待结束后再次 try_acquire。由于两次 try_acquire 之间锁被释放，其他线程可在此期间消费令牌——若其他线程在 sleep 期间消耗了足够多的令牌，等待线程 sleep 完整时间后仍会在第二次 try_acquire 中发现令牌不足而再次失败，形成饿死。正确做法应使用 threading.Condition 条件变量通知等待线程令牌已补充。
-3. TokenBucket.__init__ 方法显式调用了 config.validate()，但 TokenBucketConfig 类的 __post_init__ 已经执行过完全相同的验证逻辑。这意味着每次实例化 TokenBucket 时配置校验被执行两遍，虽然不影响正确性但属于不必要的冗余调用。原因是编写构造函数时未意识到 dataclass 的 __post_init__ 会自动触发验证，应删除 __init__ 中的显式 validate() 调用。
-4. RateLimiter 类中 update_from_response_headers 和 update_from_headers_object 两个方法内部的 MIN、SERVER、LOCAL 三种策略分发逻辑几乎完全一致——唯一的差异仅在输入来源上是原始 dict 还是已解析的 RateLimitHeaders 对象，其余的策略判断和 TokenBucket 操作调用完全相同。这是一处明显的代码重复，应抽取一个接收解析后 headers 参数的私有方法 _apply_header_sync 被两个公开方法共享，避免同样的同步逻辑维护两份。
-5. TokenBucket.sync_with_server 方法中对 server_reset_time 的判断使用了 if server_reset_time > current_time: pass；else: 恢复满桶的结构。pass 空操作分支没有功能错误但纯粹是多余的代码噪声，降低可读性。应直接将条件反转写为 if server_reset_time <= current_time: self._tokens = self._config.capacity，去除无操作分支。
+1. RateLimiter.acquire 方法在持有 self._lock 外层锁的情况下调用 _bucket.acquire，当使用 SystemClock 时 _bucket.acquire 内部执行 time.sleep 阻塞等待。由于外层锁在 sleep 期间一直被持有，其他线程的只读操作也被阻塞，并发场景下所有操作完全串行化。根因是锁粒度过粗，只需对 TokenBucket 状态修改操作加锁同步即可。
+2. TokenBucket.acquire 方法首次 try_acquire 失败后释放了锁，然后执行 time.sleep 等待，等待结束后再次 try_acquire。由于两次之间锁被释放，其他线程可在等待期间消费令牌，若消耗足够多令牌则等待线程 sleep 后仍会再次失败形成饿死。应使用 threading.Condition 条件变量通知等待线程令牌已补充。
+3. TokenBucket.__init__ 显式调用了 config.validate()，但 TokenBucketConfig 类的 __post_init__ 已经执行过完全相同的验证逻辑。每次实例化时配置校验被执行两遍，应删除 __init__ 中的显式调用。
+4. RateLimiter 类中 update_from_response_headers 和 update_from_headers_object 两个方法内部的三种策略分发逻辑几乎完全一致——唯一差异仅在输入来源是原始 dict 还是已解析的 RateLimitHeaders 对象。应抽取私有方法被两个公开方法共享。
+5. TokenBucket.sync_with_server 方法中对 server_reset_time 的判断包含 pass 空操作分支，应将条件反转去除无操作分支提升可读性。
 
 过程不满意：
-1. 模型在收到提示词后未先阅读项目结构、现有代码规范和构建配置，就直接用 todo_write 创建了 8 项子任务计划，然后才开始用 view_folder 和 view_files 查看项目骨架和 leaky_bucket、ratelimiter 等现有模块代码。这违反"先分析再规划"原则，虽然在计划之后确实做了代码调研但已失去意义——TodoList 的粒度划分是在缺乏项目上下文的情况下制定的。正确做法是先充分扫描项目结构、pyproject.toml 构建配置和已有包的代码规范后再制定执行计划。
-2. 模型在 token_bucket.py 和 rate_limiter.py 中直接 from ..ratelimiter.clock import Clock, SystemClock，引入了对项目内 ratelimiter 外部包的硬依赖。项目规则明确规定"不同任务要有明确的包隔离，每个任务的所有代码应集中在语义对应的单一包下"，rate_limiter 任务本质上应该自包含，依赖其他任务的包违反了包隔离原则。正确做法是将 Clock 抽象作为简单的可注入时间源接口在本包内自行定义，避免跨包依赖。
-3. 模型在编写完 models.py、token_bucket.py、rate_limiter.py 三个源码文件和 test_models.py、test_token_bucket.py、test_rate_limiter.py 三个测试文件之后才一次性运行 pytest。这种"全部写完再全量测试"的开发模式未遵循增量构建和测试驱动原则——如果任一模块存在缺陷，需要跨多个文件回溯排查，增加调试成本。正确做法是每完成一个模块的代码就立即运行对应测试文件以失败结果驱动下一轮修复，逐个模块验证通过再编写下一模块。
+1. 模型在收到提示词后未先阅读项目结构和现有代码规范，就直接用 todo_write 创建了 8 项子任务计划，然后才开始查看项目骨架和现有模块代码。虽然事后做了调研但 TodoList 的粒度是在缺乏项目上下文的情况下制定的。正确做法是先充分扫描项目结构和已有包的代码规范再制定执行计划。
+2. 模型在 token_bucket.py 和 rate_limiter.py 中直接 from ..ratelimiter.clock import Clock，引入了对外部包的硬依赖。项目规则明确规定不同任务要有明确的包隔离，每个任务的代码应集中在语义对应的单一包下，应在本包内自行定义可注入的时间源接口。
+3. 模型在写完三个源码文件和三个测试文件之后才一次性运行 pytest。这种"全部写完再全量测试"的模式如果任一模块存在缺陷需跨多个文件回溯排查。正确做法是每完成一个模块就立即运行对应测试以失败结果驱动下一轮修复。

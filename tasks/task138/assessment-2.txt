@@ -1,7 +1,7 @@
 产物不满意：
-1. rate_limiter.py 的 _apply_sync_strategy 重构时将原 update 方法中的 SyncStrategy.LOCAL 显式 pass 分支移除，当前仅处理 MIN 和 SERVER，LOCAL 通过隐式 fall-through 实现 no-op。功能等价但阅读者无法从方法体确认 LOCAL 是有意忽略还是遗漏，代码自文档性下降。根因是重构时关注消除重复而忽略策略分发完整性，应在 _apply_sync_strategy 中保留 LOCAL 显式空分支。
-2. 修复 acquire 饿死问题时模型额外添加了 timeout 负数的 ValueError 校验，并将原 timeout <= 0 触发 TokenExhaustedError 改为 timeout == 0。提示词未要求修改输入校验或异常触发条件，属于超出范围的主动行为。负数已被前序拦截，改为 timeout == 0 后执行路径与原点完全等价，模型多走了一步仅换判断条件的冗余编辑，浪费了编辑操作却未产生不同的可观测行为。
+1. rate_limiter.py 的 _apply_sync_strategy 重构时将原 update 方法中的 LOCAL 显式 pass 分支移除，当前 LOCAL 通过隐式 fall-through 实现 no-op。功能等价但阅读者无法从方法体确认 LOCAL 是有意忽略还是遗漏，代码自文档性下降。应在 _apply_sync_strategy 中保留 LOCAL 显式空分支。
+2. 修复 acquire 饿死问题时模型额外添加了 timeout 负数的 ValueError 校验，并将 timeout <= 0 触发 TokenExhaustedError 改为 timeout == 0。提示词未要求修改输入校验或异常触发条件，属于超出修复范围的主动行为，浪费了编辑操作却未产生不同的可观测行为。
 
 过程不满意：
-1. 收到提示词后模型第一步即调用 todo_write 创建 6 项 TodoList，随后才读取 token_bucket.py 和 rate_limiter.py。这种先计划后分析的顺序违反标注规范中「先分析问题再规划」的要求。模型在不了解代码结构的情况下划分计划，TodoList 条目仅照搬提示词的编号，缺乏基于实际代码情况的粒度调整。正确做法是先通读涉及的源文件和测试文件，理解各问题的具体位置和根因后再制定分步修复计划。
-2. 模型读完全部文件后连续发起四次编辑操作（token_bucket.py 三次、rate_limiter.py 一次），将六项修复一次性批量完成，仅在全部修改结束后运行一次测试。虽然 98 个用例全部通过，但批量编辑缺少增量验证。如果多个修复间存在逻辑交互，叠加后的测试失败将难以定位根因。正确流程是每完成一个独立问题的修复就运行相关测试，以失败用例驱动后续修正，而非将所有修改攒到一起做一次性验证。
+1. 收到提示词后模型第一步即调用 todo_write 创建 6 项 TodoList，随后才读取 token_bucket.py 和 rate_limiter.py。这种先计划后分析的顺序违反"先分析再规划"的要求。TodoList 条目仅照搬提示词编号，缺乏基于实际代码情况的粒度调整。
+2. 模型读完全部文件后连续发起四次编辑操作，将六项修复一次性批量完成，仅在全部修改结束后运行一次测试。虽然 98 个用例全部通过，但批量编辑缺少增量验证。如果多个修复间存在逻辑交互，叠加后的测试失败将难以定位根因。应每完成一个独立问题的修复就运行相关测试。

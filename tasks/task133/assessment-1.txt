@@ -1,9 +1,10 @@
 产物不满意：
-1. exact_matcher.py 中实现了 keep_first、keep_last、keep_most_complete、keep_by_field 四个保留策略函数并在 __init__.py 中导出，但 DedupEngine 的 dedup 方法始终只调用 merge_group 执行字段级冲突合并，没有提供接口让用户选择"保留最早的一条"或"保留字段最完整的一条"这种记录级保留策略。提示词明确要求"对于精确匹配键相同的记录，可进一步配置保留策略"，当前引擎只能做字段级合并无法做记录级保留，功能缺失。
-2. engine.py 第 26 行 fallback_merge_strategy 默认值为 "last"，而 merge_strategies.py 第 103 行 merge_group 函数的 fallback_strategy 参数默认值为 "first"。两个核心组件的同一语义参数默认值不同，用户如果绕过引擎直接调用 merge_group 会得到与引擎调用不一致的兜底行为，这是接口设计的不一致性缺陷。
-3. exceptions.py 中定义了 RecordNotFoundError 异常类并在 __init__.py 中导出，但在整个 dedup 模块的所有源文件中该异常从未被任何函数抛出或使用。该异常定义属于未使用的死代码，既没有对应的业务场景也没有被任何测试覆盖其抛出路径。
-4. 提示词要求"冲突字段在所有策略下均无法合并的兜底行为"需要测试覆盖。merge_strategies.py 的 _apply_strategy 方法在 catch Exception 时直接返回 field_values[0]，这个兜底行为采用了隐式的静默回退，合并后的记录中用户无法知道哪些字段走了兜底逻辑，MergeResult 也未记录兜底字段信息，缺失可观测性。
+1. exact_matcher.py 中实现了四个保留策略函数并在 __init__.py 中导出，但 DedupEngine 的 dedup 方法始终只调用 merge_group 执行字段级冲突合并，没有提供接口让用户选择记录级保留策略。提示词明确要求"可进一步配置保留策略"，当前引擎功能缺失。
+2. engine.py 中 fallback_merge_strategy 默认值为 "last"，而 merge_strategies.py 中 merge_group 函数的同名参数默认值为 "first"。两个核心组件同一语义参数默认值不同，接口设计不一致。
+3. exceptions.py 中定义了 RecordNotFoundError 异常类并在 __init__.py 中导出，但在整个 dedup 模块的所有源文件中该异常从未被任何函数抛出或使用，属于死代码。
+4. 提示词要求"冲突字段在所有策略下均无法合并的兜底行为"需要测试覆盖。_apply_strategy 方法在 catch Exception 时直接返回 field_values[0]，采用了隐式静默回退，MergeResult 也未记录兜底字段信息，缺失可观测性。
+
 过程不满意：
-1. 模型在 session-cot-1.md 中从第二步开始整个思考轨迹完全围绕 ETL 编排器展开——读取了 wal 包文件、设计了 Extract/Transform/Load 三阶段架构、编写了 etl/exceptions.py 和 etl/pipeline.py 等文件，最终输出了 ETL 模块的交付清单。整个思考过程与提示词要求的 dedup 记录去重引擎毫无关系，模型将去重引擎任务误识别为 ETL 编排器任务，对任务目标理解存在严重偏差。
-2. 模型的验证和验收对象完全错误。思考过程中模型运行了 `python -m pytest tests/etl/` 验证 ETL 模块的 65 个测试通过，并以此为证据声称任务完成。但提示词要求的功能模块是 src/solocoder_py/dedup/ 包，应运行 `poetry run pytest tests/dedup/`。模型在完全无关的 ETL 模块上验收通过就当作完成去重任务，dedup 模块的实现过程完全没有被记录在思考轨迹中。
-3. 模型在刚收到任务后未分析需求就直接创建了 6 项 TodoList，然后才开始查看项目文件结构。但后续所有操作都围绕 ETL 展开而非 dedup，说明这个 TodoList 与提示词要求的去重引擎任务完全不匹配。正确做法是先阅读提示词明确要求的是记录去重引擎而非 ETL 编排器，确认模块边界后再制定执行计划，避免在一开始就走错方向导致整个思考过程与任务目标脱节。
+1. 模型在 session-cot-1.md 中整个思考轨迹完全围绕 ETL 编排器展开，最终输出了 ETL 模块的交付清单，与提示词要求的 dedup 记录去重引擎毫无关系。模型将去重引擎任务误识别为 ETL 编排器任务，对任务目标理解存在严重偏差。
+2. 模型的验证对象完全错误。思考过程中模型运行 python -m pytest tests/etl/ 声称任务完成，但提示词要求的目标是 src/solocoder_py/dedup/ 包，应运行 poetry run pytest tests/dedup/。dedup 模块的实现过程完全未被记录在思考轨迹中。
+3. 模型在刚收到任务后未分析需求就创建了 6 项 TodoList，但后续所有操作都围绕 ETL 展开而非 dedup，TodoList 与提示词要求的去重任务完全不匹配。正确做法是先确认模块边界为记录去重引擎而非 ETL 编排器，再制定执行计划。

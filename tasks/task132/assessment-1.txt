@@ -1,8 +1,9 @@
 产物不满意：
-1. hyperloglog.py 的 merge 方法在合并两个 HyperLogLog 实例时先获取 self._lock 再获取 other._lock，当两个线程同时调用 A.merge(B) 和 B.merge(A) 时会发生死锁，两个线程交叉持有对方需要的锁而互相等待。虽然在当前单测场景下不会触发，但生产环境中一旦有并发并集请求就会导致线程卡死。根因是未对多个锁的获取建立全局一致顺序，应使用实例 id 比较确定锁获取顺序来解决环形等待。
-2. test_cardinality.py 中 test_intersection_negative_fallback_to_zero 测试用例使用了两组完全不相交的大数据集（各 10000 个不同字符串），但断言仅写了 `assert result >= 0`，只验证交集结果不为负数，没有验证完全不相交集合的交集估算值应为 0 或非常接近 0。如果 intersection_cardinality 的实现因 BUG 始终返回一个正数（如 500），该测试依然会通过，无法真正验证"负数兜底返回 0"的逻辑是否正确。根因是断言条件太宽松，应将断言改为同时验证结果足够接近 0（如 `assert result <= 100` 或 `assert result == 0`）。
-3. hyperloglog.py 的 intersection_cardinality 方法在计算 a_card = self.cardinality() 和 union_card = self.union(other).cardinality() 之间存在时间窗口，没有对 self 和 other 做整体的原子性保护。若在两次 cardinality 调用之间 self 或 other 被其他线程添加了新元素，a_card 和 b_card 反映的是旧状态而并集基数反映的是新状态，交集估算结果将偏离真实值。根因是方法没有将读卡和并集操作放入统一的临界区，应在 intersection_cardinality 内部用统一锁保护整个计算过程。
+1. hyperloglog.py 的 merge 方法在合并两个 HyperLogLog 实例时先获取 self._lock 再获取 other._lock，当两个线程同时调用 A.merge(B) 和 B.merge(A) 时会发生死锁。虽然当前单测不会触发，但生产环境中一旦有并发并集请求就会导致线程卡死。根因是未对多锁建立全局一致顺序，应使用实例 id 比较确定锁获取顺序。
+2. test_cardinality.py 的 test_intersection_negative_fallback_to_zero 测试使用了不相交的两个大数据集但断言仅写 assert result >= 0，只验证交集不为负数，没有验证不相交集合的估算值应接近 0。如果实现 BUG 始终返回一个正数，该测试依然通过。断言条件太宽松，应同时验证结果足够接近 0。
+3. hyperloglog.py 的 intersection_cardinality 方法计算 a_card 和 union_card 之间没有原子性保护。若两次调用之间实例被其他线程添加了新元素，a_card 和 b_card 反映旧状态而并集基数反映新状态，估算结果偏离真实值。根因是没有将读卡和并集操作放入统一临界区。
+
 过程不满意：
-1. 模型在收到提示词后第一步就用 todo_write 创建了 6 项子任务计划，随后才开始探索项目结构和阅读现有代码。按标注规范要求，应先分析项目骨架和需求文档再制定执行计划，这种"先规划后分析"的次序导致初始计划与实际模块边界脱钩。不过后续执行中模型并未因计划不合理而反复返工，整体流程仍然顺畅。
-2. 模型在首次编写 hyperloglog.py 时 _count_leading_zeros_plus_one 函数中存在重复 return 语句的语法错误，且 _get_register_and_rho 方法中的 rho 计算逻辑有误导致所有基数估算恒为 0。直到运行 pytest 发现 72 个测试全部失败后，模型才单独编写 debug_hll.py 临时脚本逐行调试哈希值和寄存器分布，最终定位到 w 的掩码方式和 rho 的宽度参数不匹配。这属于初次实现阶段对算法细节理解不到位就直接全量写出代码，正确做法是先对核心哈希分桶逻辑做单元级别验证再展开完整模块。
-3. 模型在编写 test_cardinality.py 测试代码时多处在 HyperLogLog() 构造函数中同时传入了 standard_error 和 num_registers 两个互斥参数，与 __init__ 中"Exactly one of ... must be provided"的校验逻辑矛盾，导致初次测试运行时报众多 ValueError。这说明模型在编写测试代码时未仔细对照生产代码的构造函数签名，测试和生产代码之间存在信息同步滞后，应在写完测试后逐条验证构造函数调用是否与生产代码接口一致。
+1. 模型在收到提示词后第一步就用 todo_write 创建了 6 项子任务，随后才开始探索项目结构。这种"先规划后分析"的次序违反了标注规范，但后续执行中模型并未因计划不合理而反复返工，整体流程仍然顺畅。
+2. 模型在首次编写 hyperloglog.py 时存在重复 return 语句语法错误，且 rho 计算逻辑有误导致所有基数估算恒为 0。直到运行 pytest 发现 72 个测试全部失败后，模型才编写临时脚本逐行调试哈希值和寄存器分布。这是对算法细节理解不到位就直接全量写出代码的反面案例。
+3. 模型在编写 test_cardinality.py 测试时多处同时传入 standard_error 和 num_registers 两个互斥参数，与构造函数校验逻辑矛盾导致 ValueError。说明模型编写测试时未仔细对照生产代码的构造函数签名，应在写完测试后逐条验证构造函数调用是否与接口一致。
