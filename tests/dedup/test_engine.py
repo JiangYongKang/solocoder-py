@@ -2,6 +2,7 @@ import pytest
 
 from solocoder_py.dedup import (
     DedupEngine,
+    DedupResult,
     EmptyMatchKeysError,
     InvalidConfigError,
     InvalidThresholdError,
@@ -706,8 +707,6 @@ class TestEngineFallbackFieldsPropagation:
         assert result.unique_records[0]["age"] == 30
 
     def test_dedupresult_fallback_fields_default_empty(self):
-        from solocoder_py.dedup import DedupResult
-
         result = DedupResult(
             unique_records=[],
             groups=[],

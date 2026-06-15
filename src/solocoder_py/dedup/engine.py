@@ -130,7 +130,7 @@ class DedupEngine:
         elif strategy == KEEP_BY_FIELD:
             return keep_by_field(
                 group,
-                field=self.record_selection_field or "",
+                field=self.record_selection_field,
                 desc=self.record_selection_desc,
             ), []
         else:

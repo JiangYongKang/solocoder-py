@@ -1,0 +1,4 @@
+你实现的记录去重引擎模块存在一些代码质量问题需要修复：
+1. engine.py 的 _resolve_group 方法中 KEEP_BY_FIELD 分支在调用 keep_by_field 时传入了 `field=self.record_selection_field or ""`，但 __post_init__ 已确保该策略下 record_selection_field 不允许为 None，`or ""` 是永远不会触发的冗余死代码。需要移除这个无效的防御逻辑。
+2. tests/dedup/test_engine.py 中 TestEngineFallbackFieldsPropagation 类的 test_dedupresult_fallback_fields_default_empty 方法使用了方法内局部导入 DedupResult，而文件顶部已批量导入了大量符号但唯独遗漏了 DedupResult。需要将 DedupResult 加入文件顶部的模块级导入并移除方法内的局部导入，保持与文件其余部分一致的导入风格。
+3. 修复后需要重新运行 poetry run pytest tests/dedup/ -v，需要让所有测试通过。

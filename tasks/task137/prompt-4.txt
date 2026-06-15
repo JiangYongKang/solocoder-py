@@ -1,0 +1,4 @@
+你实现的数据脱敏引擎模块的测试存在选择性验证缺陷需要修复：
+1. tests/masking/test_edge_cases.py 中 TestEngineMaskTypeRouting 类的 test_mask_type_phone_routes_to_mask_phone 测试使用了 11 位手机号 `13812345678` 作为输入，但通用 mask（默认 keep_prefix=3 keep_suffix=4）和 mask_phone 对此长度的输入产生完全相同的输出 `138****5678`，无法区分引擎是否真的路由到了专用方法。如果 _apply_strategy 中 phone 分支因拼写错误失效，引擎静默回退到通用 mask 而测试依然通过。同样的缺陷也存在于 test_mask_type_not_specified_uses_generic 中——使用相同长度的输入且期望值与 phone 专用格式一致，无法验证是否真的走了通用路径。提示词要求"验证输出符合对应专用遮盖方法的格式而非通用遮盖格式"，需要修改这两个测试的输入数据，使 phone 专用格式与通用 mask 格式能产生可区分的不同输出。
+2. tests/masking/test_edge_cases.py 中 test_mask_type_with_keep_prefix_override 的测试名称暗示 keep_prefix 参数可覆盖专用方法行为，但实际断言验证的是"mask_type 设为 phone 时专用方法忽略 keep_prefix/keep_suffix 配置，固定按 phone 格式输出"。测试名称与实际验证意图恰好相反，会误导后续维护者。需要将测试名称修正为能准确反映实际验证意图的名称。
+3. 修复后需要重新运行 poetry run pytest tests/masking/ -v，需要让所有测试通过。

@@ -1,0 +1,4 @@
+你实现的事件计数器模块的余数分配策略仍有缺陷需要修复：
+1. counter.py 的 _try_resolve_from_coarser 方法在 base > 0 分支仍然沿用位置为基础的余数分配策略 `base + (1 if window_index < remainder else 0)`，未添加任何数据存在性检查。例如一天内 25 个事件查询小时窗口时，索引靠前的窗口即使没有任何事件也会被多分配计数 1，与提示词要求"估算值需要区分有真实数据的窗口和无数据的窗口，对无数据窗口应保持 0"矛盾。base > 0 时的余数分配也需要对目标窗口做数据存在性守卫，不能无条件地按位置分配余数。
+2. counter.py 的 _try_resolve_from_coarser 在 base == 0 分支中，只有 window_index < remainder 的前 N 个窗口才有机会通过 _target_window_has_finer_data 检查获得计数值 1，索引靠后但有真实分钟数据的窗口也被排除在外被分配 0，与无事件窗口无法区分。需要让所有有真实数据的窗口都有机会在余数分配中获得估算值，而非仅限位置靠前的前 N 个窗口。
+3. 修复后需要重新运行 poetry run pytest tests/event_counter/ -v，需要让所有测试通过。

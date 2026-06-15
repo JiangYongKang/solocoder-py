@@ -365,7 +365,7 @@ class TestHyperLogLogIntersection:
             hll2.add(f"exclusive_b_{j}")
         result = hll1.intersection_cardinality(hll2)
         assert result >= 0
-        assert result < 400
+        assert result < 300
 
     def test_intersection_incompatible_raises(self):
         hll1 = HyperLogLog(num_registers=1024)

@@ -201,33 +201,25 @@ class EventCounter:
                     / target_window.granularity.duration.total_seconds()
                 )
                 if num_finer_in_coarser > 0:
-                    offset_seconds = (
-                        target_window.start - coarser_window.start
-                    ).total_seconds()
-                    window_index = int(
-                        offset_seconds / target_window.granularity.duration.total_seconds()
-                    )
-
                     base = coarser_count // num_finer_in_coarser
                     remainder = coarser_count % num_finer_in_coarser
+                    has_data = self._target_window_has_finer_data(target_window)
 
                     if base > 0:
-                        estimated = base + (1 if window_index < remainder else 0)
+                        estimated = base + (1 if remainder > 0 and has_data else 0)
                         return CountResult(
                             window=target_window,
                             count=estimated,
                             is_estimated=True,
                             source_granularity=coarser_granularity,
                         )
-                    elif remainder > 0:
-                        if self._target_window_has_finer_data(target_window):
-                            if window_index < remainder:
-                                return CountResult(
-                                    window=target_window,
-                                    count=1,
-                                    is_estimated=True,
-                                    source_granularity=coarser_granularity,
-                                )
+                    elif remainder > 0 and has_data:
+                        return CountResult(
+                            window=target_window,
+                            count=1,
+                            is_estimated=True,
+                            source_granularity=coarser_granularity,
+                        )
 
         return None
 
