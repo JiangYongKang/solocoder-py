@@ -1,0 +1,77 @@
+from .engine import DedupEngine
+from .exact_matcher import (
+    exact_group,
+    keep_first,
+    keep_last,
+    keep_most_complete,
+    keep_by_field,
+)
+from .exceptions import (
+    DedupError,
+    InvalidConfigError,
+    EmptyMatchKeysError,
+    InvalidThresholdError,
+    UnknownStrategyError,
+    MergeConflictError,
+    RecordNotFoundError,
+)
+from .fuzzy_matcher import (
+    UnionFind,
+    fuzzy_group,
+    fuzzy_match_pairs,
+    levenshtein_distance,
+    similarity,
+)
+from .merge_strategies import (
+    STRATEGY_FIRST,
+    STRATEGY_LAST,
+    STRATEGY_LONGEST_STRING,
+    STRATEGY_MOST_COMMON,
+    STRATEGY_FIRST_NON_EMPTY,
+    STRATEGY_CUSTOM,
+    ALL_STRATEGIES,
+    merge_group,
+)
+from .models import (
+    DedupGroup,
+    DedupResult,
+    FuzzyMatchPair,
+    MergeResult,
+    Record,
+    MergeFunction,
+)
+
+__all__ = [
+    "DedupEngine",
+    "exact_group",
+    "keep_first",
+    "keep_last",
+    "keep_most_complete",
+    "keep_by_field",
+    "DedupError",
+    "InvalidConfigError",
+    "EmptyMatchKeysError",
+    "InvalidThresholdError",
+    "UnknownStrategyError",
+    "MergeConflictError",
+    "RecordNotFoundError",
+    "UnionFind",
+    "fuzzy_group",
+    "fuzzy_match_pairs",
+    "levenshtein_distance",
+    "similarity",
+    "STRATEGY_FIRST",
+    "STRATEGY_LAST",
+    "STRATEGY_LONGEST_STRING",
+    "STRATEGY_MOST_COMMON",
+    "STRATEGY_FIRST_NON_EMPTY",
+    "STRATEGY_CUSTOM",
+    "ALL_STRATEGIES",
+    "merge_group",
+    "DedupGroup",
+    "DedupResult",
+    "FuzzyMatchPair",
+    "MergeResult",
+    "Record",
+    "MergeFunction",
+]

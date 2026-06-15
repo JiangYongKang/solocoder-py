@@ -1,0 +1,9 @@
+产物不满意：
+1. models.py 的 ParsedVersion.parse 方法将日期版本 v2024-01 的年份 2024 存入 major 字段，而普通语义化版本如 v1 的 major 表示 API 主版本号。同时注册 v2024（普通版本）和 v2024-01（日期版本）时两者 major 均为 2024，仅靠 date_suffix 字段做隔离区分，major 字段承担了两种语义不同的职责。根因是正则表达式用同一个 (\d+) 分组捕获年份和版本号，应增加 version_type 枚举字段明确标识版本类别。
+2. negotiator.py 的 register 方法使用原始 version 字符串作为内部字典键和 VersionProcessor.version 字段，但 models.py 的 ParsedVersion.parse 会先 strip 再存 raw 值。若注册时传入 " v1"，processor.version 保留前导空格而 parsed_version.raw 为 "v1"，响应头 X-API-Version 将返回带空格的版本号。应在 register 方法入口统一对 version 参数执行 strip 规范化。
+3. negotiator.py 的 register 方法在注册时调用 ParsedVersion.parse(version) 执行格式校验，但校验通过的版本号字符串（经过 strip 后的 raw）被丢弃，最终以原始未规范化字符串存入字典键。这种原始值与解析值的分离导致 table 键与 processor.version 与 parsed_version.raw 三者之间缺乏一致性保证，后续维护和调试时容易混淆。
+
+过程不满意：
+1. 模型在首轮测试失败后一次性做了三处修改（修复日期正则、将 make_handler 注册为 fixture、处理注销默认版本的 KeyError），但第二轮测试仍有两个失败：conftest.py 中 fixture 不能直接在 conftest 内部调用的问题正是首轮 fixture 修改引入的回归错误。模型做批量修复时未评估每项改动的影响范围就交改，导致自己引入新缺陷，符合标注规范中"试错式调试"的标准——一轮修改引发新错误后再修。
+2. 模型在首次运行测试时使用 `python -m pytest tests/version_negotiator/` 命令（第 478 行），而非项目 pyproject.toml 约定的 `poetry run pytest`。跳过诗歌虚拟环境管理可能导致包导入路径依赖解析偏差，虽本次测试通过未暴露问题，但违反了项目既定的工具链使用规范，正确做法应遵循项目 README 中指定的测试命令。
+3. 模型在 108 个测试全部通过后仍执行 GetDiagnostics 诊断检查（第 768 行），并在总结中声称"所有测试和诊断检查均通过"。GetDiagnostics 是 IDE 级的静态分析工具，并非 Python 编译或类型检查机制，该操作对验证代码正确性无增量价值，属于对 Python 工具链语义的认知偏差，增加了无意义的冗余验证步骤。
