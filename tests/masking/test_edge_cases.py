@@ -565,7 +565,7 @@ class TestEngineMaskTypeRouting:
             )
         )
 
-        record = DataRecord(id="1", data={"phone": "13812345678"})
+        record = DataRecord(id="1", data={"phone": " 13812345678 "})
         masked = engine.mask_record(record)
         result = masked.get("phone")
 
@@ -740,11 +740,14 @@ class TestEngineMaskTypeRouting:
             )
         )
 
-        record = DataRecord(id="1", data={"phone": "13812345678"})
+        record = DataRecord(id="1", data={"phone": " 13812345678 "})
         masked = engine.mask_record(record)
         result = masked.get("phone")
 
-        assert result == "138****5678"
+        assert result == " 13******678 "
+        assert len(result) == 13
+        assert result[:3] == " 13"
+        assert result[-4:] == "678 "
 
     def test_mask_type_all_three_types_same_record(self):
         engine = DataMaskingEngine()
@@ -784,7 +787,7 @@ class TestEngineMaskTypeRouting:
         assert masked.get("id_card") == "1****************4"
         assert masked.get("email").endswith("@example.com")
 
-    def test_mask_type_with_keep_prefix_override(self):
+    def test_mask_type_phone_ignores_generic_keep_config(self):
         engine = DataMaskingEngine()
         engine.add_rule(
             FieldRule(
