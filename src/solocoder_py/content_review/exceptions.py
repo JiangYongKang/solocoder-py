@@ -25,5 +25,4 @@ class ContentNotFoundError(ContentReviewError):
         super().__init__(f"Content not found: {content_id}")
 
 
-class InvalidOperationError(ContentReviewError):
-    pass
+

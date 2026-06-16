@@ -7,6 +7,7 @@ from solocoder_py.collision import (
     CollisionError,
     ColliderNotFoundError,
     InvalidAABBError,
+    InvalidColliderError,
     InvalidGridSizeError,
     SpatialHash,
 )
@@ -36,7 +37,7 @@ class TestAABBValidation:
 
 class TestColliderValidation:
     def test_empty_id_raises(self):
-        with pytest.raises(InvalidAABBError):
+        with pytest.raises(InvalidColliderError):
             Collider(id="", aabb=AABB(min_x=0, min_y=0, max_x=50, max_y=50))
 
     def test_collider_inherits_aabb_error(self):
@@ -177,6 +178,9 @@ class TestZeroSizeColliders:
 class TestExceptionHierarchy:
     def test_invalid_aabb_inherits_from_collision_error(self):
         assert issubclass(InvalidAABBError, CollisionError)
+
+    def test_invalid_collider_inherits_from_collision_error(self):
+        assert issubclass(InvalidColliderError, CollisionError)
 
     def test_invalid_grid_size_inherits_from_collision_error(self):
         assert issubclass(InvalidGridSizeError, CollisionError)

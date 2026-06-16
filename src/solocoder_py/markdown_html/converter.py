@@ -445,9 +445,10 @@ class MarkdownConverter:
         return f"<table>\n{thead}\n{tbody}\n</table>"
 
     def _parse_paragraph(self, lines: List[str], i: int) -> Tuple[str, int]:
-        para_lines: List[str] = []
+        para_parts: List[str] = []
         j = i
         n = len(lines)
+        prev_hard_break = False
 
         while j < n:
             line = lines[j]
@@ -463,10 +464,20 @@ class MarkdownConverter:
                 break
             if self._is_unordered_list_item(line) or self._is_ordered_list_item(line):
                 break
-            para_lines.append(line.strip())
+
+            stripped = line.strip()
+            has_hard_break = len(line) - len(line.rstrip()) >= 2
+
+            if j > i and not prev_hard_break:
+                para_parts.append(" ")
+            if prev_hard_break:
+                para_parts.append("<br />")
+
+            para_parts.append(stripped)
+            prev_hard_break = has_hard_break
             j += 1
 
-        text = " ".join(para_lines)
+        text = "".join(para_parts)
         inline_text = self._parse_inline(text)
         return f"<p>{inline_text}</p>", j
 
@@ -480,24 +491,94 @@ class MarkdownConverter:
         return text
 
     def _parse_images(self, text: str) -> str:
-        pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+        result: List[str] = []
+        i = 0
+        n = len(text)
 
-        def replace(match: re.Match) -> str:
-            alt_text = match.group(1)
-            url = match.group(2)
-            return f'<img src="{escape(url, quote=True)}" alt="{escape(alt_text, quote=True)}" />'
+        while i < n:
+            if text[i] == "!" and i + 1 < n and text[i + 1] == "[":
+                alt_text, url, end_idx = self._parse_link_or_image(text, i + 1, is_image=True)
+                if alt_text is not None:
+                    result.append(
+                        f'<img src="{escape(url, quote=True)}" alt="{escape(alt_text, quote=True)}" />'
+                    )
+                    i = end_idx
+                    continue
+            result.append(text[i])
+            i += 1
 
-        return pattern.sub(replace, text)
+        return "".join(result)
 
     def _parse_links(self, text: str) -> str:
-        pattern = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+        result: List[str] = []
+        i = 0
+        n = len(text)
 
-        def replace(match: re.Match) -> str:
-            link_text = match.group(1)
-            url = match.group(2)
-            return f'<a href="{escape(url, quote=True)}">{link_text}</a>'
+        while i < n:
+            if text[i] == "[" and (i == 0 or text[i - 1] != "!"):
+                link_text, url, end_idx = self._parse_link_or_image(text, i, is_image=False)
+                if link_text is not None:
+                    result.append(
+                        f'<a href="{escape(url, quote=True)}">{link_text}</a>'
+                    )
+                    i = end_idx
+                    continue
+            result.append(text[i])
+            i += 1
 
-        return pattern.sub(replace, text)
+        return "".join(result)
+
+    def _parse_link_or_image(
+        self, text: str, start_idx: int, is_image: bool
+    ) -> Tuple[Optional[str], str, int]:
+        n = len(text)
+        i = start_idx
+
+        if text[i] != "[":
+            return None, "", i
+
+        bracket_depth = 1
+        i += 1
+        bracket_start = i
+
+        while i < n and bracket_depth > 0:
+            if text[i] == "[":
+                bracket_depth += 1
+            elif text[i] == "]":
+                bracket_depth -= 1
+                if bracket_depth == 0:
+                    break
+            i += 1
+
+        if i >= n or bracket_depth > 0:
+            return None, "", start_idx
+
+        alt_or_link_text = text[bracket_start:i]
+        i += 1
+
+        if i >= n or text[i] != "(":
+            return None, "", start_idx
+
+        i += 1
+        paren_depth = 1
+        url_start = i
+
+        while i < n and paren_depth > 0:
+            if text[i] == "(":
+                paren_depth += 1
+            elif text[i] == ")":
+                paren_depth -= 1
+                if paren_depth == 0:
+                    break
+            i += 1
+
+        if i >= n or paren_depth > 0:
+            return None, "", start_idx
+
+        url = text[url_start:i]
+        i += 1
+
+        return alt_or_link_text, url, i
 
     def _parse_inline_code(self, text: str) -> str:
         result: List[str] = []

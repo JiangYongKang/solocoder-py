@@ -104,8 +104,10 @@ class TestGridMap:
             open_grid.get_cell(Point(10, 0))
 
     def test_is_passable_out_of_bounds(self, open_grid):
-        assert not open_grid.is_passable(Point(10, 0))
-        assert not open_grid.is_passable(Point(-1, 0))
+        with pytest.raises(CoordinateOutOfBoundsError):
+            open_grid.is_passable(Point(10, 0))
+        with pytest.raises(CoordinateOutOfBoundsError):
+            open_grid.is_passable(Point(-1, 0))
 
     def test_get_neighbors_cardinal(self, open_grid):
         neighbors = open_grid.get_neighbors(Point(5, 5), allow_diagonal=False)

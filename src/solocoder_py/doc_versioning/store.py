@@ -7,6 +7,7 @@ from ..three_way_merge import merge_texts
 from .diff_utils import apply_diff, apply_diffs_sequential, compute_diff
 from .exceptions import (
     BaseVersionMismatchError,
+    DocumentAlreadyExistsError,
     DocumentNotFoundError,
     InvalidVersionError,
     VersionNotFoundError,
@@ -64,7 +65,9 @@ class DocumentVersionStore:
 
     def create_document(self, document_id: str, content: str) -> CommitResult:
         if document_id in self._documents:
-            raise DocumentNotFoundError(f"Document '{document_id}' already exists")
+            raise DocumentAlreadyExistsError(
+                f"Document '{document_id}' already exists"
+            )
 
         now = datetime.now()
         record = _DocumentRecord(document_id, now)
@@ -117,10 +120,6 @@ class DocumentVersionStore:
 
     def get_version_content(self, document_id: str, version: int) -> str:
         ver = self.get_version(document_id, version)
-        if ver.content is None:
-            ver.content = self._reconstruct_content(
-                self._get_record(document_id), version
-            )
         return ver.content
 
     def _reconstruct_content(self, record: _DocumentRecord, target_version: int) -> str:
@@ -206,59 +205,36 @@ class DocumentVersionStore:
 
         new_version_num = self._next_version(record.document_id)
         now = datetime.now()
+        merged_text = merge_result.get_merged_text()
+        diff = compute_diff(latest_content, merged_text, record.latest_version, 0)
+        diff.target_version = new_version_num
 
-        if merge_result.has_conflicts:
-            merged_text = merge_result.get_merged_text()
-            diff = compute_diff(latest_content, merged_text, record.latest_version, 0)
+        has_conflicts = merge_result.has_conflicts
+        merge_status = MergeStatus.CONFLICTED if has_conflicts else MergeStatus.CLEAN
+        conflict_count = merge_result.conflict_count if has_conflicts else 0
+        version_content = merged_text if has_conflicts else None
 
-            version = DocumentVersion(
-                version=new_version_num,
-                content=merged_text,
-                diff=diff,
-                version_type=VersionType.MERGED,
-                created_at=now,
-                parent_version=record.latest_version,
-                merge_status=MergeStatus.CONFLICTED,
-                merge_source_a=base_version,
-                merge_source_b=record.latest_version,
-            )
-            version.diff.target_version = new_version_num
+        version = DocumentVersion(
+            version=new_version_num,
+            content=version_content,
+            diff=diff,
+            version_type=VersionType.MERGED,
+            created_at=now,
+            parent_version=record.latest_version,
+            merge_status=merge_status,
+            merge_source_a=base_version,
+            merge_source_b=record.latest_version,
+        )
 
-            record.add_version(version)
+        record.add_version(version)
 
-            return CommitResult(
-                document_id=record.document_id,
-                new_version=new_version_num,
-                base_version=base_version,
-                merge_status=MergeStatus.CONFLICTED,
-                conflict_count=merge_result.conflict_count,
-            )
-        else:
-            merged_text = merge_result.get_merged_text()
-            diff = compute_diff(latest_content, merged_text, record.latest_version, 0)
-
-            version = DocumentVersion(
-                version=new_version_num,
-                content=None,
-                diff=diff,
-                version_type=VersionType.MERGED,
-                created_at=now,
-                parent_version=record.latest_version,
-                merge_status=MergeStatus.CLEAN,
-                merge_source_a=base_version,
-                merge_source_b=record.latest_version,
-            )
-            version.diff.target_version = new_version_num
-
-            record.add_version(version)
-
-            return CommitResult(
-                document_id=record.document_id,
-                new_version=new_version_num,
-                base_version=base_version,
-                merge_status=MergeStatus.CLEAN,
-                conflict_count=0,
-            )
+        return CommitResult(
+            document_id=record.document_id,
+            new_version=new_version_num,
+            base_version=base_version,
+            merge_status=merge_status,
+            conflict_count=conflict_count,
+        )
 
     def list_versions(self, document_id: str) -> List[DocumentVersion]:
         record = self._get_record(document_id)

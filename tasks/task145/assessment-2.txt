@@ -1,0 +1,9 @@
+产物不满意：
+1. engine.py 的 get_rejection_comments 方法在构造 RejectionComment 时直接将 ReviewRecord.comment（类型为 Optional[str]）赋值给 RejectionComment.comment（类型为 str），存在静态类型不匹配。当前通过 reject 方法保证了驳回记录一定有批注，所以运行时不会出错，但如果未来代码演进出其他创建无批注 REJECT 记录的路径，就会传入 None 破坏 RejectionComment 的类型约定。根因是模型从 review_records 派生视图时没有考虑两个模型 comment 字段的类型差异，也未加运行时断言做防御。正确做法是在构造处添加类型守卫或在 RejectionComment.comment 的类型声明上与 ReviewRecord 对齐。
+2. 模型在合并测试类时一次性删除了整个 TestReviewOperationOnNonReviewState 类并将其中的唯一独有测试 test_approved_approve_rejected 并入 TestInvalidStateTransitions，合并后的 TestInvalidStateTransitions 虽然覆盖了 15 种非法状态转换，但模型完全丢弃了"审核操作在非审核中状态下被调用"这一语义维度的测试组织线索。提示词要求明确两个测试类的职责边界，模型选择了简单合并而非保留两个独立但有明确职责分界的测试类，相当于只做了"消除重复"而没有完成"明确职责边界"这一半要求。
+
+过程不满意：
+1. 模型在收到提示词后第一步就调用了 todo_write 创建 4 项子任务计划（cot 步骤 1-6），然后才开始依次读取 engine.py、models.py、test_engine.py 等文件。这正是标注规范中指出的典型问题：未先分析需求文档和现有代码就先制定执行计划，导致后续在多个文件间零散修改而缺乏统一策略。正确做法是先完整阅读提示词要求和全部相关代码，理清每个 fix 涉及的文件和改动范围后再创建 TodoList。
+2. 模型在处理双校验层冗余问题时，先编辑了 exceptions.py 删除 InvalidOperationError 异常类（cot 步骤 5），然后才开始逐步修改 engine.py 删除对该异常的调用（cot 步骤 6-10）。这种先删定义后删引用的顺序会在中间步骤造成 engine.py 引用了已不存在的 InvalidOperationError 从而处于编译不可通过的状态，是一种危险的编辑顺序。正确做法是先在 engine.py 中移除对 _validate_review_state 的调用及对 InvalidOperationError 的 import，确认代码逻辑正确后再去删除异常类的定义。
+3. 模型在整个修复过程中对 engine.py 做了 6 次分散的 edit_file_search_replace 操作（cot 步骤 6 到步骤 10），分别在删除 approve 中的校验调用、reject 中的校验调用、rejection_comments 重复写入、重写 get_rejection_comments、删除 _validate_review_state 方法等任务上逐个击破，而未将同一文件的改动整合为一次或两次批量修改。这种碎片化编辑模式说明模型缺乏对单个文件改动范围的预先规划，增加了中间状态不一致的风险，也反映出规划不够充分。
+4. 模型在完成所有 13 次以上的文件编辑后（跨越 exceptions.py、engine.py、models.py、test_engine.py、__init__.py、README.md 共 6 个文件），仅在全部编辑完成后运行了一次 pytest（cot 步骤 17），中间没有任何增量测试验证。如果某个中间改动引入了回归问题，模型将不得不从 47 个通过的测试中反向定位错误点，诊断成本远高于逐个 fix 后立即验证的做法。正确做法是每完成一个提示词要求的问题修复就立即运行对应测试子集，以失败或通过驱动下一轮修改。

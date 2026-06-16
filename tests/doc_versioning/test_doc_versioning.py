@@ -2,6 +2,7 @@ import pytest
 
 from solocoder_py.doc_versioning import (
     BaseVersionMismatchError,
+    DocumentAlreadyExistsError,
     DocumentNotFoundError,
     DocumentVersionStore,
     MergeStatus,
@@ -33,7 +34,7 @@ class TestDocumentCreation:
 
     def test_create_duplicate_document_raises(self, store):
         store.create_document("doc1", "content")
-        with pytest.raises(DocumentNotFoundError, match="already exists"):
+        with pytest.raises(DocumentAlreadyExistsError, match="already exists"):
             store.create_document("doc1", "other content")
 
     def test_create_empty_document(self, store):

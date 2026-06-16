@@ -1,0 +1,6 @@
+在当前项目中修复 markdown_html Markdown 转 HTML 转换器的一些问题：
+1. HighlightRegistry 的 set_default_hook 存储了默认钩子但 highlight 方法从未回退使用它，无论注册多少次默认钩子都不会被调用。现有测试只验证了设置不抛异常而未验证实际执行，需要修复调用路径中的回退逻辑并补充对应测试。
+2. sanitizer 的安全清洗只过滤了 javascript: 协议，完全没有处理 data: 协议。攻击者可以通过 data:text/html 等方式注入可执行的 HTML 内容绕过 XSS 防护。需要补充 data: 协议过滤逻辑和相关安全测试。
+3. 段落解析中先调用 line.strip() 去掉了尾随空格，再用空格替换换行符合并段落，导致 Markdown 中"两个尾随空格加换行产生 br 标签"的标准语法完全失效。需要调整预处理流程，在去空格之前先检测硬换行标记。
+4. 链接和图片的 URL 解析使用正则 \([^)]+\) 匹配，遇到 URL 中包含括号时（如维基百科链接中的技术术语括号）会提前截断 URL，产生格式错误的 HTML。需要使用支持嵌套括号的解析方式。
+5. 修复后重新运行 poetry run pytest tests/markdown_html/ -q，确保所有测试通过。

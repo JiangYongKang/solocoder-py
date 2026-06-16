@@ -37,12 +37,7 @@ class World:
             if ss.contains(entity):
                 ss.remove(entity)
 
-        archetype = self._archetypes.get_entity_archetype(entity)
-        if archetype is not None:
-            archetype.remove_entity(entity)
-            self._archetypes.remove_entity_archetype(entity)
-
-        self._archetypes._cleanup_empty_archetypes()
+        self._archetypes.remove_entity(entity)
 
         self._entity_components.pop(entity_id, None)
         self._entities.destroy(entity)
@@ -67,7 +62,7 @@ class World:
         if ss.contains(entity):
             raise ComponentAlreadyExistsError(entity.id, component_type)
 
-        ss.insert(entity, component)
+        ss.insert(entity)
 
         self._entity_components[entity.id][component_type] = component
 
@@ -97,15 +92,11 @@ class World:
 
         validate_component_type(component_type)
 
-        ss = self._components.get(component_type)
-        if ss is None:
-            raise ComponentNotFoundError(entity.id, component_type)
+        archetype = self._archetypes.get_entity_archetype(entity)
+        if archetype is not None and component_type in archetype.component_types:
+            return archetype.get_component(entity, component_type)
 
-        comp = ss.get(entity)
-        if comp is None:
-            raise ComponentNotFoundError(entity.id, component_type)
-
-        return comp
+        raise ComponentNotFoundError(entity.id, component_type)
 
     def has_component(self, entity: EntityId, component_type: type) -> bool:
         if not self._entities.is_alive(entity):
@@ -122,32 +113,12 @@ class World:
             raise EntityNotFoundError(entity.id)
         return dict(self._entity_components.get(entity.id, {}))
 
-    def _get_or_create_sparse_set(self, component_type: type) -> SparseSet:
-        if component_type not in self._components:
-            self._components[component_type] = SparseSet(component_type)
-        return self._components[component_type]
-
     def _update_archetype(self, entity: EntityId) -> None:
         entity_id = entity.id
         components = self._entity_components.get(entity_id, {})
         component_types = frozenset(components.keys())
 
-        old_archetype = self._archetypes.get_entity_archetype(entity)
-
-        if old_archetype is not None:
-            if old_archetype.component_types == component_types:
-                return
-            old_archetype.remove_entity(entity)
-
-        self._archetypes._cleanup_empty_archetypes()
-
-        if not component_types:
-            self._archetypes.remove_entity_archetype(entity)
-            return
-
-        new_archetype = self._archetypes.get_or_create(component_types)
-        new_archetype.add_entity(entity, components)
-        self._archetypes.set_entity_archetype(entity, new_archetype)
+        self._archetypes.migrate_entity(entity, component_types, components)
 
     def query_entities(
         self, component_types: Iterable[type]
@@ -158,31 +129,12 @@ class World:
 
         if not types_list:
             return
-            yield
 
-        primary_type = min(
-            types_list,
-            key=lambda t: len(self._components.get(t, SparseSet(t))),
-        )
+        required = frozenset(types_list)
+        matching_archetypes = self._archetypes.find_matching(required)
 
-        primary_ss = self._components.get(primary_type)
-        if primary_ss is None:
-            return
-            yield
-
-        for entity in primary_ss.iter_entities():
-            all_present = True
-            components: list[Any] = []
-
-            for ct in types_list:
-                ss = self._components.get(ct)
-                if ss is None or not ss.contains(entity):
-                    all_present = False
-                    break
-                components.append(ss.get(entity))
-
-            if all_present:
-                yield entity, tuple(components)
+        for arch in matching_archetypes:
+            yield from arch.iter_with_components(types_list)
 
     def query_entities_archetype(
         self, component_types: Iterable[type]
@@ -193,7 +145,6 @@ class World:
 
         if not types_list:
             return
-            yield
 
         required = frozenset(types_list)
         matching_archetypes = self._archetypes.find_matching(required)
@@ -208,7 +159,6 @@ class World:
         ss = self._components.get(component_type)
         if ss is None:
             return
-            yield
         yield from ss.iter_entities()
 
     def iter_entities(self) -> Iterator[EntityId]:

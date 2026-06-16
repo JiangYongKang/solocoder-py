@@ -86,11 +86,13 @@ class AStarFinder:
 
         open_set: List[Tuple[float, int, Point]] = []
         counter = 0
+        start_g = 0.0
+        start_h = self._heuristic(start, goal)
         counter += 1
-        heapq.heappush(open_set, (0.0, counter, start))
+        heapq.heappush(open_set, (start_g + start_h, counter, start))
 
         came_from: Dict[Point, Point] = {}
-        g_score: Dict[Point, float] = {start: 0.0}
+        g_score: Dict[Point, float] = {start: start_g}
         closed_set: Set[Point] = set()
 
         while open_set:

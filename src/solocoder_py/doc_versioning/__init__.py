@@ -1,10 +1,9 @@
 from .exceptions import (
     BaseVersionMismatchError,
     DocVersioningError,
+    DocumentAlreadyExistsError,
     DocumentNotFoundError,
-    EmptyContentError,
     InvalidVersionError,
-    MergeConflictError,
     VersionNotFoundError,
 )
 from .diff_utils import (
@@ -26,10 +25,9 @@ from .store import DocumentVersionStore
 __all__ = [
     "BaseVersionMismatchError",
     "DocVersioningError",
+    "DocumentAlreadyExistsError",
     "DocumentNotFoundError",
-    "EmptyContentError",
     "InvalidVersionError",
-    "MergeConflictError",
     "VersionNotFoundError",
     "apply_diff",
     "apply_diffs_sequential",

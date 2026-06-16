@@ -21,7 +21,7 @@
 
 ### `ContentItem`
 
-内容项数据模型，包含标题、正文、作者、当前审核状态、审核记录列表和驳回批注列表。
+内容项数据模型，包含标题、正文、作者、当前审核状态和审核记录列表。驳回批注通过 `get_rejection_comments()` 从审核记录中派生。
 
 ### `ReviewRecord`
 
@@ -29,7 +29,7 @@
 
 ### `RejectionComment`
 
-驳回批注，专门记录驳回时的审核人和批注意见，供作者查看并据此修改。
+驳回批注视图，由 `get_rejection_comments()` 从审核记录中 REJECT 类型的记录派生而来，供作者查看并据此修改。不是独立存储，与审核记录保持数据一致性。
 
 ### `ReviewStatus` / `ReviewAction`
 
@@ -68,10 +68,9 @@
 
 | 异常类                        | 触发场景                              |
 |-----------------------------|-------------------------------------|
-| `InvalidStateTransitionError` | 尝试非法状态跳转（如草稿直接发布）         |
+| `InvalidStateTransitionError` | 尝试非法状态跳转（如草稿直接发布、非审核中状态下审核） |
 | `RejectionCommentRequiredError` | 驳回时未提供批注意见                   |
 | `ContentNotFoundError`       | 操作不存在的内容项                     |
-| `InvalidOperationError`      | 在非审核中状态下执行审核操作             |
 
 ## 使用示例
 

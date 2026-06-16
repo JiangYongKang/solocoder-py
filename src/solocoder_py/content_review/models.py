@@ -31,6 +31,5 @@ class ContentItem:
     author: str = ""
     status: ReviewStatus = ReviewStatus.DRAFT
     review_records: List[ReviewRecord] = field(default_factory=list)
-    rejection_comments: List[RejectionComment] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)

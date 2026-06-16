@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 
 class Direction(str, Enum):
@@ -66,3 +66,4 @@ class PaginationConfig:
     cursor_ttl_seconds: Optional[float] = None
     cursor_secret: Optional[str] = None
     enable_hmac: bool = True
+    estimate_total_fn: Optional[Callable[[], int]] = None

@@ -1,0 +1,6 @@
+产物不满意：
+1. models.py 的 CollisionPair 修复只做了一半：提示词要求"应在文档中明确说明或在 API 层面减少惊讶"，模型仅添加了 docstring 而未在 API 层面做任何改进。调用方以 CollisionPair(collider_a=b, collider_b=a) 构造后，传入的第一个参数在 __post_init__ 完成后可能已被换成另一个 Collider 对象，docstring 只在阅读源码时可见，运行时无任何提示或保护，调用方排查问题时仍需翻源码才能理解属性为何被交换。原因是对提示词中"减少惊讶"的理解不到位，把文档等同于 docstring，应同时提供显式的工厂方法或属性标记让排序行为对调用方透明。
+2. 模型运行测试时使用了 `python -m pytest tests/collision/ -v undefined` 命令，与提示词明确要求的 `poetry run pytest tests/collision/ -q` 存在偏差：以 python -m pytest 替代 poetry run pytest 绕过了 Poetry 虚拟环境隔离，且命令末尾附带了一个多余的 `undefined` 字符串。虽然 90 个测试全部通过，但未严格遵循提示词的运行指令说明模型对任务细节的关注度不足，若 Poetry 虚拟环境中有特定版本依赖则可能在全局 python 下产生隐蔽的不一致。
+过程不满意：
+1. 模型在刚收到提示词后没有先阅读任何代码就直接调用了 todo_write 创建 4 项子任务计划，随后才依次查看 exceptions.py、models.py、spatial_hash.py 三个源文件。这违反了标注规范中"不能刚收到任务时就直接创建 TodoList，应先分析问题再规划"的要求，虽然本次任务范围较小未造成严重后果，但在复杂任务下这种习惯会导致计划粒度与实际模块边界不匹配。正确做法是先阅读三个受影响文件的当前代码，理清各问题的具体影响范围后再规划执行顺序。
+2. 模型在 session-cot-2 的思考过程中缺乏系统性验证步骤。从思考轨迹看，模型修改完 exceptions.py、models.py、spatial_hash.py 和 __init__.py 后直接更新了测试文件，然后一次性运行全部测试，中间没有分阶段验证每个修改点的正确性。例如在新增 InvalidColliderError 并修改 Collider 的异常抛出后，没有先单独运行 test_empty_id_raises 确认修改有效再去改其他文件，而是把所有修改堆在一起最后才跑全量测试。如果某一处修改引入了意外错误，需要回溯多个文件定位问题。正确做法是每修改一个类就运行该模块相关的子集测试，增量式验证。

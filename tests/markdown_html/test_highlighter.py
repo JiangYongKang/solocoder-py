@@ -100,11 +100,75 @@ class TestHighlightRegistry:
         assert highlight_registry.registered_languages() == []
         assert highlight_registry._default_hook is None
 
-    def test_default_hook(self, highlight_registry: HighlightRegistry):
+    def test_default_hook_is_called_fallback(self, highlight_registry: HighlightRegistry):
         def default_hook(code):
             return f"<default>{code}</default>"
 
         highlight_registry.set_default_hook(default_hook)
+        result = highlight_registry.highlight("some code", "unknownlang")
+        assert "<default>" in result
+        assert "some code" in result
+
+    def test_default_hook_not_called_when_lang_hook_exists(self, highlight_registry: HighlightRegistry):
+        def default_hook(code):
+            return f"<default>{code}</default>"
+
+        def python_hook(code):
+            return f"<python>{code}</python>"
+
+        highlight_registry.set_default_hook(default_hook)
+        highlight_registry.register("python", python_hook)
+        result = highlight_registry.highlight("code", "python")
+        assert "<python>" in result
+        assert "<default>" not in result
+
+    def test_default_hook_with_empty_language(self, highlight_registry: HighlightRegistry):
+        def default_hook(code):
+            return f"<default>{code}</default>"
+
+        highlight_registry.set_default_hook(default_hook)
+        result = highlight_registry.highlight("code", "")
+        assert "<default>" in result
+
+    def test_default_hook_with_none_language(self, highlight_registry: HighlightRegistry):
+        def default_hook(code):
+            return f"<default>{code}</default>"
+
+        highlight_registry.set_default_hook(default_hook)
+        result = highlight_registry.highlight("code", "")
+        assert "<default>" in result
+
+    def test_default_hook_exception(self, highlight_registry: HighlightRegistry):
+        def bad_default(code):
+            raise RuntimeError("boom")
+
+        highlight_registry.set_default_hook(bad_default)
+        with pytest.raises(HighlightHookError):
+            highlight_registry.highlight("code", "unknown")
+
+    def test_set_default_hook_none_clears(self, highlight_registry: HighlightRegistry):
+        def default_hook(code):
+            return f"<default>{code}</default>"
+
+        highlight_registry.set_default_hook(default_hook)
+        highlight_registry.set_default_hook(None)
+        result = highlight_registry.highlight("code", "unknown")
+        assert "<default>" not in result
+        assert "<pre><code>" in result
+
+    def test_default_hook_set_after_registration(self, highlight_registry: HighlightRegistry):
+        highlight_registry.register("python", lambda c: f"<py>{c}</py>")
+
+        def default_hook(code):
+            return f"<default>{code}</default>"
+
+        highlight_registry.set_default_hook(default_hook)
+
+        result_py = highlight_registry.highlight("code", "python")
+        assert "<py>" in result_py
+
+        result_unknown = highlight_registry.highlight("code", "ruby")
+        assert "<default>" in result_unknown
 
     def test_set_default_hook_non_callable_raises(self, highlight_registry: HighlightRegistry):
         with pytest.raises(HighlightHookError):

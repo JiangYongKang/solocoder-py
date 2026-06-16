@@ -82,6 +82,30 @@ class TestParagraphs:
         result = converter_no_sanitize.convert(md)
         assert "<p>Line one Line two Line three</p>" in result.html
 
+    def test_hard_line_break_two_trailing_spaces(self, converter_no_sanitize: MarkdownConverter):
+        md = "Line one  \nLine two"
+        result = converter_no_sanitize.convert(md)
+        assert "<br />" in result.html
+        assert "Line one" in result.html
+        assert "Line two" in result.html
+
+    def test_hard_line_break_multiple(self, converter_no_sanitize: MarkdownConverter):
+        md = "Line 1  \nLine 2  \nLine 3"
+        result = converter_no_sanitize.convert(md)
+        assert result.html.count("<br />") == 2
+
+    def test_no_line_break_single_trailing_space(self, converter_no_sanitize: MarkdownConverter):
+        md = "Line one \nLine two"
+        result = converter_no_sanitize.convert(md)
+        assert "<br />" not in result.html
+
+    def test_hard_line_break_with_inline_formatting(self, converter_no_sanitize: MarkdownConverter):
+        md = "**Bold line**  \n*italic line*"
+        result = converter_no_sanitize.convert(md)
+        assert "<br />" in result.html
+        assert "<strong>Bold line</strong>" in result.html
+        assert "<em>italic line</em>" in result.html
+
 
 class TestInlineFormatting:
     def test_bold_with_asterisks(self, converter_no_sanitize: MarkdownConverter):
@@ -140,6 +164,36 @@ class TestLinksAndImages:
     def test_link_with_image(self, converter_no_sanitize: MarkdownConverter):
         result = converter_no_sanitize.convert("[![alt](img.png)](link.com)")
         assert '<a href="link.com"><img src="img.png" alt="alt" /></a>' in result.html
+
+    def test_link_with_nested_parentheses_in_url(self, converter_no_sanitize: MarkdownConverter):
+        result = converter_no_sanitize.convert(
+            "[Wiki](https://en.wikipedia.org/wiki/Foo_(bar))"
+        )
+        assert '<a href="https://en.wikipedia.org/wiki/Foo_(bar)">Wiki</a>' in result.html
+
+    def test_link_with_deeply_nested_parentheses(self, converter_no_sanitize: MarkdownConverter):
+        result = converter_no_sanitize.convert(
+            "[link](http://example.com/a(b(c))d)"
+        )
+        assert '<a href="http://example.com/a(b(c))d">link</a>' in result.html
+
+    def test_image_with_nested_parentheses_in_url(self, converter_no_sanitize: MarkdownConverter):
+        result = converter_no_sanitize.convert(
+            "![alt](http://example.com/image(1).png)"
+        )
+        assert '<img src="http://example.com/image(1).png" alt="alt" />' in result.html
+
+    def test_multiple_links_with_parentheses(self, converter_no_sanitize: MarkdownConverter):
+        md = "[a](http://x.com/(1)) and [b](http://y.com/(2))"
+        result = converter_no_sanitize.convert(md)
+        assert 'href="http://x.com/(1)"' in result.html
+        assert 'href="http://y.com/(2)"' in result.html
+
+    def test_link_with_parentheses_in_url_mid_paragraph(self, converter_no_sanitize: MarkdownConverter):
+        md = "See [this article](https://example.com/article_(intro)) for more info."
+        result = converter_no_sanitize.convert(md)
+        assert 'href="https://example.com/article_(intro)"' in result.html
+        assert "for more info." in result.html
 
 
 class TestLists:

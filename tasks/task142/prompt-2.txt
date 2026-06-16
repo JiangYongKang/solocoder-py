@@ -1,0 +1,6 @@
+在当前项目中修复 request_limiter 请求体大小限制器的一些问题：
+1. _from_readable 方法在流读取异常时用 self._buffer.tell() 获取已读字节数来构造异常，但这个缓冲区自构造后从未被写入数据，tell() 始终返回 0，导致连接中断场景下异常中的已读字节数信息永远丢失。现有测试只校验了异常类型未断言该字段的值，需要修复并补充测试验证。
+2. safe_process 方法在捕获超限异常后构造 LimitResult 时，将 total_read_bytes 硬编码为 max_body_bytes + 1，丢弃了异常对象自身携带的 received_bytes 属性值。当 Content-Length 快速拒绝路径触发时实际读取字节数为零，统计却记为超限值加一，导致统计数据失真。
+3. process_request 与 safe_process 两个方法对超限和部分读取两种错误的响应构造逻辑完全重复，分别在两处硬编码了状态码和错误消息，应提取为公共方法消除重复。
+4. _ChunkedByteStream 中存在声明但从未使用的字段，且 list 或 tuple 类型的 body_source 在迭代时完全无视配置的 chunk_size 参数。
+5. 修复后重新运行 poetry run pytest tests/request_limiter/ -q，确保所有测试通过。

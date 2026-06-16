@@ -1,0 +1,7 @@
+在当前项目中修复 ecs ECS 实体组件系统的一些问题：
+1. _build_dependency_graph 方法在处理纯写者-纯读者配对的非强依赖场景时，边方向被颠倒了。例如系统 A 只写 Position 不读任何组件，系统 B 只读 Position 不写任何组件，按顺序应写者先于读者执行（A 到 B），但当前产生了读者到写者（B 到 A）的边。这个特定组合场景未被现有测试覆盖。需要修正边方向映射逻辑并补充该场景的测试。
+2. 组件数据在 World 中同时存储在 SparseSet 和 Archetype 两套独立结构中，导致内存占用翻倍。从旧原型迁移到新原型涉及先删后加两次数据拷贝，中途失败可能导致两套存储不一致。应让一处作为唯一数据持有者，另一处仅维护索引而不重复存储数据。
+3. query_entities 和 query_entities_archetype 两个方法中存在 return 后紧跟 yield 的死代码片段，Python 中 return 在生成器里等于抛出 StopIteration，其后的 yield 永远不会执行。此外 ArchetypeManager 中存在声明但从未使用的数据字典。需要清理这些死代码。
+4. World 类直接调用了 ArchetypeManager 的私有方法 _cleanup_empty_archetypes，破坏了封装。应在 ArchetypeManager 内部自动触发清理或将其改为公开 API。
+5. System 类中 _query_order 构建逻辑依赖集合的无序特性，导致组件解包顺序不确定。当前测试通过修改断言顺序来迁就这种不确定性，属于生产代码向测试妥协。应先修复 System 类确保组件顺序有确定性，再验证测试断言是否符合预期而非反过来迁就。
+6. 修复后重新运行 poetry run pytest tests/ecs/ -q，确保所有测试通过。

@@ -51,8 +51,7 @@ class GridMap:
         return self._cells[point.y][point.x]
 
     def is_passable(self, point: Point) -> bool:
-        if not self.in_bounds(point):
-            return False
+        self._validate_point(point)
         return self._cells[point.y][point.x].cell_type == CellType.PASSABLE
 
     def get_weight(self, point: Point) -> float:

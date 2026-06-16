@@ -9,6 +9,10 @@ class DocumentNotFoundError(DocVersioningError):
     pass
 
 
+class DocumentAlreadyExistsError(DocVersioningError):
+    pass
+
+
 class VersionNotFoundError(DocVersioningError):
     pass
 
@@ -18,12 +22,4 @@ class InvalidVersionError(DocVersioningError):
 
 
 class BaseVersionMismatchError(DocVersioningError):
-    pass
-
-
-class EmptyContentError(DocVersioningError):
-    pass
-
-
-class MergeConflictError(DocVersioningError):
     pass

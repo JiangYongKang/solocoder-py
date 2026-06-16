@@ -7,7 +7,6 @@ from typing import Dict, List, Optional
 from .enums import ReviewAction, ReviewStatus
 from .exceptions import (
     ContentNotFoundError,
-    InvalidOperationError,
     InvalidStateTransitionError,
     RejectionCommentRequiredError,
 )
@@ -66,7 +65,6 @@ class ContentReviewService:
     def approve(self, content_id: str, reviewer: str) -> ContentItem:
         item = self._get_content(content_id)
         self._validate_transition(item.status, ReviewAction.APPROVE)
-        self._validate_review_state(item.status)
         record = ReviewRecord(
             action=ReviewAction.APPROVE,
             reviewer=reviewer,
@@ -84,7 +82,6 @@ class ContentReviewService:
     ) -> ContentItem:
         item = self._get_content(content_id)
         self._validate_transition(item.status, ReviewAction.REJECT)
-        self._validate_review_state(item.status)
         if not comment or not comment.strip():
             raise RejectionCommentRequiredError()
         record = ReviewRecord(
@@ -93,11 +90,6 @@ class ContentReviewService:
             comment=comment,
         )
         item.review_records.append(record)
-        rejection = RejectionComment(
-            reviewer=reviewer,
-            comment=comment,
-        )
-        item.rejection_comments.append(rejection)
         item.status = ReviewStatus.DRAFT
         item.updated_at = datetime.now()
         return item
@@ -132,7 +124,15 @@ class ContentReviewService:
 
     def get_rejection_comments(self, content_id: str) -> List[RejectionComment]:
         item = self._get_content(content_id)
-        return list(item.rejection_comments)
+        return [
+            RejectionComment(
+                reviewer=r.reviewer,
+                comment=r.comment,
+                timestamp=r.timestamp,
+            )
+            for r in item.review_records
+            if r.action == ReviewAction.REJECT
+        ]
 
     def _get_content(self, content_id: str) -> ContentItem:
         item = self._contents.get(content_id)
@@ -147,11 +147,3 @@ class ContentReviewService:
         allowed = _TRANSITIONS.get(current_status, {})
         if action not in allowed:
             raise InvalidStateTransitionError(current_status.value, action.value)
-
-    @staticmethod
-    def _validate_review_state(status: ReviewStatus) -> None:
-        if status != ReviewStatus.UNDER_REVIEW:
-            raise InvalidOperationError(
-                f"Review operations can only be performed on content in "
-                f"'under_review' state, current state is '{status.value}'"
-            )

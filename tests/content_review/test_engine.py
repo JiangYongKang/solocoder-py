@@ -8,7 +8,6 @@ from solocoder_py.content_review import (
     ContentNotFoundError,
     ContentReviewService,
     ContentItem,
-    InvalidOperationError,
     InvalidStateTransitionError,
     RejectionCommentRequiredError,
     ReviewAction,
@@ -248,11 +247,11 @@ class TestMultipleRejections:
         item = service.get_content(draft_content)
         assert item is not None
         assert item.status == ReviewStatus.PUBLISHED
-        assert len(item.rejection_comments) == 4
+        assert len(service.get_rejection_comments(draft_content)) == 4
 
 
 class TestInvalidStateTransitions:
-    def test_draft_directly_publish_rejected(
+    def test_draft_publish_rejected(
         self, service: ContentReviewService, draft_content: str
     ) -> None:
         with pytest.raises(InvalidStateTransitionError) as excinfo:
@@ -260,17 +259,30 @@ class TestInvalidStateTransitions:
         assert "draft" in str(excinfo.value)
         assert "publish" in str(excinfo.value)
 
-    def test_draft_directly_approve_rejected(
+    def test_draft_approve_rejected(
         self, service: ContentReviewService, draft_content: str
     ) -> None:
         with pytest.raises(InvalidStateTransitionError):
             service.approve(draft_content, "reviewer-1")
 
-    def test_draft_directly_reject_rejected(
+    def test_draft_reject_rejected(
         self, service: ContentReviewService, draft_content: str
     ) -> None:
         with pytest.raises(InvalidStateTransitionError):
             service.reject(draft_content, "reviewer-1", "Bad")
+
+    def test_draft_withdraw_rejected(
+        self, service: ContentReviewService, draft_content: str
+    ) -> None:
+        with pytest.raises(InvalidStateTransitionError):
+            service.withdraw(draft_content)
+
+    def test_under_review_submit_rejected(
+        self, service: ContentReviewService, draft_content: str
+    ) -> None:
+        service.submit_for_review(draft_content)
+        with pytest.raises(InvalidStateTransitionError):
+            service.submit_for_review(draft_content)
 
     def test_under_review_publish_rejected(
         self, service: ContentReviewService, draft_content: str
@@ -291,8 +303,17 @@ class TestInvalidStateTransitions:
     ) -> None:
         service.submit_for_review(draft_content)
         service.approve(draft_content, "reviewer-1")
-        with pytest.raises(InvalidStateTransitionError):
+        with pytest.raises(InvalidStateTransitionError) as excinfo:
             service.submit_for_review(draft_content)
+        assert "approved" in str(excinfo.value)
+
+    def test_approved_approve_rejected(
+        self, service: ContentReviewService, draft_content: str
+    ) -> None:
+        service.submit_for_review(draft_content)
+        service.approve(draft_content, "reviewer-1")
+        with pytest.raises(InvalidStateTransitionError):
+            service.approve(draft_content, "reviewer-2")
 
     def test_approved_reject_rejected(
         self, service: ContentReviewService, draft_content: str
@@ -309,6 +330,15 @@ class TestInvalidStateTransitions:
         service.approve(draft_content, "reviewer-1")
         with pytest.raises(InvalidStateTransitionError):
             service.withdraw(draft_content)
+
+    def test_published_submit_rejected(
+        self, service: ContentReviewService, draft_content: str
+    ) -> None:
+        service.submit_for_review(draft_content)
+        service.approve(draft_content, "reviewer-1")
+        service.publish(draft_content)
+        with pytest.raises(InvalidStateTransitionError):
+            service.submit_for_review(draft_content)
 
     def test_published_approve_rejected(
         self, service: ContentReviewService, draft_content: str
@@ -328,65 +358,14 @@ class TestInvalidStateTransitions:
         with pytest.raises(InvalidStateTransitionError):
             service.reject(draft_content, "reviewer-1", "Nope")
 
-    def test_published_submit_rejected(
+    def test_published_publish_rejected(
         self, service: ContentReviewService, draft_content: str
     ) -> None:
         service.submit_for_review(draft_content)
         service.approve(draft_content, "reviewer-1")
         service.publish(draft_content)
         with pytest.raises(InvalidStateTransitionError):
-            service.submit_for_review(draft_content)
-
-    def test_approved_content_resubmit_rejected(
-        self, service: ContentReviewService, draft_content: str
-    ) -> None:
-        service.submit_for_review(draft_content)
-        service.approve(draft_content, "reviewer-1")
-        with pytest.raises(InvalidStateTransitionError) as excinfo:
-            service.submit_for_review(draft_content)
-        assert "approved" in str(excinfo.value)
-
-
-class TestReviewOperationOnNonReviewState:
-    def test_approve_on_draft_rejected(
-        self, service: ContentReviewService, draft_content: str
-    ) -> None:
-        with pytest.raises(InvalidStateTransitionError):
-            service.approve(draft_content, "reviewer-1")
-
-    def test_approve_on_approved_rejected(
-        self, service: ContentReviewService, draft_content: str
-    ) -> None:
-        service.submit_for_review(draft_content)
-        service.approve(draft_content, "reviewer-1")
-        with pytest.raises(InvalidStateTransitionError):
-            service.approve(draft_content, "reviewer-2")
-
-    def test_approve_on_published_rejected(
-        self, service: ContentReviewService, draft_content: str
-    ) -> None:
-        service.submit_for_review(draft_content)
-        service.approve(draft_content, "reviewer-1")
-        service.publish(draft_content)
-        with pytest.raises(InvalidStateTransitionError):
-            service.approve(draft_content, "reviewer-1")
-
-    def test_reject_on_approved_rejected(
-        self, service: ContentReviewService, draft_content: str
-    ) -> None:
-        service.submit_for_review(draft_content)
-        service.approve(draft_content, "reviewer-1")
-        with pytest.raises(InvalidStateTransitionError):
-            service.reject(draft_content, "reviewer-1", "Nope")
-
-    def test_reject_on_published_rejected(
-        self, service: ContentReviewService, draft_content: str
-    ) -> None:
-        service.submit_for_review(draft_content)
-        service.approve(draft_content, "reviewer-1")
-        service.publish(draft_content)
-        with pytest.raises(InvalidStateTransitionError):
-            service.reject(draft_content, "reviewer-1", "Nope")
+            service.publish(draft_content)
 
 
 class TestContentNotFound:

@@ -38,6 +38,14 @@ class HighlightRegistry:
                     f"Highlight hook for language '{language}' raised an error: {e}"
                 ) from e
 
+        if self._default_hook is not None:
+            try:
+                return self._default_hook(code)
+            except Exception as e:
+                raise HighlightHookError(
+                    f"Default highlight hook raised an error: {e}"
+                ) from e
+
         escaped = escape(code)
         return f"<pre><code>{escaped}</code></pre>"
 

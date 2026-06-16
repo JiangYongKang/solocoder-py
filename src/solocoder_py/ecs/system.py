@@ -26,14 +26,10 @@ class System:
         self._write_components: frozenset[type] = frozenset(write_components or [])
         self._update = update
 
-        read_list = list(read_components or [])
-        write_list = list(write_components or [])
-        self._query_order: list[type] = []
-        seen: set[type] = set()
-        for ct in read_list + write_list:
-            if ct not in seen:
-                seen.add(ct)
-                self._query_order.append(ct)
+        all_components = self._read_components | self._write_components
+        self._query_order: list[type] = sorted(
+            all_components, key=lambda t: t.__name__
+        )
 
         for ct in self._read_components:
             validate_component_type(ct)
@@ -124,44 +120,39 @@ class SystemScheduler:
                 b_reads = sys_b.read_components
                 b_writes = sys_b.write_components
 
-                a_writes_b_reads = bool(a_writes & b_reads)
-                b_writes_a_reads = bool(b_writes & a_reads)
+                raw_ab = bool(a_writes & b_reads)
+                raw_ba = bool(b_writes & a_reads)
+                war_ab = bool(a_reads & b_writes)
+                war_ba = bool(b_reads & a_writes)
+                waw_ab = bool(a_writes & b_writes)
 
-                is_strong_ab = a_writes_b_reads and (a_reads or b_writes)
-                is_strong_ba = b_writes_a_reads and (b_reads or a_writes)
-
-                if is_strong_ab and is_strong_ba:
+                if raw_ab and raw_ba:
                     add_edge(sys_a, sys_b)
                     add_edge(sys_b, sys_a)
 
-                elif is_strong_ab:
+                elif raw_ab:
                     add_edge(sys_a, sys_b)
 
-                elif is_strong_ba:
+                elif raw_ba:
                     add_edge(sys_b, sys_a)
 
-                elif a_writes_b_reads or b_writes_a_reads:
-                    war_ab = bool(a_reads & b_writes)
-                    war_ba = bool(b_reads & a_writes)
-                    if war_ab:
+                elif war_ab and war_ba:
+                    if sys_a.name < sys_b.name:
                         add_edge(sys_a, sys_b)
-                    elif war_ba:
+                    else:
                         add_edge(sys_b, sys_a)
 
-                else:
-                    waw_ab = bool(a_writes & b_writes)
-                    war_ab = bool(a_reads & b_writes)
-                    war_ba = bool(b_reads & a_writes)
+                elif war_ab:
+                    add_edge(sys_a, sys_b)
 
-                    if war_ab:
+                elif war_ba:
+                    add_edge(sys_b, sys_a)
+
+                elif waw_ab:
+                    if sys_a.name < sys_b.name:
                         add_edge(sys_a, sys_b)
-                    elif war_ba:
+                    else:
                         add_edge(sys_b, sys_a)
-                    elif waw_ab:
-                        if sys_a.name < sys_b.name:
-                            add_edge(sys_a, sys_b)
-                        else:
-                            add_edge(sys_b, sys_a)
 
         return adjacency, in_degree
 

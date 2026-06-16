@@ -32,6 +32,10 @@ _JAVASCRIPT_PROTOCOL_PATTERN = re.compile(
     r'^\s*javascript\s*:', re.IGNORECASE
 )
 
+_DATA_PROTOCOL_PATTERN = re.compile(
+    r'^\s*data\s*:', re.IGNORECASE
+)
+
 _DATA_ATTRIBUTE_PATTERN = re.compile(r'^data-[a-z0-9_-]+$', re.IGNORECASE)
 
 _TAG_PATTERN = re.compile(r'<(/?)([a-zA-Z][a-zA-Z0-9_-]*)\s*([^>]*)>', re.DOTALL)
@@ -106,6 +110,9 @@ class HtmlSanitizer:
             if attr_lower in ("href", "src") and attr_value:
                 if _JAVASCRIPT_PROTOCOL_PATTERN.match(attr_value):
                     self.warnings.append(f"Removed javascript: protocol in {attr_name} on <{tag_name}>")
+                    continue
+                if _DATA_PROTOCOL_PATTERN.match(attr_value):
+                    self.warnings.append(f"Removed data: protocol in {attr_name} on <{tag_name}>")
                     continue
 
             safe_attrs.append(f'{attr_name}="{self._sanitize_attribute_value(attr_value)}"')

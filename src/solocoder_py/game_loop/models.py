@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar, Optional
+from typing import Generic, TypeVar
 
 from .exceptions import GameStateNotInterpolableError
 
@@ -29,22 +29,12 @@ class GameState(ABC):
 class InterpolatedState(Generic[T]):
     state: T
     alpha: float
-    previous_state: Optional[T] = None
     _interpolated: Optional[T] = None
 
     def get_interpolated(self) -> T:
         if self._interpolated is not None:
             return self._interpolated
-        if self.previous_state is None:
-            return self.state
-        if self.alpha <= 0.0:
-            return self.previous_state
-        if self.alpha >= 1.0:
-            return self.state
-        try:
-            return self.previous_state.interpolate(self.state, self.alpha)
-        except GameStateNotInterpolableError:
-            return self.state
+        return self.state
 
 
 @dataclass

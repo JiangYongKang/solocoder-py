@@ -59,6 +59,37 @@ class TestHtmlSanitizerBasic:
         result = sanitizer.sanitize(html)
         assert "javascript:" not in result.lower()
 
+    def test_data_protocol_href_removed(self):
+        sanitizer = HtmlSanitizer()
+        html = '<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">click</a>'
+        result = sanitizer.sanitize(html)
+        assert "data:" not in result.lower()
+        assert "href" not in result
+
+    def test_data_protocol_src_removed(self):
+        sanitizer = HtmlSanitizer()
+        html = '<img src="data:image/png;base64,abc" />'
+        result = sanitizer.sanitize(html)
+        assert "data:" not in result.lower()
+
+    def test_data_protocol_with_whitespace_removed(self):
+        sanitizer = HtmlSanitizer()
+        html = '<a href=" data:text/html,<script>alert(1)</script>">click</a>'
+        result = sanitizer.sanitize(html)
+        assert "data:" not in result.lower()
+
+    def test_data_protocol_mixed_case_removed(self):
+        sanitizer = HtmlSanitizer()
+        html = '<a href="DATA:text/html,test">click</a>'
+        result = sanitizer.sanitize(html)
+        assert "data:" not in result.lower()
+
+    def test_data_protocol_warning_recorded(self):
+        sanitizer = HtmlSanitizer()
+        html = '<a href="data:text/html,test">click</a>'
+        sanitizer.sanitize(html)
+        assert any("data:" in w.lower() for w in sanitizer.warnings)
+
     def test_safe_attributes_preserved(self):
         sanitizer = HtmlSanitizer()
         html = '<a href="https://example.com" title="Example">link</a>'

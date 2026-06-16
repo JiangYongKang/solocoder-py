@@ -2,7 +2,6 @@ from .enums import ReviewAction, ReviewStatus
 from .exceptions import (
     ContentNotFoundError,
     ContentReviewError,
-    InvalidOperationError,
     InvalidStateTransitionError,
     RejectionCommentRequiredError,
 )
@@ -14,7 +13,6 @@ __all__ = [
     "ReviewStatus",
     "ContentReviewError",
     "ContentNotFoundError",
-    "InvalidOperationError",
     "InvalidStateTransitionError",
     "RejectionCommentRequiredError",
     "ContentItem",

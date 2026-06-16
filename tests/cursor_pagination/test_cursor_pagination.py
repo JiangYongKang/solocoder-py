@@ -651,3 +651,261 @@ class TestComplexScenario:
         non_none = [(i, p) for i, p in zip(ids, priorities) if p is not None]
         for i in range(len(non_none) - 1):
             assert non_none[i][1] <= non_none[i + 1][1]
+
+
+# ============================================================
+# 修复后新增的专项测试（4个修复点）
+# ============================================================
+
+class TestFix1ConsistentComparisonLogic:
+    def test_bool_and_int_mixed_sort_no_duplication(self):
+        data = [
+            {"id": 1, "flag": 0},
+            {"id": 2, "flag": False},
+            {"id": 3, "flag": True},
+            {"id": 4, "flag": 1},
+            {"id": 5, "flag": False},
+            {"id": 6, "flag": 0},
+            {"id": 7, "flag": True},
+            {"id": 8, "flag": 1},
+        ]
+        engine = CursorPaginationEngine(
+            data=data,
+            sort_fields=[SortField("flag", SortOrder.ASC), SortField("id", SortOrder.ASC)],
+        )
+
+        collected = []
+        cursor = None
+        page_num = 0
+        while True:
+            page = engine.paginate(page_size=3, cursor=cursor, direction="next")
+            collected.extend(r["id"] for r in page.data)
+            page_num += 1
+            if not page.has_next:
+                break
+            cursor = page.end_cursor
+
+        assert page_num == 3
+        assert len(collected) == 8
+        assert sorted(collected) == list(range(1, 9))
+
+        bool_ids = [r["id"] for r in data if isinstance(r["flag"], bool)]
+        int_ids = [r["id"] for r in data if isinstance(r["flag"], int) and not isinstance(r["flag"], bool)]
+        for bi in bool_ids:
+            for ii in int_ids:
+                assert collected.index(bi) < collected.index(ii)
+
+    def test_bool_int_mixed_backtrack_consistent(self):
+        data = [
+            {"id": 1, "val": False},
+            {"id": 2, "val": 0},
+            {"id": 3, "val": True},
+            {"id": 4, "val": 1},
+            {"id": 5, "val": 2},
+            {"id": 6, "val": True},
+        ]
+        engine = CursorPaginationEngine(data=data, sort_fields=["val", "id"])
+
+        p1 = engine.paginate(page_size=2)
+        p2 = engine.paginate(page_size=2, cursor=p1.end_cursor, direction="next")
+        p3 = engine.paginate(page_size=2, cursor=p2.end_cursor, direction="next")
+
+        back_p2 = engine.paginate(page_size=2, cursor=p3.start_cursor, direction="prev")
+        back_p1 = engine.paginate(page_size=2, cursor=back_p2.start_cursor, direction="prev")
+
+        assert [r["id"] for r in back_p2.data] == [r["id"] for r in p2.data]
+        assert [r["id"] for r in back_p1.data] == [r["id"] for r in p1.data]
+
+    def test_mixed_type_traversal_no_miss_no_dup(self):
+        data = [
+            {"id": i, "v": v}
+            for i, v in enumerate([None, "abc", 42, None, True, 3.14, "xyz", False], start=1)
+        ]
+        engine = CursorPaginationEngine(data=data, sort_fields=["v", "id"])
+
+        all_fwd = []
+        cursor = None
+        while True:
+            p = engine.paginate(page_size=2, cursor=cursor, direction="next")
+            all_fwd.extend(r["id"] for r in p.data)
+            if not p.has_next:
+                break
+            cursor = p.end_cursor
+
+        all_bwd = []
+        cursor = None
+        while True:
+            p = engine.paginate(page_size=2, cursor=cursor, direction="prev")
+            all_bwd.insert(0, None)
+            all_bwd[0:1] = [r["id"] for r in p.data]
+            if not p.has_prev:
+                break
+            cursor = p.start_cursor
+
+        assert sorted(all_fwd) == list(range(1, 9))
+        assert all_fwd == all_bwd
+
+
+class TestFix2CursorSortFieldValidation:
+    def test_cursor_rejected_when_sort_field_differs(self, sample_data_10):
+        engine_id = CursorPaginationEngine(data=sample_data_10, sort_fields=["id"])
+        engine_score = CursorPaginationEngine(data=sample_data_10, sort_fields=["score"])
+
+        page = engine_id.paginate(page_size=3)
+        with pytest.raises(InvalidCursorError, match="sort field"):
+            engine_score.paginate(page_size=3, cursor=page.end_cursor, direction="next")
+
+    def test_cursor_rejected_when_order_differs(self, sample_data_10):
+        engine_asc = CursorPaginationEngine(data=sample_data_10, sort_fields=[("id", "asc")])
+        engine_desc = CursorPaginationEngine(data=sample_data_10, sort_fields=[("id", "desc")])
+
+        page = engine_asc.paginate(page_size=3)
+        with pytest.raises(InvalidCursorError, match="does not match"):
+            engine_desc.paginate(page_size=3, cursor=page.end_cursor, direction="next")
+
+    def test_cursor_rejected_when_field_count_differs(self, sample_data_10):
+        engine_single = CursorPaginationEngine(data=sample_data_10, sort_fields=["id"])
+        engine_multi = CursorPaginationEngine(
+            data=sample_data_10, sort_fields=["score", "id"]
+        )
+
+        page = engine_single.paginate(page_size=3)
+        with pytest.raises(InvalidCursorError, match="count does not match"):
+            engine_multi.paginate(page_size=3, cursor=page.end_cursor, direction="next")
+
+    def test_cursor_accepted_when_same_sort_fields(self, sample_data_10):
+        engine_a = CursorPaginationEngine(
+            data=sample_data_10, sort_fields=[("score", "desc"), ("id", "asc")]
+        )
+        engine_b = CursorPaginationEngine(
+            data=list(reversed(sample_data_10)),
+            sort_fields=[SortField("score", SortOrder.DESC), SortField("id", SortOrder.ASC)],
+        )
+
+        page_a = engine_a.paginate(page_size=3)
+        page_b = engine_b.paginate(page_size=3, cursor=page_a.end_cursor, direction="next")
+        assert len(page_b.data) == 3
+
+
+class TestFix3EstimateTotalExtensionPoint:
+    def test_estimate_fn_called_when_set(self, sample_data_10):
+        call_count = 0
+
+        def fake_estimator() -> int:
+            nonlocal call_count
+            call_count += 1
+            return 9999
+
+        config = PaginationConfig(estimate_total_fn=fake_estimator)
+        engine = CursorPaginationEngine(
+            data=sample_data_10, sort_fields=["id"], config=config
+        )
+
+        page = engine.paginate(page_size=3, include_total=True, estimate_total=True)
+        assert page.total == 9999
+        assert page.total_estimated is True
+        assert call_count == 1
+
+    def test_estimate_fn_used_even_without_flag(self, sample_data_10):
+        config = PaginationConfig(estimate_total_fn=lambda: 500)
+        engine = CursorPaginationEngine(
+            data=sample_data_10, sort_fields=["id"], config=config
+        )
+
+        page = engine.paginate(page_size=3, include_total=True)
+        assert page.total == 500
+        assert page.total_estimated is True
+
+    def test_no_estimate_fn_uses_exact_count(self, sample_data_10):
+        engine = CursorPaginationEngine(data=sample_data_10, sort_fields=["id"])
+
+        page = engine.paginate(page_size=3, include_total=True, estimate_total=True)
+        assert page.total == 10
+        assert page.total_estimated is True
+
+    def test_estimate_total_method(self, sample_data_large):
+        config = PaginationConfig(estimate_total_fn=lambda: 12345)
+        engine = CursorPaginationEngine(
+            data=sample_data_large, sort_fields=["id"], config=config
+        )
+        assert engine.estimate_total() == 12345
+
+    def test_estimate_total_method_no_fn(self, sample_data_5):
+        engine = CursorPaginationEngine(data=sample_data_5, sort_fields=["id"])
+        assert engine.estimate_total() == 5
+
+    def test_exact_count_when_not_including_total(self, sample_data_10):
+        calls = {"n": 0}
+
+        def estimator():
+            calls["n"] += 1
+            return 100
+
+        config = PaginationConfig(estimate_total_fn=estimator)
+        engine = CursorPaginationEngine(data=sample_data_10, sort_fields=["id"], config=config)
+        page = engine.paginate(page_size=3)
+        assert page.total is None
+        assert calls["n"] == 0
+
+
+class TestFix4UnifiedBisectMethod:
+    def test_bisect_sides_via_full_traversal(self, sample_data_large):
+        engine = CursorPaginationEngine(data=sample_data_large, sort_fields=["id"])
+        page_size = 8
+
+        forward_pages = []
+        cursor = None
+        while True:
+            p = engine.paginate(page_size=page_size, cursor=cursor, direction="next")
+            forward_pages.append(p)
+            if not p.has_next:
+                break
+            cursor = p.end_cursor
+
+        total_fwd = []
+        for p in forward_pages:
+            total_fwd.extend(r["id"] for r in p.data)
+        assert total_fwd == list(range(1, 101))
+        assert all(len(p.data) <= page_size for p in forward_pages)
+
+        last = forward_pages[-1]
+        cursor = last.start_cursor
+        while True:
+            p = engine.paginate(page_size=page_size, cursor=cursor, direction="prev")
+            forward_pages.pop()
+            if not p.has_prev:
+                forward_pages.pop()
+                break
+            cursor = p.start_cursor
+
+        assert len(forward_pages) == 0
+
+    def test_left_right_consistency_with_ties(self):
+        data = [
+            {"id": i, "group": g}
+            for g in range(1, 6)
+            for i in range((g - 1) * 5 + 1, g * 5 + 1)
+        ]
+        engine = CursorPaginationEngine(data=data, sort_fields=["group", "id"])
+
+        for page_size in [1, 3, 5, 7, 10]:
+            all_ids = []
+            cursor = None
+            while True:
+                p = engine.paginate(page_size=page_size, cursor=cursor, direction="next")
+                all_ids.extend(r["id"] for r in p.data)
+                if not p.has_next:
+                    break
+                cursor = p.end_cursor
+            assert all_ids == list(range(1, 26))
+
+    def test_last_and_first_boundary(self, sample_data_5):
+        engine = CursorPaginationEngine(data=sample_data_5, sort_fields=["id"])
+
+        page1 = engine.paginate(page_size=5)
+        assert page1.has_next is False
+        assert page1.has_prev is False
+        back = engine.paginate(page_size=5, cursor=page1.start_cursor, direction="prev")
+        assert len(back.data) == 0
+        assert back.has_prev is False
+        assert back.has_next is True

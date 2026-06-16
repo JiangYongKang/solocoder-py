@@ -205,32 +205,27 @@ class TestComponentTypeQuery:
 
 
 class TestSparseSet:
-    def test_insert_and_get(self):
+    def test_insert_and_contains(self):
         ss = SparseSet(Position)
         entity = EntityId(0)
-        pos = Position(x=1.0, y=2.0)
-        ss.insert(entity, pos)
+        ss.insert(entity)
         assert ss.contains(entity)
-        assert ss.get(entity) == pos
         assert len(ss) == 1
 
-    def test_insert_overwrite(self):
+    def test_insert_idempotent(self):
         ss = SparseSet(Position)
         entity = EntityId(0)
-        pos1 = Position(x=1.0, y=2.0)
-        pos2 = Position(x=3.0, y=4.0)
-        ss.insert(entity, pos1)
-        ss.insert(entity, pos2)
-        assert ss.get(entity) == pos2
+        ss.insert(entity)
+        ss.insert(entity)
+        assert ss.contains(entity)
         assert len(ss) == 1
 
     def test_remove(self):
         ss = SparseSet(Position)
         entity = EntityId(0)
-        ss.insert(entity, Position(x=1.0, y=2.0))
+        ss.insert(entity)
         ss.remove(entity)
         assert not ss.contains(entity)
-        assert ss.get(entity) is None
         assert len(ss) == 0
 
     def test_remove_nonexistent_no_error(self):
@@ -241,37 +236,16 @@ class TestSparseSet:
     def test_iter_entities(self):
         ss = SparseSet(Position)
         for i in range(5):
-            ss.insert(EntityId(i), Position(x=float(i), y=float(i)))
+            ss.insert(EntityId(i))
 
         entities = list(ss.iter_entities())
         assert len(entities) == 5
-        for i, e in enumerate(entities):
-            assert e.id == i
-
-    def test_iter_components(self):
-        ss = SparseSet(Position)
-        positions = [Position(x=float(i), y=float(i)) for i in range(5)]
-        for i, pos in enumerate(positions):
-            ss.insert(EntityId(i), pos)
-
-        comps = list(ss.iter_components())
-        assert len(comps) == 5
-        for i, c in enumerate(comps):
-            assert c.x == float(i)
-
-    def test_iter_pairs(self):
-        ss = SparseSet(Position)
-        for i in range(3):
-            ss.insert(EntityId(i * 2), Position(x=float(i), y=float(i)))
-
-        pairs = list(ss.iter())
-        assert len(pairs) == 3
-        for entity, comp in pairs:
-            assert comp.x == entity.id / 2
+        ids = {e.id for e in entities}
+        assert ids == {0, 1, 2, 3, 4}
 
     def test_sparse_gap_handling(self):
         ss = SparseSet(Position)
-        ss.insert(EntityId(100), Position(x=1.0, y=2.0))
+        ss.insert(EntityId(100))
         assert ss.contains(EntityId(100))
         assert len(ss) == 1
         assert not ss.contains(EntityId(99))
@@ -279,7 +253,7 @@ class TestSparseSet:
     def test_clear(self):
         ss = SparseSet(Position)
         for i in range(10):
-            ss.insert(EntityId(i), Position())
+            ss.insert(EntityId(i))
         ss.clear()
         assert len(ss) == 0
         for i in range(10):
@@ -288,7 +262,7 @@ class TestSparseSet:
     def test_remove_maintains_dense_order(self):
         ss = SparseSet(Position)
         for i in range(5):
-            ss.insert(EntityId(i), Position(x=float(i), y=float(i)))
+            ss.insert(EntityId(i))
 
         ss.remove(EntityId(2))
 
@@ -297,10 +271,6 @@ class TestSparseSet:
         assert len(ids) == 4
         assert set(ids) == {0, 1, 3, 4}
         assert len(ss) == 4
-
-        comps = list(ss.iter_components())
-        x_values = sorted([c.x for c in comps])
-        assert x_values == [0.0, 1.0, 3.0, 4.0]
 
 
 # ============================================================
@@ -526,7 +496,31 @@ class TestSystemTopologicalOrder:
         scheduler.add_system(s_write)
 
         order = scheduler.get_order()
-        assert order.index("reader") < order.index("writer")
+        assert order.index("writer") < order.index("reader")
+
+    def test_pure_writer_before_pure_reader(self):
+        scheduler = SystemScheduler()
+
+        s_write = System("writer", write_components=[Position])
+        s_read = System("reader", read_components=[Position])
+
+        scheduler.add_system(s_write)
+        scheduler.add_system(s_read)
+
+        order = scheduler.get_order()
+        assert order.index("writer") < order.index("reader")
+
+    def test_writer_with_read_before_pure_reader(self):
+        scheduler = SystemScheduler()
+
+        s_writer = System("writer", read_components=[Velocity], write_components=[Position])
+        s_reader = System("reader", read_components=[Position])
+
+        scheduler.add_system(s_writer)
+        scheduler.add_system(s_reader)
+
+        order = scheduler.get_order()
+        assert order.index("writer") < order.index("reader")
 
     def test_write_write_conflict_ordering(self):
         scheduler = SystemScheduler()
@@ -556,7 +550,7 @@ class TestSystemTopologicalOrder:
         processed: list[int] = []
 
         def movement_update(w, s):
-            for entity, (vel, pos) in s.query(w):
+            for entity, (pos, vel) in s.query(w):
                 pos.x += vel.x
                 pos.y += vel.y
                 processed.append(entity.id)
@@ -588,7 +582,7 @@ class TestSystemTopologicalOrder:
         results: list[tuple[float, int]] = []
 
         def update_fn(w, s):
-            for entity, (pos, health) in s.query_by_archetype(w):
+            for entity, (health, pos) in s.query_by_archetype(w):
                 results.append((pos.x, health.current))
 
         sys = System(
@@ -760,7 +754,7 @@ class TestFullIntegration:
             world.add_component(e, Velocity(x=1.0, y=2.0))
 
         def movement_update(w, s):
-            for entity, (vel, pos) in s.query_by_archetype(w):
+            for entity, (pos, vel) in s.query_by_archetype(w):
                 pos.x += vel.x
                 pos.y += vel.y
 
@@ -796,7 +790,7 @@ class TestFullIntegration:
                 world.add_component(e, Tag(value="damaged"))
 
         def damage_update(w, s):
-            for entity, (tag, health) in s.query_by_archetype(w):
+            for entity, (health, tag) in s.query_by_archetype(w):
                 if tag.value == "damaged":
                     health.current -= 10
 
@@ -834,7 +828,7 @@ class TestFullIntegration:
 
         def movement_update(w, s):
             execution_log.append("movement")
-            for entity, (vel, pos) in s.query_by_archetype(w):
+            for entity, (pos, vel) in s.query_by_archetype(w):
                 pos.x += vel.x
                 pos.y += vel.y
 

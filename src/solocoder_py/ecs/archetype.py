@@ -12,9 +12,6 @@ class Archetype:
             validate_component_type(ct)
 
         self._component_types: frozenset[type] = component_types
-        self._sorted_types: tuple[type, ...] = tuple(
-            sorted(component_types, key=lambda t: t.__name__)
-        )
         self._columns: dict[type, list[Any]] = {ct: [] for ct in component_types}
         self._entities: list[int] = []
         self._entity_to_row: dict[int, int] = {}
@@ -22,10 +19,6 @@ class Archetype:
     @property
     def component_types(self) -> frozenset[type]:
         return self._component_types
-
-    @property
-    def sorted_types(self) -> tuple[type, ...]:
-        return self._sorted_types
 
     def has_components(self, required: frozenset[type]) -> bool:
         return required.issubset(self._component_types)
@@ -84,12 +77,6 @@ class Archetype:
     def iter_column(self, component_type: type) -> Iterator[Any]:
         return iter(self._columns[component_type])
 
-    def iter_columns(
-        self, component_types: tuple[type, ...]
-    ) -> Iterator[tuple[Any, ...]]:
-        columns = [self._columns[ct] for ct in component_types]
-        return zip(*columns)
-
     def iter_with_components(
         self, component_types: tuple[type, ...]
     ) -> Iterator[tuple[EntityId, tuple[Any, ...]]]:
@@ -108,7 +95,6 @@ class ArchetypeManager:
     def __init__(self) -> None:
         self._archetypes: dict[frozenset[type], Archetype] = {}
         self._entity_archetype: dict[int, Archetype] = {}
-        self._entity_row: dict[int, int] = {}
 
     def get_or_create(self, component_types: frozenset[type]) -> Archetype:
         key = frozenset(component_types)
@@ -127,6 +113,35 @@ class ArchetypeManager:
 
     def remove_entity_archetype(self, entity: EntityId) -> None:
         self._entity_archetype.pop(entity.id, None)
+
+    def remove_entity(self, entity: EntityId) -> dict[type, Any]:
+        archetype = self._entity_archetype.get(entity.id)
+        if archetype is None:
+            return {}
+        removed = archetype.remove_entity(entity)
+        del self._entity_archetype[entity.id]
+        self._cleanup_empty_archetypes()
+        return removed
+
+    def migrate_entity(
+        self, entity: EntityId, new_component_types: frozenset[type], components: dict[type, Any]
+    ) -> None:
+        old_archetype = self._entity_archetype.get(entity.id)
+
+        if old_archetype is not None:
+            if old_archetype.component_types == new_component_types:
+                return
+            old_archetype.remove_entity(entity)
+
+        self._cleanup_empty_archetypes()
+
+        if not new_component_types:
+            self._entity_archetype.pop(entity.id, None)
+            return
+
+        new_archetype = self.get_or_create(new_component_types)
+        new_archetype.add_entity(entity, components)
+        self._entity_archetype[entity.id] = new_archetype
 
     def find_matching(self, required: frozenset[type]) -> list[Archetype]:
         return [
@@ -148,4 +163,3 @@ class ArchetypeManager:
             arch.clear()
         self._archetypes.clear()
         self._entity_archetype.clear()
-        self._entity_row.clear()

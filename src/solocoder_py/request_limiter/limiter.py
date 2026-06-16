@@ -19,8 +19,11 @@ class _ChunkedByteStream:
     def __init__(self, source: Any, chunk_size: int) -> None:
         self._source = source
         self._chunk_size = chunk_size
-        self._buffer = io.BytesIO()
-        self._exhausted = False
+        self._bytes_read = 0
+
+    @property
+    def bytes_read(self) -> int:
+        return self._bytes_read
 
     def __iter__(self) -> Generator[bytes, None, None]:
         if hasattr(self._source, "read"):
@@ -28,11 +31,7 @@ class _ChunkedByteStream:
         elif isinstance(self._source, (bytes, bytearray)):
             yield from self._from_bytes(bytes(self._source))
         elif isinstance(self._source, (list, tuple)):
-            for item in self._source:
-                if isinstance(item, (bytes, bytearray)):
-                    yield bytes(item)
-                else:
-                    yield str(item).encode("utf-8")
+            yield from self._from_sequence(self._source)
         elif self._source is None:
             return
         else:
@@ -44,20 +43,34 @@ class _ChunkedByteStream:
                 chunk = self._source.read(self._chunk_size)
             except Exception:
                 raise IncompleteReadError(
-                    received_bytes=self._buffer.tell(),
+                    received_bytes=self._bytes_read,
                     message="Connection interrupted while reading request body",
                 )
             if chunk is None or len(chunk) == 0:
                 break
-            yield bytes(chunk)
+            chunk_bytes = bytes(chunk)
+            self._bytes_read += len(chunk_bytes)
+            yield chunk_bytes
 
     def _from_bytes(self, data: bytes) -> Generator[bytes, None, None]:
         offset = 0
         total = len(data)
         while offset < total:
             end = min(offset + self._chunk_size, total)
-            yield data[offset:end]
+            chunk = data[offset:end]
+            self._bytes_read += len(chunk)
+            yield chunk
             offset = end
+
+    def _from_sequence(self, seq: list | tuple) -> Generator[bytes, None, None]:
+        buffer = io.BytesIO()
+        for item in seq:
+            if isinstance(item, (bytes, bytearray)):
+                buffer.write(bytes(item))
+            else:
+                buffer.write(str(item).encode("utf-8"))
+        buffer.seek(0)
+        yield from self._from_bytes(buffer.getvalue())
 
 
 class BodySizeLimiter:
@@ -75,6 +88,33 @@ class BodySizeLimiter:
 
     def reset_stats(self) -> None:
         self._stats = LimitStats()
+
+    def _build_too_large_response(self) -> Response:
+        return Response(
+            status_code=self._config.error_status_code,
+            body={
+                "error": "Payload Too Large",
+                "message": self._config.error_message,
+            },
+        )
+
+    def _build_incomplete_response(self) -> Response:
+        return Response(
+            status_code=400,
+            body={
+                "error": "Bad Request",
+                "message": "Incomplete request body",
+            },
+        )
+
+    def _build_internal_error_response(self, exc: Exception) -> Response:
+        return Response(
+            status_code=500,
+            body={
+                "error": "Internal Server Error",
+                "message": str(exc),
+            },
+        )
 
     def limit_stream(
         self,
@@ -185,30 +225,12 @@ class BodySizeLimiter:
                 expected_content_length=request.expected_content_length,
             )
         except PayloadTooLargeError:
-            return Response(
-                status_code=self._config.error_status_code,
-                body={
-                    "error": "Payload Too Large",
-                    "message": self._config.error_message,
-                },
-            )
+            return self._build_too_large_response()
         except IncompleteReadError:
-            return Response(
-                status_code=400,
-                body={
-                    "error": "Bad Request",
-                    "message": "Incomplete request body",
-                },
-            )
+            return self._build_incomplete_response()
 
         if result.body is None:
-            return Response(
-                status_code=self._config.error_status_code,
-                body={
-                    "error": "Payload Too Large",
-                    "message": self._config.error_message,
-                },
-            )
+            return self._build_too_large_response()
 
         return handler(request, result.body)
 
@@ -224,24 +246,15 @@ class BodySizeLimiter:
                     request.body_stream,
                     expected_content_length=request.expected_content_length,
                 )
-            except PayloadTooLargeError:
+            except PayloadTooLargeError as exc:
                 result = LimitResult(
                     status=LimitStatus.TOO_LARGE,
-                    total_read_bytes=self._config.max_body_bytes + 1,
-                    limit_bytes=self._config.max_body_bytes,
+                    total_read_bytes=exc.received_bytes,
+                    limit_bytes=exc.limit_bytes,
                     body=None,
                     error_message=self._config.error_message,
                 )
-                return (
-                    Response(
-                        status_code=self._config.error_status_code,
-                        body={
-                            "error": "Payload Too Large",
-                            "message": self._config.error_message,
-                        },
-                    ),
-                    result,
-                )
+                return (self._build_too_large_response(), result)
             except IncompleteReadError as exc:
                 result = LimitResult(
                     status=LimitStatus.INCOMPLETE,
@@ -250,28 +263,10 @@ class BodySizeLimiter:
                     body=None,
                     error_message=str(exc),
                 )
-                return (
-                    Response(
-                        status_code=400,
-                        body={
-                            "error": "Bad Request",
-                            "message": "Incomplete request body",
-                        },
-                    ),
-                    result,
-                )
+                return (self._build_incomplete_response(), result)
 
             if result.body is None:
-                return (
-                    Response(
-                        status_code=self._config.error_status_code,
-                        body={
-                            "error": "Payload Too Large",
-                            "message": self._config.error_message,
-                        },
-                    ),
-                    result,
-                )
+                return (self._build_too_large_response(), result)
 
             return handler(request, result.body), result
 
@@ -284,13 +279,4 @@ class BodySizeLimiter:
                     body=None,
                     error_message=f"Unexpected error: {exc}",
                 )
-            return (
-                Response(
-                    status_code=500,
-                    body={
-                        "error": "Internal Server Error",
-                        "message": str(exc),
-                    },
-                ),
-                result,
-            )
+            return (self._build_internal_error_response(exc), result)

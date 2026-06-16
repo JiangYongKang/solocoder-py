@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Set, Tuple
 
-from .exceptions import InvalidGridSizeError
+from .exceptions import ColliderNotFoundError, InvalidGridSizeError
 from .models import AABB, Collider
 
 
@@ -83,7 +83,6 @@ class SpatialHash:
     def get_collider(self, collider_id: str) -> Collider:
         collider = self._colliders.get(collider_id)
         if collider is None:
-            from .exceptions import ColliderNotFoundError
             raise ColliderNotFoundError(f"Collider not found: {collider_id}")
         return collider
 

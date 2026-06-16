@@ -50,10 +50,9 @@
 ### `InterpolatedState`
 
 插值状态容器，包含：
-- `state`：当前逻辑状态
-- `previous_state`：上一逻辑状态
-- `alpha`：插值因子（0.0 - 1.0）
-- `get_interpolated() -> GameState`：获取插值后的状态
+- `state`：当前逻辑状态（最近一次逻辑更新后的真实状态）
+- `alpha`：插值因子（0.0 - 1.0），表示当前渲染时间在两次逻辑更新之间的位置
+- `get_interpolated() -> GameState`：获取插值后的状态，用于平滑渲染
 
 ## 固定时间步循环与追帧补偿机制
 

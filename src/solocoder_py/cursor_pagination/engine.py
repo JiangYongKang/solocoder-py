@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Literal, Optional, Sequence
 
 from .exceptions import (
     CursorExpiredError,
@@ -84,6 +84,9 @@ def _compute_signature(payload_b64: str, secret: str) -> str:
     return base64.urlsafe_b64encode(sig).decode("ascii").rstrip("=")
 
 
+_BisectSide = Literal["left", "right"]
+
+
 class CursorPaginationEngine:
     def __init__(
         self,
@@ -123,19 +126,26 @@ class CursorPaginationEngine:
         n = len(self._data)
         indices = list(range(n))
 
-        def make_key(idx: int) -> tuple[Any, ...]:
-            row = self._data[idx]
-            keys: list[Any] = []
-            for sf in self._sort_fields:
-                val = row.get(sf.name)
-                if sf.order == SortOrder.DESC:
-                    keys.append(_SafeSortKey(val, reverse=True))
-                else:
-                    keys.append(_SafeSortKey(val, reverse=False))
-            return tuple(keys)
+        def make_key(idx: int) -> tuple[_SafeSortKey, ...]:
+            return self._make_sort_key_for_index(idx)
 
         indices.sort(key=make_key)
         return indices
+
+    def _make_sort_key_for_index(self, idx: int) -> tuple[_SafeSortKey, ...]:
+        row = self._data[idx]
+        return tuple(
+            _SafeSortKey(row.get(sf.name), reverse=(sf.order == SortOrder.DESC))
+            for sf in self._sort_fields
+        )
+
+    def _make_sort_key_for_values(
+        self, sort_values: Sequence[Any]
+    ) -> tuple[_SafeSortKey, ...]:
+        return tuple(
+            _SafeSortKey(v, reverse=(sf.order == SortOrder.DESC))
+            for v, sf in zip(sort_values, self._sort_fields)
+        )
 
     def _validate_page_size(self, page_size: Optional[int]) -> int:
         if page_size is None:
@@ -206,6 +216,8 @@ class CursorPaginationEngine:
                 if time.time() - ts > self._config.cursor_ttl_seconds:
                     raise CursorExpiredError("Cursor has expired")
 
+            self._validate_cursor_sort_fields(payload)
+
             direction = Direction(payload["d"])
             raw_values = payload["sv"]
             sort_values = tuple(_deserialize_value(rv) for rv in raw_values)
@@ -219,69 +231,57 @@ class CursorPaginationEngine:
                 version=version,
             )
         except (KeyError, TypeError, ValueError) as e:
-            if isinstance(e, (CursorTamperedError, CursorExpiredError)):
+            if isinstance(e, (CursorTamperedError, CursorExpiredError, InvalidCursorError)):
                 raise
             raise InvalidCursorError(f"Invalid cursor format: {e}") from e
+
+    def _validate_cursor_sort_fields(self, payload: dict[str, Any]) -> None:
+        raw_sf = payload.get("sf")
+        if raw_sf is None:
+            raise InvalidCursorError("Cursor missing sort fields metadata")
+        if not isinstance(raw_sf, list) or len(raw_sf) != len(self._sort_fields):
+            raise InvalidCursorError(
+                "Cursor sort field count does not match current engine configuration"
+            )
+        for i, (entry, expected) in enumerate(zip(raw_sf, self._sort_fields)):
+            if (
+                not isinstance(entry, (list, tuple))
+                or len(entry) < 2
+                or str(entry[0]) != expected.name
+                or str(entry[1]) != expected.order.value
+            ):
+                raise InvalidCursorError(
+                    f"Cursor sort field {i} {entry!r} does not match "
+                    f"expected {(expected.name, expected.order.value)!r}"
+                )
 
     def _row_sort_values(self, row_idx: int) -> tuple[Any, ...]:
         row = self._data[row_idx]
         return tuple(row.get(sf.name) for sf in self._sort_fields)
 
-    def _bisect_right(self, cursor_sort_values: tuple[Any, ...]) -> int:
+    def _bisect(
+        self,
+        cursor_sort_values: tuple[Any, ...],
+        side: _BisectSide = "right",
+    ) -> int:
         lo = 0
         hi = len(self._sorted_indices)
+        target_key = self._make_sort_key_for_values(cursor_sort_values)
 
         while lo < hi:
             mid = (lo + hi) // 2
-            mid_sv = self._row_sort_values(self._sorted_indices[mid])
-            cmp_result = self._compare_sort_values(mid_sv, cursor_sort_values)
-            if cmp_result <= 0:
-                lo = mid + 1
+            mid_key = self._make_sort_key_for_index(self._sorted_indices[mid])
+            if side == "right":
+                if mid_key <= target_key:
+                    lo = mid + 1
+                else:
+                    hi = mid
             else:
-                hi = mid
+                if mid_key < target_key:
+                    lo = mid + 1
+                else:
+                    hi = mid
         return lo
-
-    def _bisect_left(self, cursor_sort_values: tuple[Any, ...]) -> int:
-        lo = 0
-        hi = len(self._sorted_indices)
-
-        while lo < hi:
-            mid = (lo + hi) // 2
-            mid_sv = self._row_sort_values(self._sorted_indices[mid])
-            cmp_result = self._compare_sort_values(mid_sv, cursor_sort_values)
-            if cmp_result < 0:
-                lo = mid + 1
-            else:
-                hi = mid
-        return lo
-
-    def _compare_sort_values(self, a: tuple[Any, ...], b: tuple[Any, ...]) -> int:
-        for sf, av, bv in zip(self._sort_fields, a, b):
-            result = self._compare_single(av, bv)
-            if sf.order == SortOrder.DESC:
-                result = -result
-            if result != 0:
-                return result
-        return 0
-
-    @staticmethod
-    def _compare_single(a: Any, b: Any) -> int:
-        if a == b:
-            return 0
-        if a is None and b is None:
-            return 0
-        if a is None:
-            return -1
-        if b is None:
-            return 1
-        try:
-            return -1 if a < b else 1
-        except TypeError:
-            a_str = str(a) if a is not None else ""
-            b_str = str(b) if b is not None else ""
-            if a_str == b_str:
-                return 0
-            return -1 if a_str < b_str else 1
 
     def paginate(
         self,
@@ -348,7 +348,7 @@ class CursorPaginationEngine:
         include_total: bool,
         estimate_total: bool,
     ) -> PageResult:
-        start_idx = self._bisect_right(decoded.sort_values)
+        start_idx = self._bisect(decoded.sort_values, side="right")
         fetch_end = min(start_idx + page_size + 1, n)
         slice_indices = self._sorted_indices[start_idx:fetch_end]
         has_more = len(slice_indices) > page_size
@@ -369,7 +369,7 @@ class CursorPaginationEngine:
         include_total: bool,
         estimate_total: bool,
     ) -> PageResult:
-        end_idx = self._bisect_left(decoded.sort_values)
+        end_idx = self._bisect(decoded.sort_values, side="left")
         start_idx = max(0, end_idx - (page_size + 1))
         slice_indices = self._sorted_indices[start_idx:end_idx]
         has_more_prev = len(slice_indices) > page_size
@@ -405,8 +405,8 @@ class CursorPaginationEngine:
         total: Optional[int] = None
         total_estimated = False
         if include_total:
-            total = n
-            total_estimated = estimate_total
+            total = self._compute_total(n, estimate_total)
+            total_estimated = estimate_total or self._config.estimate_total_fn is not None
 
         return PageResult(
             data=result_data,
@@ -418,6 +418,20 @@ class CursorPaginationEngine:
             total=total,
             total_estimated=total_estimated,
         )
+
+    def _compute_total(self, exact_n: int, estimate_total: bool) -> int:
+        fn: Optional[Callable[[], int]] = self._config.estimate_total_fn
+        if estimate_total and fn is not None:
+            return fn()
+        if fn is not None:
+            return fn()
+        return exact_n
+
+    def estimate_total(self) -> int:
+        fn: Optional[Callable[[], int]] = self._config.estimate_total_fn
+        if fn is not None:
+            return fn()
+        return len(self._data)
 
     def count(self) -> int:
         return len(self._data)
@@ -446,12 +460,6 @@ class _SafeSortKey:
         a = self._value
         b = other._value
 
-        try:
-            if a == b:
-                return 0
-        except Exception:
-            pass
-
         ta = self._type_rank(a)
         tb = self._type_rank(b)
         if ta != tb:
@@ -459,6 +467,12 @@ class _SafeSortKey:
 
         if a is None:
             return 0
+
+        try:
+            if a == b:
+                return 0
+        except Exception:
+            pass
 
         try:
             if a < b:

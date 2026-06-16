@@ -1,0 +1,5 @@
+在当前项目中修复 content_review 内容审核流水线的一些问题：
+1. approve 和 reject 方法在调用状态转移校验后又调用了一层额外的状态检查，但转移表已经限制了这两个操作只能从审核中状态发起，转移表校验必然会先抛出异常，导致第二层检查永远不可达。需要理清各校验层的职责边界，删除冗余校验或将两层合并。
+2. reject 方法将同一条驳回数据（审核人、批注、时间戳）同时写入了 review_records 和 rejection_comments 两个独立列表，造成数据重复存储。如果后续修改只更新其中一个列表（如编辑批注），会导致两个列表数据不一致。应让 rejection_comments 作为 review_records 中驳回记录的视图而非独立副本。
+3. test_engine.py 中 TestInvalidStateTransitions 和 TestReviewOperationOnNonReviewState 两个测试类之间存在多对语义完全相同的测试用例，属于无意义冗余。应明确两个测试类的职责边界并消除重复。
+4. 修复后重新运行 poetry run pytest tests/content_review/ -q，确保所有测试通过。

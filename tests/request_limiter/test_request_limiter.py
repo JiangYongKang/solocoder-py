@@ -682,3 +682,291 @@ class TestExceptionAttributes:
         except IncompleteReadError as exc:
             assert exc.received_bytes == 0
             assert exc.expected_bytes is None
+
+
+# ============================================================
+# 修复验证测试
+# ============================================================
+
+
+class TestFixConnectionInterruptByteCount:
+    def test_interrupt_after_several_chunks_received_bytes_correct(self):
+        class InterruptingStream:
+            def __init__(self, chunks_before_fail: int, chunk_size: int) -> None:
+                self._chunks_read = 0
+                self._chunks_before_fail = chunks_before_fail
+                self._chunk_size = chunk_size
+
+            def read(self, size: int) -> bytes:
+                self._chunks_read += 1
+                if self._chunks_read > self._chunks_before_fail:
+                    raise ConnectionError("Connection reset by peer")
+                return b"X" * min(self._chunk_size, size)
+
+        limiter = BodySizeLimiter(
+            LimitConfig(max_body_bytes=10000, chunk_size=100)
+        )
+        chunks_before_fail = 5
+        with pytest.raises(IncompleteReadError) as exc_info:
+            limiter.limit_stream(
+                InterruptingStream(
+                    chunks_before_fail=chunks_before_fail, chunk_size=100
+                )
+            )
+        assert exc_info.value.received_bytes == chunks_before_fail * 100
+        assert exc_info.value.expected_bytes is None
+
+    def test_interrupt_after_one_chunk_received_bytes_correct(self):
+        class FailAfterOneChunk:
+            def __init__(self) -> None:
+                self._first = True
+
+            def read(self, size: int) -> bytes:
+                if self._first:
+                    self._first = False
+                    return b"A" * 256
+                raise OSError("Broken pipe")
+
+        limiter = BodySizeLimiter(
+            LimitConfig(max_body_bytes=10000, chunk_size=256)
+        )
+        with pytest.raises(IncompleteReadError) as exc_info:
+            limiter.limit_stream(FailAfterOneChunk())
+        assert exc_info.value.received_bytes == 256
+
+    def test_interrupt_after_partial_chunk_received_bytes_correct(self):
+        class FailAfterPartialChunk:
+            def __init__(self) -> None:
+                self._reads = 0
+
+            def read(self, size: int) -> bytes:
+                self._reads += 1
+                if self._reads == 1:
+                    return b"B" * 50
+                if self._reads == 2:
+                    return b"B" * 50
+                if self._reads == 3:
+                    return b"B" * 25
+                raise RuntimeError("Connection dropped")
+
+        limiter = BodySizeLimiter(
+            LimitConfig(max_body_bytes=10000, chunk_size=50)
+        )
+        with pytest.raises(IncompleteReadError) as exc_info:
+            limiter.limit_stream(FailAfterPartialChunk())
+        assert exc_info.value.received_bytes == 125
+
+    def test_safe_process_interrupt_result_has_correct_bytes(self):
+        class InterruptingStream:
+            def __init__(self) -> None:
+                self._reads = 0
+
+            def read(self, size: int) -> bytes:
+                self._reads += 1
+                if self._reads <= 3:
+                    return b"C" * 100
+                raise ConnectionError("Interrupted")
+
+        limiter = BodySizeLimiter(
+            LimitConfig(max_body_bytes=10000, chunk_size=100)
+        )
+        response, result = limiter.safe_process(
+            Request(method="POST", path="/api/x", body_stream=InterruptingStream()),
+            lambda req, b: Response(status_code=200),
+        )
+        assert response.status_code == 400
+        assert result.is_incomplete
+        assert result.total_read_bytes == 300
+
+
+class TestFixSafeProcessStatsAccuracy:
+    def test_content_length_reject_safe_process_total_read_zero(self):
+        limiter = BodySizeLimiter(LimitConfig(max_body_bytes=100))
+        response, result = limiter.safe_process(
+            Request(
+                method="POST",
+                path="/api/cl-reject",
+                body_stream=b"X" * 50,
+                expected_content_length=500,
+            ),
+            lambda req, b: Response(status_code=200),
+        )
+        assert response.status_code == 413
+        assert result.is_too_large
+        assert result.total_read_bytes == 0
+        assert result.limit_bytes == 100
+
+    def test_content_length_reject_stats_record_zero_bytes(self):
+        limiter = BodySizeLimiter(LimitConfig(max_body_bytes=100))
+        for _ in range(5):
+            limiter.safe_process(
+                Request(
+                    method="POST",
+                    path="/api/cl",
+                    body_stream=b"X",
+                    expected_content_length=500,
+                ),
+                lambda req, b: Response(status_code=200),
+            )
+        stats = limiter.stats
+        assert stats.rejected_too_large == 5
+        assert stats.total_bytes_read == 0
+
+    def test_overflow_during_read_safe_process_uses_exc_received_bytes(self):
+        limiter = BodySizeLimiter(
+            LimitConfig(max_body_bytes=100, chunk_size=30)
+        )
+        body = b"Y" * 250
+        response, result = limiter.safe_process(
+            Request(method="POST", path="/api/overflow", body_stream=body),
+            lambda req, b: Response(status_code=200),
+        )
+        assert response.status_code == 413
+        assert result.is_too_large
+        assert result.total_read_bytes == 120
+        assert result.limit_bytes == 100
+
+    def test_mixed_rejection_stats_accurate(self):
+        limiter = BodySizeLimiter(LimitConfig(max_body_bytes=100))
+        cases = [
+            (b"A" * 50, None, 50, False),
+            (b"B" * 50, 500, 0, True),
+            (b"C" * 200, None, 200, False),
+            (b"D" * 50, 200, 0, True),
+            (b"E" * 99, None, 99, False),
+        ]
+        for body, cl, expected_bytes, expect_cl_reject in cases:
+            response, result = limiter.safe_process(
+                Request(
+                    method="POST",
+                    path="/api/mix",
+                    body_stream=body,
+                    expected_content_length=cl,
+                ),
+                lambda req, b: Response(status_code=200),
+            )
+            assert result.total_read_bytes == expected_bytes
+
+        stats = limiter.stats
+        assert stats.total_requests == 5
+        assert stats.accepted_requests == 2
+        assert stats.rejected_too_large == 3
+        assert stats.total_bytes_read == 50 + 0 + 200 + 0 + 99
+
+
+class TestFixChunkedSequenceSource:
+    def test_list_of_bytes_respects_chunk_size(self):
+        from solocoder_py.request_limiter.limiter import _ChunkedByteStream
+
+        source = [b"A" * 100, b"B" * 100, b"C" * 100]
+        stream = _ChunkedByteStream(source, chunk_size=80)
+        chunks = list(stream)
+        assert len(chunks) == 4
+        assert chunks[0] == b"A" * 80
+        assert chunks[1] == b"A" * 20 + b"B" * 60
+        assert chunks[2] == b"B" * 40 + b"C" * 40
+        assert chunks[3] == b"C" * 60
+        assert stream.bytes_read == 300
+
+    def test_tuple_of_mixed_types_respects_chunk_size(self):
+        from solocoder_py.request_limiter.limiter import _ChunkedByteStream
+
+        source = (b"hello", " world", 123)
+        stream = _ChunkedByteStream(source, chunk_size=5)
+        chunks = list(stream)
+        assert len(chunks) == 3
+        assert chunks[0] == b"hello"
+        assert chunks[1] == b" worl"
+        assert chunks[2] == b"d123"
+        expected_data = b"hello world123"
+        assert b"".join(chunks) == expected_data
+        assert stream.bytes_read == len(expected_data)
+
+    def test_list_source_large_total_small_chunks(self):
+        from solocoder_py.request_limiter.limiter import _ChunkedByteStream
+
+        parts = [b"X" * 1000 for _ in range(5)]
+        stream = _ChunkedByteStream(parts, chunk_size=128)
+        chunks = list(stream)
+        assert len(chunks) == (5000 // 128) + (1 if 5000 % 128 else 0)
+        assert all(len(c) <= 128 for c in chunks)
+        assert stream.bytes_read == 5000
+        assert b"".join(chunks) == b"X" * 5000
+
+    def test_limit_stream_list_source_within_limit(self):
+        limiter = BodySizeLimiter(
+            LimitConfig(max_body_bytes=500, chunk_size=64)
+        )
+        source = [b"A" * 100, b"B" * 100, b"C" * 100]
+        result = limiter.limit_stream(source)
+        assert result.is_ok
+        assert result.total_read_bytes == 300
+        assert result.body == b"A" * 100 + b"B" * 100 + b"C" * 100
+
+    def test_limit_stream_list_source_over_limit(self):
+        limiter = BodySizeLimiter(
+            LimitConfig(max_body_bytes=250, chunk_size=64)
+        )
+        source = [b"A" * 100, b"B" * 100, b"C" * 100]
+        with pytest.raises(PayloadTooLargeError) as exc_info:
+            limiter.limit_stream(source)
+        assert exc_info.value.received_bytes == 256
+        assert exc_info.value.limit_bytes == 250
+
+
+class TestFixResponseBuilderReuse:
+    def test_process_request_too_large_response_identical(self):
+        limiter = BodySizeLimiter(LimitConfig(max_body_bytes=10))
+        body1 = b"X" * 100
+        body2 = b"Y" * 200
+
+        r1 = limiter.process_request(
+            Request(method="POST", path="/a", body_stream=body1),
+            lambda req, b: Response(status_code=200),
+        )
+        r2 = limiter.process_request(
+            Request(method="POST", path="/b", body_stream=body2),
+            lambda req, b: Response(status_code=200),
+        )
+        assert r1.status_code == r2.status_code == 413
+        assert r1.body == r2.body
+
+    def test_process_request_incomplete_response_identical(self):
+        limiter = BodySizeLimiter(LimitConfig(max_body_bytes=1000))
+        r1 = limiter.process_request(
+            Request(
+                method="POST",
+                path="/a",
+                body_stream=b"X" * 100,
+                expected_content_length=500,
+            ),
+            lambda req, b: Response(status_code=200),
+        )
+        r2 = limiter.process_request(
+            Request(
+                method="POST",
+                path="/b",
+                body_stream=b"Y" * 200,
+                expected_content_length=800,
+            ),
+            lambda req, b: Response(status_code=200),
+        )
+        assert r1.status_code == r2.status_code == 400
+        assert r1.body == r2.body
+
+    def test_safe_process_responses_match_process_request(self):
+        limiter = BodySizeLimiter(
+            LimitConfig(max_body_bytes=10, error_status_code=431)
+        )
+        body = b"X" * 100
+
+        pr_resp = limiter.process_request(
+            Request(method="POST", path="/pr", body_stream=body),
+            lambda req, b: Response(status_code=200),
+        )
+        sp_resp, _ = limiter.safe_process(
+            Request(method="POST", path="/sp", body_stream=body),
+            lambda req, b: Response(status_code=200),
+        )
+        assert pr_resp.status_code == sp_resp.status_code == 431
+        assert pr_resp.body == sp_resp.body

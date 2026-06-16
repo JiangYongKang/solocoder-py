@@ -1,0 +1,6 @@
+在当前项目中修复 doc_versioning 版本化文档存储的一些问题：
+1. create_document 方法在检测到重复文档时抛出 DocumentNotFoundError（语义为"文档未找到"），而实际错误原因是"文档已存在"，异常类型的语义与实际错误原因完全相反。调用方按异常类型判断错误时会被误导。需要定义语义匹配的异常类或使用正确的异常类型。
+2. exceptions.py 中定义了 EmptyContentError 和 MergeConflictError 两个异常类，但整个模块中从未有任何代码抛出或使用它们，属于死代码。需要决定这两个异常的正确使用场景：如果设计需要则补充触发逻辑和对应测试，否则应删除。
+3. _commit_with_merge 方法中冲突分支和无冲突分支各自独立创建了完整的版本对象和提交结果对象，两段代码几乎完全相同仅差三个字段值，维护时需同步修改两个路径容易遗漏。应合并重复逻辑。
+4. get_version_content 方法调用 get_version 后再次判断 content 是否为 None 并尝试重建，但 get_version 内部已确保 content 不为 None，这个判断永远不会触发。删除这段冗余逻辑。
+5. 修复后重新运行 poetry run pytest tests/doc_versioning/ -q，确保所有测试通过。

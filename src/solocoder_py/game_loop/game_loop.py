@@ -20,11 +20,25 @@ class FixedTimeStepGameLoop(Generic[T]):
         self._config = config or GameLoopConfig()
         self._initial_state: T = initial_state.copy()
         self._state: T = initial_state.copy()
+        self._previous_state: T = initial_state.copy()
         self._time_provider = time_provider or time.monotonic
         self._stats = GameLoopStats()
         self._is_running = False
         self._start_time: Optional[float] = None
         self._last_frame_time: Optional[float] = None
+        self._supports_interpolation: bool = self._check_interpolation_support()
+
+    def _check_interpolation_support(self) -> bool:
+        if not self._config.enable_interpolation:
+            return False
+        try:
+            test_prev = self._state.copy()
+            test_curr = self._state.copy()
+            test_curr.update(self._config.time_step)
+            test_prev.interpolate(test_curr, 0.5)
+            return True
+        except GameStateNotInterpolableError:
+            return False
 
     @property
     def config(self) -> GameLoopConfig:
@@ -41,6 +55,10 @@ class FixedTimeStepGameLoop(Generic[T]):
     @property
     def current_state(self) -> T:
         return self._state.copy()
+
+    @property
+    def previous_state(self) -> T:
+        return self._previous_state.copy()
 
     def start(self) -> None:
         if self._is_running:
@@ -62,11 +80,14 @@ class FixedTimeStepGameLoop(Generic[T]):
         if new_state is not None:
             self._initial_state = new_state.copy()
             self._state = new_state.copy()
+            self._previous_state = new_state.copy()
         else:
             self._state = self._initial_state.copy()
+            self._previous_state = self._initial_state.copy()
         self._start_time = None
         self._last_frame_time = None
         self._stats.reset()
+        self._supports_interpolation = self._check_interpolation_support()
 
     def tick(self) -> InterpolatedState[T]:
         if not self._is_running:
@@ -90,10 +111,14 @@ class FixedTimeStepGameLoop(Generic[T]):
         self._stats.accumulator += frame_time
 
         max_catch_up_time = self._config.max_catch_up_steps * self._config.time_step
-        extreme_lag_threshold = max_catch_up_time * 10
-        if self._stats.accumulator > extreme_lag_threshold + _EPSILON:
+        frame_skip_threshold = max_catch_up_time * 2
+        if self._stats.accumulator > frame_skip_threshold + _EPSILON:
             self._stats.frame_skips += 1
             self._stats.accumulator = self._config.time_step
+
+        has_updates = self._stats.accumulator >= self._config.time_step - _EPSILON
+        if has_updates:
+            self._previous_state = self._state.copy()
 
         while self._stats.accumulator >= self._config.time_step - _EPSILON:
             self._state.update(self._config.time_step)
@@ -118,35 +143,23 @@ class FixedTimeStepGameLoop(Generic[T]):
         alpha = self._stats.accumulator / self._config.time_step
         alpha = max(0.0, min(1.0, alpha))
 
-        if self._config.enable_interpolation:
-            interp_prev = self._state.copy()
-            interp_curr = self._state.copy()
-            interp_curr.update(self._config.time_step)
-            try:
-                interp_prev.interpolate(interp_curr, 0.5)
-                if alpha <= 0.0:
-                    _interpolated = interp_prev
-                elif alpha >= 1.0:
-                    _interpolated = interp_curr
-                else:
-                    _interpolated = interp_prev.interpolate(interp_curr, alpha)
-                return InterpolatedState(
-                    state=self._state.copy(),
-                    alpha=alpha,
-                    previous_state=None,
-                    _interpolated=_interpolated,
+        if self._config.enable_interpolation and self._supports_interpolation:
+            if alpha <= 0.0:
+                _interpolated = self._previous_state.copy()
+            elif alpha >= 1.0:
+                _interpolated = self._state.copy()
+            else:
+                _interpolated = self._previous_state.interpolate(
+                    self._state, alpha
                 )
-            except GameStateNotInterpolableError:
-                return InterpolatedState(
-                    state=self._state.copy(),
-                    alpha=1.0,
-                    previous_state=None,
-                    _interpolated=self._state.copy(),
-                )
+            return InterpolatedState(
+                state=self._state.copy(),
+                alpha=alpha,
+                _interpolated=_interpolated,
+            )
         else:
             return InterpolatedState(
                 state=self._state.copy(),
                 alpha=1.0,
-                previous_state=None,
                 _interpolated=self._state.copy(),
             )

@@ -1,18 +1,20 @@
 from .exceptions import (
+    ColliderNotFoundError,
     CollisionError,
     InvalidAABBError,
+    InvalidColliderError,
     InvalidGridSizeError,
-    ColliderNotFoundError,
 )
 from .models import AABB, CollisionPair, Collider
 from .spatial_hash import SpatialHash
 from .engine import CollisionEngine
 
 __all__ = [
+    "ColliderNotFoundError",
     "CollisionError",
     "InvalidAABBError",
+    "InvalidColliderError",
     "InvalidGridSizeError",
-    "ColliderNotFoundError",
     "AABB",
     "CollisionPair",
     "Collider",

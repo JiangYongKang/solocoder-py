@@ -18,8 +18,9 @@ class TagHierarchy:
     def __init__(self) -> None:
         self._tags: Dict[Any, TagNode] = {}
         self._object_direct_tags: Dict[Any, Set[Any]] = {}
+        self._object_effective_tags: Dict[Any, Set[Any]] = {}
         self._tag_direct_objects: Dict[Any, Set[Any]] = {}
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
 
     def get_stats(self) -> TagHierarchyStats:
         with self._lock:
@@ -81,29 +82,7 @@ class TagHierarchy:
             if tag_id not in self._tags:
                 raise TagNotFoundError(f"Tag {tag_id!r} not found")
 
-            tag_node = self._tags[tag_id]
-
-            if tag_node.parent_id is not None:
-                parent = self._tags.get(tag_node.parent_id)
-                if parent is not None:
-                    parent.children_ids.discard(tag_id)
-
-            for child_id in tag_node.children_ids:
-                if child_id in self._tags:
-                    child = self._tags[child_id]
-                    child.parent_id = None
-                    child.is_dangling = True
-
-            del self._tags[tag_id]
-
-            if tag_id in self._tag_direct_objects:
-                for obj_id in self._tag_direct_objects[tag_id]:
-                    if obj_id in self._object_direct_tags:
-                        self._object_direct_tags[obj_id].discard(tag_id)
-                        if not self._object_direct_tags[obj_id]:
-                            del self._object_direct_tags[obj_id]
-                del self._tag_direct_objects[tag_id]
-
+            self._delete_tag_internal(tag_id)
             return True
 
     def move_tag(self, tag_id: Any, new_parent_id: Optional[Any]) -> None:
@@ -143,6 +122,8 @@ class TagHierarchy:
 
             if new_parent_id is not None:
                 self._tags[new_parent_id].children_ids.add(tag_id)
+
+            self._recalc_descendants_effective_tags(tag_id)
 
     def get_tag(self, tag_id: Any) -> TagNode:
         if tag_id is None:
@@ -259,12 +240,18 @@ class TagHierarchy:
 
             if obj_id not in self._object_direct_tags:
                 self._object_direct_tags[obj_id] = set()
+                self._object_effective_tags[obj_id] = set()
 
             if tag_id in self._object_direct_tags[obj_id]:
                 return False
 
             self._object_direct_tags[obj_id].add(tag_id)
             self._tag_direct_objects[tag_id].add(obj_id)
+
+            ancestor_ids = self._get_ancestor_ids_internal(tag_id)
+            self._object_effective_tags[obj_id].add(tag_id)
+            self._object_effective_tags[obj_id].update(ancestor_ids)
+
             return True
 
     def untag_object(self, obj_id: Any, tag_id: Any) -> bool:
@@ -288,6 +275,9 @@ class TagHierarchy:
 
             if not self._object_direct_tags[obj_id]:
                 del self._object_direct_tags[obj_id]
+                del self._object_effective_tags[obj_id]
+            else:
+                self._recalc_object_effective_tags(obj_id)
 
             return True
 
@@ -303,19 +293,10 @@ class TagHierarchy:
             if obj_id not in self._object_direct_tags:
                 raise ObjectNotFoundError(f"Object {obj_id!r} not found")
 
-            direct_tags = self._object_direct_tags[obj_id].copy()
-
             if not include_inherited:
-                return direct_tags
+                return self._object_direct_tags[obj_id].copy()
 
-            all_tags: Set[Any] = set()
-            for tag_id in direct_tags:
-                all_tags.add(tag_id)
-                current_id = self._tags[tag_id].parent_id if tag_id in self._tags else None
-                while current_id is not None and current_id in self._tags:
-                    all_tags.add(current_id)
-                    current_id = self._tags[current_id].parent_id
-            return all_tags
+            return self._object_effective_tags[obj_id].copy()
 
     def object_has_tag(
         self,
@@ -335,18 +316,10 @@ class TagHierarchy:
             if obj_id not in self._object_direct_tags:
                 return False
 
-            direct_tags = self._object_direct_tags[obj_id]
-            if tag_id in direct_tags:
-                return True
-
             if not include_inherited:
-                return False
+                return tag_id in self._object_direct_tags[obj_id]
 
-            for direct_tag_id in direct_tags:
-                ancestors = self._get_ancestor_ids_internal(direct_tag_id)
-                if tag_id in ancestors:
-                    return True
-            return False
+            return tag_id in self._object_effective_tags[obj_id]
 
     def find_objects_by_tag(self, tag_id: Any) -> Set[Any]:
         if tag_id is None:
@@ -356,14 +329,7 @@ class TagHierarchy:
             if tag_id not in self._tags:
                 raise TagNotFoundError(f"Tag {tag_id!r} not found")
 
-            result: Set[Any] = set()
-
-            tag_and_descendants = {tag_id} | self._get_descendants_internal(tag_id)
-            for t_id in tag_and_descendants:
-                if t_id in self._tag_direct_objects:
-                    result.update(self._tag_direct_objects[t_id])
-
-            return result
+            return self._find_objects_by_tag_internal(tag_id)
 
     def find_objects_by_tags(self, tag_ids: Iterable[Any]) -> Set[Any]:
         tag_list = list(tag_ids)
@@ -380,33 +346,36 @@ class TagHierarchy:
                 if tag_id not in self._tags:
                     raise TagNotFoundError(f"Tag {tag_id!r} not found")
 
-            tag_object_sets = []
+            smallest_tag_id = None
+            smallest_count = None
             for tag_id in tag_list:
-                obj_set = self._find_objects_by_tag_internal(tag_id)
-                tag_object_sets.append((len(obj_set), obj_set))
+                count = self._count_objects_by_tag_internal(tag_id)
+                if smallest_count is None or count < smallest_count:
+                    smallest_count = count
+                    smallest_tag_id = tag_id
 
-            tag_object_sets.sort(key=lambda x: x[0])
-
-            if not tag_object_sets:
+            if smallest_tag_id is None or smallest_count == 0:
                 return set()
 
-            result = tag_object_sets[0][1].copy()
-            for _, obj_set in tag_object_sets[1:]:
-                result.intersection_update(obj_set)
-                if not result:
-                    break
+            candidate_objects = self._find_objects_by_tag_internal(smallest_tag_id)
+
+            other_tag_ids = [t for t in tag_list if t != smallest_tag_id]
+
+            result: Set[Any] = set()
+            for obj_id in candidate_objects:
+                effective_tags = self._object_effective_tags.get(obj_id, set())
+                if all(t in effective_tags for t in other_tag_ids):
+                    result.add(obj_id)
 
             return result
 
     def find_dangling_tags(self) -> Set[Any]:
         with self._lock:
-            return {
-                tag_id for tag_id, tag in self._tags.items() if tag.is_dangling
-            }
+            return self._find_dangling_tags_internal()
 
     def cleanup_dangling_tags(self) -> int:
         with self._lock:
-            dangling = self.find_dangling_tags()
+            dangling = self._find_dangling_tags_internal()
             for tag_id in dangling:
                 self._delete_tag_internal(tag_id)
             return len(dangling)
@@ -437,6 +406,19 @@ class TagHierarchy:
                 result.update(self._tag_direct_objects[t_id])
         return result
 
+    def _count_objects_by_tag_internal(self, tag_id: Any) -> int:
+        count = 0
+        tag_and_descendants = {tag_id} | self._get_descendants_internal(tag_id)
+        for t_id in tag_and_descendants:
+            if t_id in self._tag_direct_objects:
+                count += len(self._tag_direct_objects[t_id])
+        return count
+
+    def _find_dangling_tags_internal(self) -> Set[Any]:
+        return {
+            tag_id for tag_id, tag in self._tags.items() if tag.is_dangling
+        }
+
     def _delete_tag_internal(self, tag_id: Any) -> None:
         if tag_id not in self._tags:
             return
@@ -448,18 +430,49 @@ class TagHierarchy:
             if parent is not None:
                 parent.children_ids.discard(tag_id)
 
-        for child_id in tag_node.children_ids:
+        child_ids = list(tag_node.children_ids)
+        for child_id in child_ids:
             if child_id in self._tags:
                 child = self._tags[child_id]
                 child.parent_id = None
                 child.is_dangling = True
 
-        del self._tags[tag_id]
-
+        affected_objects: Set[Any] = set()
         if tag_id in self._tag_direct_objects:
+            affected_objects.update(self._tag_direct_objects[tag_id])
             for obj_id in self._tag_direct_objects[tag_id]:
                 if obj_id in self._object_direct_tags:
                     self._object_direct_tags[obj_id].discard(tag_id)
                     if not self._object_direct_tags[obj_id]:
                         del self._object_direct_tags[obj_id]
+                        if obj_id in self._object_effective_tags:
+                            del self._object_effective_tags[obj_id]
+                    else:
+                        self._recalc_object_effective_tags(obj_id)
             del self._tag_direct_objects[tag_id]
+
+        del self._tags[tag_id]
+
+    def _recalc_object_effective_tags(self, obj_id: Any) -> None:
+        if obj_id not in self._object_direct_tags:
+            if obj_id in self._object_effective_tags:
+                del self._object_effective_tags[obj_id]
+            return
+
+        effective_tags: Set[Any] = set()
+        for direct_tag_id in self._object_direct_tags[obj_id]:
+            effective_tags.add(direct_tag_id)
+            effective_tags.update(self._get_ancestor_ids_internal(direct_tag_id))
+
+        self._object_effective_tags[obj_id] = effective_tags
+
+    def _recalc_descendants_effective_tags(self, tag_id: Any) -> None:
+        tag_and_descendants = {tag_id} | self._get_descendants_internal(tag_id)
+
+        affected_objects: Set[Any] = set()
+        for t_id in tag_and_descendants:
+            if t_id in self._tag_direct_objects:
+                affected_objects.update(self._tag_direct_objects[t_id])
+
+        for obj_id in affected_objects:
+            self._recalc_object_effective_tags(obj_id)

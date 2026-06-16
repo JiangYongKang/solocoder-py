@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Tuple
 
-from .exceptions import InvalidAABBError
+from .exceptions import InvalidAABBError, InvalidColliderError
 
 
 @dataclass
@@ -63,7 +63,7 @@ class Collider:
 
     def __post_init__(self) -> None:
         if not self.id:
-            raise InvalidAABBError("Collider id cannot be empty")
+            raise InvalidColliderError("Collider id cannot be empty")
 
     @property
     def min_x(self) -> float:
@@ -87,6 +87,20 @@ class Collider:
 
 @dataclass
 class CollisionPair:
+    """
+    Represents a pair of colliding Colliders.
+
+    IMPORTANT: Upon construction, the two colliders are automatically
+    reordered by their IDs in lexicographic ascending order to ensure
+    consistent normalization. This means:
+      - collider_a.id will always be <= collider_b.id
+      - The object originally passed as collider_a may end up as
+        collider_b (and vice versa) after construction.
+
+    This normalization guarantees that CollisionPair(A, B) and
+    CollisionPair(B, A) are equal and have the same hash.
+    """
+
     collider_a: Collider
     collider_b: Collider
 
