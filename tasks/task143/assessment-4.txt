@@ -1,5 +1,5 @@
 产物不满意：
-1. 模型对 _delete_tag_internal 的执行顺序修复正确且完整。通过引入 objects_to_cleanup 和 objects_to_recalc 两个收集集合，将对象清理和缓存重算统一推迟到 `del self._tags[tag_id]` 之后执行。修复后 _recalc_object_effective_tags 内部调用 _get_ancestor_ids_internal 遍历祖先链时，被删除标签已从 _tags 中移除，不会错误的被纳入祖先集合并写入缓存。85 个测试全部通过，修复结果无缺陷，执行顺序现在已经从依赖冗余重算副作用转变为显式保证。
+1. 模型对 _delete_tag_internal 的执行顺序修复正确完整。通过引入 objects_to_cleanup 和 objects_to_recalc 两个集合，将清理和重算统一推迟到 `del self._tags[tag_id]` 之后。修复后被删除标签已从 _tags 中移除，_get_ancestor_ids_internal 遍历祖先链时不会错误纳入缓存。85 个测试全部通过，执行顺序已从依赖冗余重算副作用转变为显式保证。
 
 过程不满意：
-1. 模型收到提示词后先阅读了 tag_hierarchy.py 的源代码文件，理解了执行顺序问题后再动手修改，属于先分析后编码的正确工作流。整个过程只做了一次针对性的字符串替换编辑，然后直接运行 `poetry run pytest tests/tag_hierarchy/ -q`，85 个测试全部通过，无试错循环、无反复修改。符合最小修改原则，执行顺序调整的代码变更范围精确控制在需要修复的 _delete_tag_internal 方法内部，未影响其他方法的逻辑。整个过程效率高、目标理解准确。
+1. 模型收到提示词后先阅读了 tag_hierarchy.py 源码理解执行顺序问题后再修改，属于先分析后编码的正确工作流。整个过程只做了一次针对性字符串替换编辑后运行 `poetry run pytest`，85 个测试全部通过无试错循环。修改范围精确控制在 _delete_tag_internal 方法内部，未影响其他方法，整个过程效率高、目标理解准确。

@@ -1,8 +1,8 @@
 产物不满意：
-1. engine.py 中的排序比较逻辑存在不一致性。_SafeSortKey._compare 方法在构建排序索引时使用类型等级排序（None 小于 bool 小于 int 小于 float 小于 str 小于 bytes），而 _compare_single 方法在二分查找时使用 Python 原生比较加字符串回退的方式，对跨类型值两种比较策略的排序结果不同。当同一排序字段中出现混合类型值时，二分查找定位的游标位置可能与实际排序顺序不一致，导致翻页结果出现数据重复或遗漏。正确做法是让二分查找复用 _SafeSortKey 的类型排名比较逻辑，或将比较逻辑统一提取为一个公共函数供双方共用。
-2. engine.py 的 encode_cursor 方法在游标 payload 中写入了当前引擎的排序字段列表 sf，但 decode_cursor 方法解码时完全没有校验游标中的排序字段是否与当前引擎的排序字段一致。如果使用旧排序规则生成的游标在重建引擎后解析，sort_values 与排序字段的对应关系可能错位，例如旧游标是按 score 降序生成而新引擎按 id 升序排列，解码出的排序值会被按错误的字段方向参与二分查找，结果不可预期。应在 decode_cursor 中对比游标内 sf 与当前排序字段，不匹配时抛出 InvalidCursorError。
-3. engine.py 的 _build_result 方法中 estimate_total 参数仅设置了 total_estimated 标记位，实际返回的 total 值始终是精确的 len(n)，未体现任何估算行为。提示词明确指出"总数计算不应影响分页查询本身的性能"，当前设计对内存数据源无业务影响，但当扩展为数据库后端时，如果 estimate_total 为 True 却仍执行 SELECT COUNT(*) 精确查询就会影响分页性能。应将估算行为作为可重写的扩展点预留，例如在子类中可替换为 EXPLAIN 近似行数等低成本计数方案。
+1. engine.py 中 _SafeSortKey._compare 用类型等级排序，_compare_single 二分查找时用 Python 原生比较加字符串回退，两种策略对跨类型值排序结果不同。当排序字段出现混合类型值时，二分查找游标位置与实际顺序不一致，导致翻页数据重复或遗漏。应让二分查找复用 _SafeSortKey 的类型排名逻辑，或提取公共函数统一两者。
+2. encode_cursor 在游标 payload 中写入了排序字段列表 sf，但 decode_cursor 解码时未校验 sf 是否与当前引擎排序字段一致。若用旧排序规则生成的游标在重建引擎后解析，sort_values 与排序字段的对应关系可能错位，解码出的排序值被按错误字段方向参与二分查找结果不可预期。应在 decode_cursor 中对比游标内 sf 与当前排序字段，不匹配时抛出 InvalidCursorError。
+3. _build_result 中 estimate_total 参数仅标记了 total_estimated 位，实际 total 始终是精确的 len(n)，未体现估算行为。提示词要求总数计算不应影响分页性能，当前对内存数据源无影响，但扩展数据库后端时若 estimate_total=True 仍执行 COUNT(*) 就会影响性能。应将估算行为作为可重写扩展点，让子类替换为 EXPLAIN 近似行数等低成本方案。
 4. engine.py 中 _bisect_right 方法与 _bisect_left 方法代码高度重复，两段二分查找循环仅在比较条件上差一个等号（`<=` 与 `<`），其余逻辑完全相同。可通过一个带 `inclusive` 参数的统一方法消除重复，提高代码可维护性。
 过程不满意：
-1. 模型在写完 engine.py 第一版后立即判断"反向翻页逻辑需要改进"并重写了整个 engine.py 文件，两次写入之间没有任何测试运行或局部验证。这是未充分设计就动手编码的典型模式，模型应先列出四种翻页场景（有游标向前、有游标向后、无游标向前、无游标向后）的索引区间计算公式，确认设计无误后再编码。第一次运行测试时出现的 3 个失败用例中，test_none_value_in_sort_field 暴露了排序比较的边界问题，正是由于最初缺乏对 None 值和跨类型比较的系统性考虑，导致后续才引入 _SafeSortKey 并改动测试的往返消耗。
-2. 模型在第一次测试失败后将 test_direction_prev_no_cursor 和 test_cursor_from_smaller_dataset_still_works 两个用例的断言直接修改以匹配当前代码行为，而没有先确认到底是代码逻辑错误还是测试断言本身写错。虽然后续验证表明这两个修改是正确的（prev 无游标时 has_prev 应为 True，扩展数据集后 104 确实不在前 10 条内），但在遇到失败时直接改断言而非先分析根因的行为模式值得警惕。正确做法是先分析堆栈信息和实际返回值，判断是哪个环节出了偏差再做修改。
+1. 模型写完 engine.py 第一版后直接判断反向翻页需要改进并重写整个文件，两次写入间无测试验证。这是未充分设计就动手编码的典型模式，应先列出四种翻页场景的索引区间计算公式确认设计无误再编码。首次测试 3 个失败中 test_none_value_in_sort_field 暴露排序比较边界问题，正是因最初缺乏对 None 和跨类型比较的系统考虑导致后续往返消耗。
+2. 模型首次测试失败后将 test_direction_prev_no_cursor 和 test_cursor_from_smaller_dataset_still_works 两个断言直接修改以匹配当前行为，未先确认根因是代码逻辑错误还是断言写错。虽然后续验证表明修改正确，但遇到失败时直接改断言而非先分析堆栈的行为模式值得警惕。正确做法是先分析根因再决定修改代码还是测试。

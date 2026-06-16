@@ -1,7 +1,7 @@
 产物不满意：
-1. 在 engine.py 的 _compute_total 方法中，当 PaginationConfig 设置了 estimate_total_fn 回调但 paginate 调用传入 estimate_total=False 时，第 426 至 427 行仍无条件调用回调返回估算值，而非返回精确计数 exact_n。注册回调后调用方永远无法再获得精确总数，_build_result 第 409 行的 total_estimated 也被强制标记为 True，与调用者明确传递的 estimate_total=False 矛盾。提示词第 3 条要求预留扩展点而非替代精确计数，根因是未用 estimate_total 参数区分是否走估算分支，应删除第 426 至 427 行并将 total_estimated 条件改为 estimate_total and callback_exists，使调用方可自主选择精确计数还是估算回调。
+1. _compute_total 中当设置了 estimate_total_fn 回调但 paginate 传入 estimate_total=False 时，仍无条件调用回调返回估算值而非精确计数。注册回调后调用方永远无法获得精确总数，total_estimated 也被强制标记为 True，与 estimate_total=False 矛盾。提示词第 3 条要求预留扩展点而非替代精确计数，根因是未用 estimate_total 参数区分分支，应让调用方自主选择精确计数还是估算回调。
 
 过程不满意：
-1. 模型在收到提示词后第一个操作就是调用 todo_write 创建了 6 项子任务计划（session-cot-2.md 开头），之后才开始用 view_files 依次阅读 engine.py 和 models.py 的源代码。按项目标注规范要求，不能刚收到任务就直接创建 TodoList，应先分析问题再制定规划。虽然最终划分的四项修复任务与提示词要求基本对齐，但先计划后分析的操作顺序使任务粒度划分缺乏对实际代码结构的理解作依据，若代码结构与预期不符就需要回头调整任务划分，降低了规划阶段的可靠性和执行效率。
+1. 模型收到提示词后第一个操作就是 todo_write 创建了 6 项子任务计划，之后才开始阅读 engine.py 和 models.py 源码。按标注规范要求不能刚收到任务就直接创建 TodoList，应先分析问题再规划。虽然最终划分与提示词要求基本对齐，但先计划后分析的顺序使任务粒度划分缺乏对代码结构的理解作依据。
 
-2. 模型在分析完四个问题后使用 Write 工具将 engine.py 整个文件全文重写（session-cot-2.md 第 79 行），而非针对四个独立修复点逐一用 StrReplace 做定向修改。全文替换在代码量约五百行的情况下风险较高，任何转录中的笔误或无意改动都可能引入与修复目标无关的回归缺陷。虽然本轮全部 79 个测试通过，但这种做法使代码审阅者难以区分哪些变更是刻意修复、哪些是转录中的无意识改动，正确做法是对每个修复点分别定位到具体方法后用 StrReplace 做最小范围的局部修改，保持变更边界清晰可控。
+2. 模型分析完四个问题后使用 Write 将 engine.py 全文重写，而非对四个独立修复点逐一用 StrReplace 做定向修改。全文替换在代码量约五百行时风险较高，转录中的无意改动可能引入与修复目标无关的回归缺陷。虽全部 79 个测试通过，但这种做法使审阅者难以区分刻意修复和无意改动，应逐一定位每个修复点做最小范围修改。

@@ -1,8 +1,8 @@
 产物不满意：
-1. world.py 第 23 行新增了 `_entity_components: dict[int, dict[type, Any]]` 字典存储组件数据，而 archetype.py 中 Archetype._columns 仍然按列存储同样的组件对象引用。提示词要求消除 SparseSet 和 Archetype 两套独立结构之间的数据重复、让一处作为唯一数据持有者，但模型只是把 SparseSet 的重复搬到了 World._entity_components 中，add_component 方法第 67 行和 migrate_entity 调用链仍然将同一份组件对象写入两个不同的容器，两套索引结构依然同时维护必然导致内存浪费。正确做法是让 Archetype._columns 成为唯一数据持有者，World 需要组件数据时通过 Archetype 读取，而不应再保留 _entity_components 这个中间 dict。
-2. world.py 中 query_entities 方法（第 123 行）和 query_entities_archetype 方法（第 139 行）的实现完全一致，都是通过 ArchetypeManager.find_matching 查找匹配原型后委托 Archetype.iter_with_components 迭代，两个方法变为语义重复的冗余 API。query_entities 原本应利用 SparseSet 进行稀疏迭代，而 query_entities_archetype 利用 Archetype 做列式批量迭代，两者应有不同的实现路径和数据访问策略，现在合并为同一路径后丧失了各自的性能优势。
-3. sparse_set.py 中 SparseSet 原有的 get、iter_components、__getitem__ 等数据访问方法被全部移除，只保留了 entity_id 索引。但提示词说的是"另一处仅维护索引而不重复存储数据"，意思是保留按组件类型检索实体的索引能力、删除重复存储的组件数据本身，而不是把数据访问能力也一并砍掉。当前 SparseSet 的 iter_entities 只能返回实体 ID 列表，如果需要知道某个实体是否有某组件，调用方需要两次查表，丧失了稀疏集本身的 O(1) 查询优势。
+1. world.py 新增了 _entity_components 字典存储组件数据，而 Archetype._columns 仍按列存储同样的引用。提示词要求消除两套独立结构的数据重复让一处作为唯一持有者，但模型只是把 SparseSet 的重复搬到了 _entity_components，add_component 和 migrate_entity 仍将同一份数据写入两个容器一起维护必然浪费内存。应让 Archetype._columns 成为唯一持有者，World 通过 Archetype 读取而非保留中间 dict。
+2. query_entities 和 query_entities_archetype 的实现完全一致，都是通过 find_matching 查找原型后委托 iter_with_components 迭代，变为冗余 API。query_entities 原本应利用 SparseSet 做稀疏迭代而 query_entities_archetype 利用 Archetype 做列式批量迭代，两者应有不同的实现路径和访问策略，合并后丧失了各自的性能优势。
+3. SparseSet 原有的 get、iter_components、__getitem__ 等数据访问方法被全部移除只保留 entity_id 索引。但提示词说的是另一处仅维护索引而不重复存储数据，意思是保留按组件类型检索实体的索引能力、删除重复存储的组件数据，不是把数据访问能力一并砍掉。现在 iter_entities 只能返回实体 ID，调用方需要两次查表丧失了 O(1) 查询优势。
 过程不满意：
 1. 模型在刚收到提示词后未经分析就直接用 todo_write 创建了 6 项子任务计划（思考过程第 1 至 5 行），之后才开始用 view_files 阅读各个源文件，导致计划粒度与实际问题边界不匹配——后续将 SparseSet、Archetype、World 三个文件整体重写而非做最小范围修改。正确做法是先完整阅读所有源文件和测试文件，理解当前架构和数据流，再制定以单一问题点为单位的修复计划。
-2. 模型在思考过程第 177 行到 210 行用 Write 工具一次性重写了 sparse_set.py、archetype.py 和 world.py 三个核心文件，而非针对各个问题做逐文件逐处的最小修改。更大的问题是重写 world.py 时引入了 `_entity_components` 作为新的组件存储字典，恰恰违背了提示词"消除两套独立结构的数据重复"的核心要求。这暴露出模型未理解提示词的根本意图，在未确认自己对问题理解是否准确的前提下就进行了大范围重构，用新的数据重复替代了旧的数据重复。
+2. 模型用 Write 一次性重写了 sparse_set.py、archetype.py 和 world.py 三个核心文件，而非针对各个问题做逐处最小修改。更大的问题是重写时引入了 _entity_components 作为新组件存储字典，恰恰违背了消除两套独立结构数据重复的核心要求。这暴露出模型未理解提示词根本意图，在未确认理解准确的前提下进行了大范围重构，用新的数据重复替代了旧的。
 3. 在思考过程第 370 行到 390 行，模型因为自己移除了 SparseSet 的所有数据访问方法，不得不大量重写 SparseSet 的测试用例，将原本覆盖数据存取功能的测试降级为仅测实体索引。这是典型的"生产代码改完后再迁就测试"的行为模式，模型应保持 SparseSet 的公开 API 不变、只移除内部的组件数据缓存，而非删除公开接口让测试跟着代码一起退化。

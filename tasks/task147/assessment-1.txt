@@ -1,8 +1,8 @@
 产物不满意：
-1. game_loop.py 的 tick 方法中插值逻辑实现为前向外推而非提示词要求的基于"最近两次逻辑状态的插值"。第 122 到 132 行将当前状态 self._state 拷贝为 interp_prev，再对拷贝调用 update 生成预测状态 interp_curr，然后在两者间插值。测试 `test_interpolated_state_between_updates` 断言插值位置为 `0.1 + 0.5 * 0.1 = 0.15` 而非标准插值的 `0.0 + 0.5 * (0.1 - 0.0) = 0.05`，证实渲染位置比实际逻辑状态领先一个步长。当游戏对象改变速度或方向时这种前向预测会导致视觉过冲和状态回弹，不符合提示词第 2 条的"使视觉表现平滑而不抖动"要求。应改为保存上一逻辑帧状态并在它与当前状态间做 alpha 插值。
-2. README.md 中对跳帧阈值的描述与实际代码不一致。README 第 110 行写道"当累积器超过 max_catch_up_steps × time_step 时，直接将累积器重置为 time_step"，但 game_loop.py 第 93 行的实际阈值为 `max_catch_up_time * 10`，即多乘了一个无文档说明的 10 倍因子。阅读文档的用户会误以为跳帧阈值远低于实际值，这会让用户对追帧行为和性能表现产生错误预期。根因是模型调整阈值后未同步更新文档，应要么去掉 10 倍因子要么在 README 中明确说明该乘数及其设计理由。
-3. game_loop.py 第 126 行 `interp_prev.interpolate(interp_curr, 0.5)` 仅用于检测状态是否支持插值，调用结果被直接丢弃。此检测发生在 tick 热路径上且每帧都会执行，还伴随着第 122-124 行的两次 deepcopy 和第 124 行的额外 update 调用，在插值模式关闭时不会触发但这些开销在启用插值时始终存在。更好的做法是在初始化阶段通过检查 GameState 子类是否覆写了 interpolate 方法来确定是否支持插值，而非每帧做一次代价高昂的试探调用。
-4. InterpolatedState 的 previous_state 字段在 tick 方法的所有返回路径中均被设为 None（第 136、143、149 行），get_interpolated 方法虽有针对 previous_state 的完整回退逻辑（第 38-47 行）但该分支代码从未被游戏循环触发。API 预设了 previous_state 字段给了使用者错误的暗示——认为它会携带上一逻辑帧状态——实际上它始终为空。应要么在 tick 中维护并传入上一帧状态，要么从 InterpolatedState 中移除此字段以避免误导使用者。
+1. tick 方法中插值逻辑实现为前向外推而非提示词要求的基于最近两次逻辑状态的插值。将当前状态拷贝为 interp_prev 再对拷贝调用 update 生成预测状态 interp_curr 然后在两者间插值。测试断言插值位置为 0.15 而非标准插值的 0.05，证实渲染位置比实际逻辑状态领先一个步长，对象改变速度方向时会导致视觉过冲和状态回弹。应保存上一逻辑帧状态与当前状态做 alpha 插值。
+2. README 写跳帧阈值为超过 max_catch_up_steps × time_step 时触发，但 game_loop.py 实际阈值为 max_catch_up_time * 10，多了无文档说明的 10 倍因子。用户会误以为跳帧阈值远低于实际值产生错误预期。根因是调整阈值后未同步更新文档，应去掉 10 倍因子或在 README 中说明该乘数及设计理由。
+3. interp_prev.interpolate(interp_curr, 0.5) 仅用于检测状态是否支持插值，调用结果被丢弃。此检测在 tick 热路径每帧执行还伴随两次 deepcopy 和额外 update 调用。更好的做法是在初始化阶段通过检查 GameState 子类是否覆写了 interpolate 来判断支持插值，而非每帧做高成本的试探调用。
+4. InterpolatedState 的 previous_state 字段在 tick 所有返回路径中均被设为 None，get_interpolated 虽有完整回退逻辑但该分支从未被游戏循环触发。API 预设了 previous_state 暗示会携带上一逻辑帧状态实际始终为空。应要么在 tick 中维护传入上一帧状态要么从 InterpolatedState 中移除此字段避免误导使用者。
 
 过程不满意：
 1. 模型在收到提示词后尚未阅读任何项目代码和需求文档即用 todo_write 创建了 7 项子任务计划（第 3 行），之后才开始浏览 pyproject.toml、canary 示例模块和测试结构（第 13-110 行），然后在理解项目骨架后又重新创建了 todo 列表（第 117 行）。第一次的 todo 是在缺乏上下文的情况下凭空拟定的，必然与实际模块边界不匹配。正确做法是先完整分析项目结构和需求后再制定执行计划，避免做两次无用功。

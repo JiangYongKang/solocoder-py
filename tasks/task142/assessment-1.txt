@@ -1,7 +1,7 @@
 产物不满意：
-1. limiter.py 的 `_ChunkedByteStream._from_readable` 方法在流读取异常时用 `self._buffer.tell()` 获取已读字节数来构造 `IncompleteReadError`，但 `_buffer` 这个 BytesIO 对象自构造后从未被写入数据，`tell()` 始终返回 0，导致连接中断场景下 `received_bytes` 永远为 0，丢失了中断前实际已读取字节数的信息。测试 `test_connection_interrupt_stream_raises_incomplete` 只校验了异常类型而未断言 received_bytes 的值，未能暴露此缺陷。根因是忘记在每次成功读取后调用 `_buffer.write(chunk)` 更新缓冲位置，应补上写入逻辑或用整数计数器替代 BytesIO。
-2. limiter.py 的 `safe_process` 方法在捕获 `PayloadTooLargeError` 后构造 LimitResult 时，将 `total_read_bytes` 硬编码为 `self._config.max_body_bytes + 1`，丢弃了异常对象自身的 `received_bytes` 属性。当 Content-Length 快速拒绝路径触发时实际读取字节数为 0（尚未读任何数据），但统计结果仍记为 max_body_bytes + 1，导致 LimitStats 的统计数据失真。根因是异常对象携带的有效信息未被利用，应改为 `total_read_bytes=exc.received_bytes`。
-3. limiter.py 中 `process_request` 与 `safe_process` 两个方法对 `PayloadTooLargeError` 和 `IncompleteReadError` 的错误响应构造逻辑完全重复，分别在两处硬编码了 413 和 400 响应的 status_code、body 结构以及错误消息字符串。后续修改响应格式时需同步改动两个方法，容易遗漏导致不一致。应提取 `_build_too_large_response` 和 `_build_incomplete_response` 两个私有方法消除重复，使两条路径共享同一份响应构造代码。
+1. _ChunkedByteStream._from_readable 在流读取异常时用 self._buffer.tell() 获取已读字节数构造 IncompleteReadError，但 _buffer 从未写入数据 tell() 始终返回 0，导致 received_bytes 永远为 0。测试只校验了异常类型未断言 received_bytes 值未能暴露缺陷。根因是忘记在每次成功读取后调用 _buffer.write(chunk)，应补上写入逻辑或用整数计数器替代。
+2. safe_process 捕获 PayloadTooLargeError 后构造 LimitResult 时将 total_read_bytes 硬编码为 max_body_bytes + 1，丢弃了异常对象的 received_bytes。当 Content-Length 快速拒绝时实际读取字节数为 0，统计仍记为 max_body_bytes + 1 导致失真。根因是有效信息未被利用，应改为 total_read_bytes=exc.received_bytes。
+3. process_request 与 safe_process 对 PayloadTooLargeError 和 IncompleteReadError 的错误响应构造逻辑完全重复，分别硬编码了 413 和 400 的状态码、body 和错误消息。后续修改响应格式需同步改两处容易遗漏导致不一致。应提取 _build_too_large_response 和 _build_incomplete_response 两个私有方法消除重复，使两条路径共享同一份响应构造代码。
 4. `_ChunkedByteStream.__init__` 中定义了 `self._exhausted = False` 字段，但在整个类的任何方法中都从未被读取或赋值修改，属于无用的死代码。此外当 body_source 为 list 或 tuple 时 `__iter__` 方法逐元素遍历，完全忽略配置的 chunk_size 参数，降低了配置语义的一致性。
 
 过程不满意：
