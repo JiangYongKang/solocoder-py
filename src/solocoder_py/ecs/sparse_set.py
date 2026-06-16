@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any, Iterator, TYPE_CHECKING
 
 from .entity import EntityId
@@ -10,12 +11,18 @@ if TYPE_CHECKING:
 _MISSING = object()
 
 
+class SparseSetDataInconsistencyWarning(Warning):
+    """Warning raised when SparseSet index and ArchetypeManager data are inconsistent."""
+    pass
+
+
 class SparseSet:
     def __init__(self, component_type: type, archetype_manager: ArchetypeManager | None = None) -> None:
         self._component_type = component_type
         self._sparse: list[int] = []
         self._dense: list[int] = []
         self._archetype_manager = archetype_manager
+        self._warned_entities: set[int] = set()
 
     def _ensure_sparse_capacity(self, entity_id: int) -> None:
         required_size = entity_id + 1
@@ -78,8 +85,10 @@ class SparseSet:
         for entity_id in self._dense:
             entity = EntityId(entity_id)
             value = self._get_internal(entity)
-            if value is not _MISSING:
-                yield value
+            if value is _MISSING:
+                self._warn_inconsistency(entity_id)
+                continue
+            yield value
 
     def iter(self) -> Iterator[tuple[EntityId, Any]]:
         if self._archetype_manager is None:
@@ -87,8 +96,10 @@ class SparseSet:
         for entity_id in self._dense:
             entity = EntityId(entity_id)
             value = self._get_internal(entity)
-            if value is not _MISSING:
-                yield entity, value
+            if value is _MISSING:
+                self._warn_inconsistency(entity_id)
+                continue
+            yield entity, value
 
     def __getitem__(self, entity: EntityId) -> Any:
         if not self.contains(entity):
@@ -107,9 +118,22 @@ class SparseSet:
     def __contains__(self, entity: EntityId) -> bool:
         return self.contains(entity)
 
+    def _warn_inconsistency(self, entity_id: int) -> None:
+        if entity_id in self._warned_entities:
+            return
+        self._warned_entities.add(entity_id)
+        warnings.warn(
+            f"SparseSet index contains entity {entity_id} but no Archetype found. "
+            f"This indicates data inconsistency between SparseSet and ArchetypeManager. "
+            f"Component type: {self._component_type.__name__}",
+            SparseSetDataInconsistencyWarning,
+            stacklevel=3,
+        )
+
     def clear(self) -> None:
         self._sparse.clear()
         self._dense.clear()
+        self._warned_entities.clear()
 
     @property
     def component_type(self) -> type:

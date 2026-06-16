@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+import warnings
+
 from solocoder_py.ecs import (
     ArchetypeManager,
     CircularDependencyError,
@@ -13,6 +15,7 @@ from solocoder_py.ecs import (
     Name,
     Position,
     SparseSet,
+    SparseSetDataInconsistencyWarning,
     System,
     SystemAlreadyExistsError,
     SystemNotFoundError,
@@ -463,6 +466,86 @@ class TestSparseSet:
         assert ss.get(e1, default).x == 1.0
         assert ss.get(e2, default) is default
         assert ss.get(EntityId(999), default) is default
+
+    def test_iter_components_warns_on_inconsistency(self):
+        am = ArchetypeManager()
+        ss = SparseSet(Position, am)
+        ss.insert(EntityId(0))
+        ss.insert(EntityId(1))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = list(ss.iter_components())
+            assert len(results) == 0
+            assert len(w) == 2
+            assert all(issubclass(warning.category, SparseSetDataInconsistencyWarning) for warning in w)
+            assert "data inconsistency" in str(w[0].message).lower()
+
+    def test_iter_warns_on_inconsistency(self):
+        am = ArchetypeManager()
+        ss = SparseSet(Position, am)
+        ss.insert(EntityId(0))
+        ss.insert(EntityId(1))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = list(ss.iter())
+            assert len(results) == 0
+            assert len(w) == 2
+            assert all(issubclass(warning.category, SparseSetDataInconsistencyWarning) for warning in w)
+
+    def test_warning_not_duplicated_for_same_entity(self):
+        am = ArchetypeManager()
+        ss = SparseSet(Position, am)
+        ss.insert(EntityId(0))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            list(ss.iter_components())
+            list(ss.iter_components())
+            assert len(w) == 1
+
+    def test_clear_resets_warning_tracking(self):
+        am = ArchetypeManager()
+        ss = SparseSet(Position, am)
+        ss.insert(EntityId(0))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            list(ss.iter_components())
+            assert len(w) == 1
+
+            ss.clear()
+            ss.insert(EntityId(0))
+
+            list(ss.iter_components())
+            assert len(w) == 2
+
+    def test_mixed_consistent_and_inconsistent_iter(self):
+        world = World()
+        e1 = world.create_entity()
+        world.add_component(e1, Position(x=1.0, y=2.0))
+
+        ss = world._components[Position]
+        ss.insert(EntityId(999))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = list(ss.iter_components())
+            assert len(results) == 1
+            assert results[0].x == 1.0
+            assert len(w) == 1
+            assert "999" in str(w[0].message)
+
+    def test_warning_includes_component_type(self):
+        am = ArchetypeManager()
+        ss = SparseSet(Position, am)
+        ss.insert(EntityId(0))
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            list(ss.iter_components())
+            assert "Position" in str(w[0].message)
 
 
 # ============================================================

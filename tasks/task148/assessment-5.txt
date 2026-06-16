@@ -1,0 +1,5 @@
+产物不满意：
+1. 模型将 from_ordered 工厂方法从手动逐字段赋值改为先通过 __new__ 预置 _preserve_order 标记再调用 __init__，修复正确且完整。现在 from_ordered 走的是 __new__ → 设置内部标记 → __init__ → __post_init__ 的路径，与默认构造函数的 __init__ → __post_init__ 路径共享同一套 dataclass 生成的 __init__ 字段初始化逻辑。103 个测试全部通过。未来 CollisionPair 新增带 default 或 default_factory 的字段时，from_ordered 和 CollisionPair(a, b) 两个构造入口都会自动填充默认值，初始化路径分歧已彻底根治。
+
+过程不满意：
+1. 模型在收到提示词后第一步仍然是 todo_write 创建两项子任务，第二步才读取 models.py 源码。这与 task142 第四轮、task145 第四轮、task148 第四轮 assessment 中反复指出的问题一致——连续多轮未修正"先计划后分析"的惯性行为。虽然本轮修复非常简单，两行代码替换未受此习惯影响，但这已是至少第四轮出现同一问题，表明模型未从标注反馈中归纳出行为改进。正确做法是先阅读 from_ordered 的当前实现和 __init__ 的生成逻辑，理清 dataclass 字段初始化的完整链路后再制定计划。

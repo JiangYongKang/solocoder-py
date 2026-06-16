@@ -1,0 +1,5 @@
+你在上一轮修复 SparseSet 哨兵语义时，迭代方法对数据不一致场景的错误暴露与 __getitem__ 不对称，需要修复：
+
+1. sparse_set.py 的 iter_components 和 iter 方法在当前实现中，当 _get_internal 返回 _MISSING（表示 SparseSet 索引中存在该实体，但 ArchetypeManager 中找不到对应 Archetype，即数据不一致）时采用静默跳过。而 __getitem__ 在同一场景下抛出 RuntimeError 并附带详细的不一致描述信息。同一类数据损坏在迭代路径和单点访问路径上表现完全相反：迭代调用方永远感知不到底层数据被损坏，但一旦改用 ss[entity] 直接访问就立即崩溃。这种不一致的错误暴露会让调用方在排查时被严重误导。需要使迭代方法在遇到数据不一致时也能输出可追踪的警告，保持与 __getitem__ 一致的错误可见性。
+
+2. 修复以上问题后重新运行 poetry run pytest tests/ecs/ -q，确保所有测试仍然通过。

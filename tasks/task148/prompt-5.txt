@@ -1,0 +1,5 @@
+你在上一轮修复 CollisionPair 初始化路径时，from_ordered 工厂方法仍然没有走完统一的初始化路径，需要修复：
+
+1. models.py 中 from_ordered 工厂方法当前使用 cls.__new__(cls) 手动逐字段赋值来创建实例，绕过了 dataclass 生成的 __init__。上一轮通过 _preserve_order 标记解决了 __post_init__ 被跳过的问题，但 __init__ 被绕过意味着未来 CollisionPair 新增带默认值的字段时（例如一个接收 default_factory 的时间戳字段），默认构造函数通过 __init__ 自动填充默认值，而 from_ordered 的手动赋值会遗漏新字段，导致实例缺少该属性。需要让 from_ordered 也经过 __init__ 完成字段初始化，使两个构造路径共用同一套初始化逻辑。
+
+2. 修复以上问题后重新运行 poetry run pytest tests/collision/ -q，确保所有测试仍然通过。

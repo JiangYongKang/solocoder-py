@@ -23,7 +23,7 @@ from .exceptions import (
     SystemAlreadyExistsError,
     SystemNotFoundError,
 )
-from .sparse_set import SparseSet
+from .sparse_set import SparseSet, SparseSetDataInconsistencyWarning
 from .system import System, SystemScheduler
 from .world import World
 
@@ -52,6 +52,7 @@ __all__ = [
     "SystemAlreadyExistsError",
     "SystemNotFoundError",
     "SparseSet",
+    "SparseSetDataInconsistencyWarning",
     "System",
     "SystemScheduler",
     "World",

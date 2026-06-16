@@ -176,9 +176,11 @@ class CollisionPair:
         this method.
 
         Internally, this method sets a private ``_preserve_order``
-        flag before allowing ``__post_init__`` to run, so all
-        validation logic in ``__post_init__`` still executes uniformly
-        across every construction path.
+        flag on a freshly-allocated instance, then delegates to the
+        dataclass-generated ``__init__`` so that every field —
+        including ones added in the future with default values — is
+        initialized uniformly.  ``__post_init__`` then sees the flag
+        and skips the normalization step.
 
         Use this constructor when the ordering of the two colliders
         carries meaning (e.g. "source" vs "target", "actor" vs "victim")
@@ -197,11 +199,8 @@ class CollisionPair:
             A CollisionPair in the exact order given.
         """
         pair = cls.__new__(cls)
-        pair.collider_a = collider_a
-        pair.collider_b = collider_b
-        pair.was_swapped = False
         pair._preserve_order = True
-        pair.__post_init__()
+        pair.__init__(collider_a, collider_b)
         return pair
 
     def __eq__(self, other: object) -> bool:
