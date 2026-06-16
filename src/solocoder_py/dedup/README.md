@@ -306,6 +306,251 @@ engine = DedupEngine(
 )
 ```
 
+## MinHash + LSH 模糊文本去重
+
+除了基于记录字段的去重引擎外，本模块还提供了基于 **MinHash** 和 **LSH (Locality Sensitive Hashing)** 算法的纯文本近似去重功能，适用于大规模文本数据的高效去重场景。
+
+### 核心原理
+
+#### 1. MinHash 签名计算
+
+MinHash 是一种用于快速估计集合相似度（Jaccard 相似度）的概率数据结构：
+
+- **N-Gram 分词**：将输入文本切分为 N 个字符的子串集合（如 3-Gram）
+- **多个哈希函数**：使用 K 个独立的哈希函数对每个 N-Gram 进行哈希
+- **最小哈希签名**：对每个哈希函数，取所有 N-Gram 哈希值中的最小值，组成长度为 K 的签名向量
+
+MinHash 的核心性质：两个集合的 MinHash 签名中对应位置相等的概率，等于它们的 Jaccard 相似度。
+
+#### 2. LSH 分桶
+
+LSH (Locality Sensitive Hashing) 通过分桶策略大幅减少需要比较的文本对数量：
+
+- **Band 切分**：将 MinHash 签名向量按行切分为 B 个 band，每个包含 R 行（K = B × R）
+- **分桶哈希**：对每个 band 内的子向量独立计算哈希值，哈希到同一个桶的文本互为候选相似对
+- **概率保证**：两条文本只要在任意一个 band 中被哈希到相同的桶，即被判定为候选相似对
+
+通过调整 B 和 R 的比例，可以在召回率和精确率之间权衡：
+- 更多 band → 更高召回率（更容易命中相似文本）
+- 更多行/band → 更高精确率（减少误判）
+
+#### 3. 相似度阈值筛选与规范代表选优
+
+- **精确 Jaccard 计算**：对 LSH 产生的候选对，基于原始 N-Gram 集合计算精确的 Jaccard 相似度
+- **阈值过滤**：仅保留相似度超过可配置阈值的配对
+- **传递性聚类**：使用并查集算法将相似文本聚合成簇
+- **规范代表选优**：在每组相似文本簇中自动选出一条文本作为规范代表
+
+### 规范代表选优策略
+
+| 策略常量 | 说明 |
+|----------|------|
+| `REP_STRATEGY_FIRST` | 选择最早出现的文本（默认） |
+| `REP_STRATEGY_LONGEST` | 选择长度最长的文本 |
+| `REP_STRATEGY_SHORTEST` | 选择长度最短的文本 |
+| `REP_STRATEGY_MIDDLE_LENGTH` | 选择长度居中的文本 |
+| `REP_STRATEGY_CUSTOM` | 使用用户提供的评分函数，选择得分最高的 |
+
+### 核心类
+
+#### `MinHash`
+
+MinHash 签名计算器。
+
+主要方法：
+- `compute_signature(text)`：计算文本的 MinHash 签名
+- `compute_signature_from_tokens(tokens)`：从 N-Gram 集合计算签名
+- `jaccard_from_signatures(sig_a, sig_b)`：从签名估计 Jaccard 相似度
+
+配置参数：
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `num_perm` | `int` | 128 | 哈希函数数量（签名长度） |
+| `n` | `int` | 3 | N-Gram 的 N 值 |
+| `seed` | `int` | 42 | 随机种子，保证可复现 |
+
+#### `MinHashLSH`
+
+LSH 分桶索引。
+
+主要方法：
+- `insert(idx, signature)`：插入一条文本的签名
+- `query(signature)`：查询与给定签名相似的候选文本索引
+- `get_candidate_pairs()`：获取所有候选相似对
+- `clear()`：清空所有数据
+
+配置参数：
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `num_perm` | `int` | 128 | MinHash 签名长度 |
+| `num_bands` | `int \| None` | None | band 数量，与 threshold 二选一 |
+| `threshold` | `float \| None` | 0.8 | 相似度阈值，用于自动计算 band 配置 |
+
+#### `TextDedupEngine`
+
+文本去重引擎主类，整合 MinHash + LSH + Jaccard 精确计算 + 规范代表选优。
+
+主要方法：
+- `add_text(text)`：添加单条文本，返回索引
+- `add_texts(texts)`：批量添加文本，返回索引列表
+- `dedup()`：执行去重，返回 `TextDedupResult`
+- `clear()`：清空所有数据
+
+配置参数：
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `num_perm` | `int` | 128 | MinHash 签名长度 |
+| `n` | `int` | 3 | N-Gram 的 N 值 |
+| `threshold` | `float` | 0.8 | Jaccard 相似度阈值 |
+| `num_bands` | `int \| None` | None | LSH band 数量 |
+| `representative_strategy` | `str` | `REP_STRATEGY_FIRST` | 规范代表选优策略 |
+| `custom_score_fn` | `Callable[[str, int], float] \| None` | None | 自定义评分函数 |
+| `seed` | `int` | 42 | 随机种子 |
+
+### 数据模型
+
+#### `TextDedupCluster`
+
+相似文本簇。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `representative` | `str` | 规范代表文本 |
+| `rep_index` | `int` | 规范代表的原始索引 |
+| `members` | `list[str]` | 簇内所有成员文本 |
+| `member_indices` | `list[int]` | 所有成员的原始索引 |
+| `similarities` | `dict[tuple[int, int], float]` | 成员两两之间的精确相似度 |
+| `avg_similarity` | `float` | 簇内平均相似度 |
+
+#### `TextDedupResult`
+
+文本去重结果。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `clusters` | `list[TextDedupCluster]` | 所有相似文本簇 |
+| `total_input` | `int` | 输入文本总数 |
+| `total_clusters` | `int` | 聚类后簇的数量 |
+| `total_duplicates` | `int` | 重复文本数量 |
+| `unique_texts` | `list[str]` | 去重后的唯一文本列表（各簇代表） |
+| `unique_indices` | `list[int]` | 唯一文本的原始索引列表 |
+
+### 使用示例
+
+#### 基本文本去重
+
+```python
+from solocoder_py.dedup import TextDedupEngine
+
+engine = TextDedupEngine(
+    num_perm=128,
+    n=3,
+    threshold=0.8,
+)
+
+texts = [
+    "这是一段测试文本，用于测试去重功能",
+    "这是一段测试文本，用于测试去重功能！",  # 高度相似
+    "这是另一段完全不同的文本内容",
+    "这是一段测试文本，用于测试去重功能。",  # 高度相似
+    "另外一个无关的句子",
+]
+
+engine.add_texts(texts)
+result = engine.dedup()
+
+print(f"输入: {result.total_input}")
+print(f"去重后: {result.total_clusters}")
+print(f"重复数: {result.total_duplicates}")
+
+for i, cluster in enumerate(result.clusters):
+    print(f"\n簇 {i}:")
+    print(f"  代表: {cluster.representative}")
+    print(f"  成员数: {len(cluster.members)}")
+    print(f"  平均相似度: {cluster.avg_similarity:.2f}")
+```
+
+#### 使用自定义规范代表选优策略
+
+```python
+from solocoder_py.dedup import (
+    TextDedupEngine,
+    REP_STRATEGY_LONGEST,
+    REP_STRATEGY_CUSTOM,
+)
+
+# 选择最长的文本作为代表
+engine = TextDedupEngine(
+    threshold=0.7,
+    representative_strategy=REP_STRATEGY_LONGEST,
+)
+
+# 使用自定义评分函数
+def score_text(text, idx):
+    # 假设越早出现的文本质量越高，同时文本长度也有加成
+    return -idx + len(text) * 0.01
+
+engine2 = TextDedupEngine(
+    threshold=0.7,
+    representative_strategy=REP_STRATEGY_CUSTOM,
+    custom_score_fn=score_text,
+)
+```
+
+#### 直接使用 MinHash 和 LSH
+
+```python
+from solocoder_py.dedup import MinHash, MinHashLSH, jaccard_similarity, ngram_tokens
+
+# N-Gram 分词
+tokens = ngram_tokens("hello world", n=3)
+print(tokens)  # {'hel', 'ell', 'llo', 'lo ', 'o w', ' wo', 'wor', 'orl', 'rld'}
+
+# 计算 MinHash 签名
+minhash = MinHash(num_perm=128, n=3)
+sig1 = minhash.compute_signature("hello world")
+sig2 = minhash.compute_signature("hello word")
+
+# 从签名估计 Jaccard 相似度
+est_sim = MinHash.jaccard_from_signatures(sig1, sig2)
+
+# 精确 Jaccard 相似度
+tokens1 = ngram_tokens("hello world", n=3)
+tokens2 = ngram_tokens("hello word", n=3)
+exact_sim = jaccard_similarity(tokens1, tokens2)
+
+# 使用 LSH 索引
+lsh = MinHashLSH(num_perm=128, threshold=0.8)
+lsh.insert(0, sig1)
+lsh.insert(1, sig2)
+
+candidates = lsh.query(sig1)  # 查询与 sig1 相似的文本索引
+pairs = lsh.get_candidate_pairs()  # 获取所有候选对
+```
+
+### 性能与精度权衡
+
+- **签名长度 `num_perm`**：
+  - 越大 → 相似度估计越精确，内存占用越高，计算越慢
+  - 推荐值：64-256，默认 128
+
+- **N-Gram 的 N 值**：
+  - 越大 → 对细微差异更敏感，适合短文本
+  - 越小 → 容错性更强，适合长文本
+  - 推荐值：2-5，默认 3
+
+- **相似度阈值 `threshold`**：
+  - 越高 → 去重越严格，漏判越多（召回率低）
+  - 越低 → 去重越宽松，误判越多（精确率低）
+  - 根据业务需求调整，默认 0.8
+
+### 子模块
+
+- `min_hash`：MinHash 签名计算、N-Gram 分词、Jaccard 相似度
+- `lsh`：LSH 分桶索引
+- `text_dedup`：文本去重引擎，整合所有功能
+- `exceptions`：异常类定义
+
 ## 异常说明
 
 - `InvalidConfigError`：配置无效

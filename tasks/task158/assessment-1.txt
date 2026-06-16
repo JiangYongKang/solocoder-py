@@ -1,0 +1,8 @@
+产物不满意：
+1. 测试覆盖存在遗漏。test_normal_flows.py 的 TestEarlyTermination 类中 test_early_termination_does_not_compute_all 方法只验证了提前终止后 visited 列表不包含 E 节点，但没有验证对未处理完成节点调用 get_distance 和 get_path 的行为是否正确。以 build_simple_graph 的图结构为例，当目标为 D 时提前终止，E 节点的距离被记录为 12（路径 A-C-E），但真正的最短距离应为 11（路径 A-B-D-E），因为 D-E 这条权重为 2 的边从未被松弛过。ShortestPathResult 的 is_reachable 方法对这些半成品节点返回 True，get_path 返回了非最优路径，而 terminated_early 标志并不能阻止调用者错误地使用这些不正确的结果。根本原因是测试设计只关注了"提前终止是否减少 visited 节点数量"这一表面现象，没有验证结果数据本身的正确性边界。
+2. 测试代码在多处直接访问私有属性。test_normal_flows.py 第 16 行、test_edge_cases.py 第 15 行、test_error_branches.py 第 21 行等多处测试方法中使用了 `dijkstra._graph = build_simple_graph()` 直接赋值私有属性来设置测试数据，这种做法将测试与 Dijkstra 类的内部存储实现耦合在了一起。Dijkstra 的构造函数本身已支持通过参数传入 WeightedDigraph 实例，测试应该用 `Dijkstra(build_simple_graph())` 代替直接操作私有属性。如果将来 _graph 改名或存储方式重构，所有测试都将被破坏。
+3. graph.py 的 shortest_paths 方法中存在冗余死代码。第 143 行的 `if current_distance > distances[current_node]: continue` 是一个永远不会被触发的防御性检查，因为最小堆的性质保证了任何节点的最短距离条目总是先于其陈旧条目被弹出，而 visited_set 在第 127 行已经拦截了所有重复弹出的陈旧条目。这段代码虽然不产生错误结果，但说明模型对 Dijkstra 算法中 visited_set 与惰性删除机制之间的不变量关系理解不够透彻，将两个本应互斥的防御手段叠加在了一起。
+
+过程不满意：
+1. 模型在完成对项目结构的一次性分析后，连续写入了 exceptions.py、models.py、graph.py、__init__.py 四个源文件和 conftest.py 以及三个测试文件，最后写入 README.md，所有代码和测试写好后才第一次运行 pytest。首轮测试即发现期望距离写错（将 S 到 A 的期望距离 7 写成了 5），尽管快速修复了，但这种"全量编写再一次性验证"的工作方式存在风险——如果逻辑错误更深层，排查范围就会遍及所有文件而不容易定位。合理做法是每完成一个核心模块（如图结构和算法执行器）就立即编写对应测试并运行验证，以失败结果驱动迭代修复。
+2. 模型在思考过程中声称所有 43 个测试通过即意味着功能完成，但没有进一步检查提前终止场景下未处理节点的距离是否正确。测试只验证了 visited 列表变短，却没有查询 E 节点的 get_distance 返回值或在 terminated_early 为 True 的条件下测试非目标节点的路径重建。这反映出模型在验证阶段只做了"测试是否全部通过"的浅层检查，没有对结果数据的语义正确性做深入分析，属于典型的"测试通过就认为是正确的"思维定式。

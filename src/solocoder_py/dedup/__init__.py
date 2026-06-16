@@ -37,6 +37,19 @@ from .merge_strategies import (
     ALL_STRATEGIES,
     merge_group,
 )
+from .min_hash import MinHash, jaccard_similarity, ngram_tokens
+from .lsh import MinHashLSH, compute_band_config, LSHBandConfig
+from .text_dedup import (
+    TextDedupEngine,
+    TextDedupCluster,
+    TextDedupResult,
+    STRATEGY_FIRST as REP_STRATEGY_FIRST,
+    STRATEGY_LONGEST as REP_STRATEGY_LONGEST,
+    STRATEGY_SHORTEST as REP_STRATEGY_SHORTEST,
+    STRATEGY_MIDDLE_LENGTH as REP_STRATEGY_MIDDLE_LENGTH,
+    STRATEGY_CUSTOM as REP_STRATEGY_CUSTOM,
+    ALL_REPRESENTATIVE_STRATEGIES,
+)
 from .models import (
     DedupGroup,
     DedupResult,
@@ -84,4 +97,19 @@ __all__ = [
     "MergeResult",
     "Record",
     "MergeFunction",
+    "MinHash",
+    "jaccard_similarity",
+    "ngram_tokens",
+    "MinHashLSH",
+    "compute_band_config",
+    "LSHBandConfig",
+    "TextDedupEngine",
+    "TextDedupCluster",
+    "TextDedupResult",
+    "REP_STRATEGY_FIRST",
+    "REP_STRATEGY_LONGEST",
+    "REP_STRATEGY_SHORTEST",
+    "REP_STRATEGY_MIDDLE_LENGTH",
+    "REP_STRATEGY_CUSTOM",
+    "ALL_REPRESENTATIVE_STRATEGIES",
 ]

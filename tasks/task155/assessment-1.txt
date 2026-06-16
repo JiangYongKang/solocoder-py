@@ -1,0 +1,9 @@
+产物不满意：
+1. 提示词要求"三级粒度可独立选择或组合使用"，但 TextDiffer.diff 方法只接受单一 granularity 参数且内部只调用一次 tokenize，无法实现例如先按行比较发现变更行、再在变更行内按词粒度标注精细差异的组合使用场景。根因是模型只实现了独立选择的能力，完全忽略了提示词中"组合使用"这一明确要求。应以 `granularity: Union[DiffGranularity, List[DiffGranularity]]` 的方式支持传入粒度列表，按优先级逐级精化差异结果，或提供一个 multi_pass_diff 方法。
+2. build_hunks 函数中上下文行的收集以整个 DiffOperation 的 token 数作为粒度计数，而不是以单个 token 为单位。当变更前后某个 EQUAL 操作包含的 token 数量超过 context_lines 时，代码在 unified_diff.py 的 if context_before + tokens_count <= context_lines 分支中直接 break 放弃全部上下文 token。例如 context_lines=3 且变更前有一个包含 4 个 EQUAL token 的操作，判断 0+4>3 后 break 导致整个 hunk 没有任何上下文行。test_unified_diff_context_lines 测试只验证了 content_lines <= 2*context_lines+2 的上界，没有检验实际上下文数量，未能暴露此问题。应改为在循环内对单个操作的 token 列表做切片，按需逐 token 引入上下文。
+3. format_hunk_header 方法在 unified_diff.py 中对行级粒度输出 1-based 起始行号（old_start+1），但对词级和字符级粒度输出 0-based 起始行号（直接使用 old_start）。这种随粒度切换索引约定的行为没有任何文档说明，外部代码如果按照标准 Unified Diff 的 1-based 约定解析词级或字符级 diff 输出的 hunk header，就会产生 off-by-one 偏移导致行号错位。应统一所有粒度下使用 1-based 约定，或在非行级粒度下不输出传统 hunk header 而改用自定义标记。
+
+过程不满意：
+1. 模型在收到提示词后的第一步就直接用 todo_write 创建了 8 项子任务计划，然后才开始读取 three_way_merge 包下的 models.py、lcs.py、conftest.py、test_normal_flows.py 共 4 个文件来了解项目约定。three_way_merge 与 diff 任务完全无关，通过阅读无关包来学习项目结构是绕路的低效行为，既浪费了上下文窗口也引入了不必要的信息噪声。正确做法是先精读当前任务提示词中明确指定的包路径（src/solocoder_py/diff/）和 pytest 约定，查看 pyproject.toml 了解构建和测试配置，再根据 diff 域的实际需求规划模块拆分。
+2. 第一次运行 pytest 发现 Myers 算法回溯逻辑有问题后，模型没有先阅读失败用例的具体 traceback 定位出错行和出错原因，而是直接用 Write 工具完整重写了 myers.py 整个文件。随后又创建临时脚本 _test_diff.py 做单独验证，而非通过标准的 `poetry run pytest` 命令验证修复是否覆盖了所有失败用例。这是试错式调试模式，先整体重写再单独验证，而非基于失败信息做最小范围修正。应先阅读 traceback 分析失败原因，对出错行做针对性修改后用 `poetry run pytest tests/diff/ -v` 重新验证全部用例。
+3. 模型全程使用 `python -m pytest` 运行测试而未使用项目约定的 `poetry run pytest`，虽然功能上等价但违反了 pyproject.toml 中配置的构建规范。poetry 管理的虚拟环境通过 poetry run 确保所有依赖和路径映射与项目配置一致，直接用裸 python 调用可能导致包导入路径问题。应在整个开发过程中统一使用 `poetry run pytest` 作为测试启动命令。
