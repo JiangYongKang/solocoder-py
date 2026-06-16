@@ -1,0 +1,9 @@
+产物不满意：
+1. 提示词第1条要求修复 `_is_consonant` 中 y 字母的辅音判定逻辑，但模型最终未产生任何代码变更。原始代码 `return not _is_consonant(word, i - 1)` 在 `syzygy` 上可正确将所有 y 判定为元音（前面均为辅音），测试 `test_y_as_vowel` 期望 `syzygy` → `syzygi` 也证实了这一行为。模型的正确判断是原始代码无需修改，但提示词明确要求修复此问题，模型在未充分验证 Porter 原始论文定义前就提交了错误修改（去掉了 `not`），随后反复分析又回退，整个过程零净产出。
+2. 在 `stemmer.py` 的 `stem` 方法中，问题4的修复方案仍然在异常字典结果长度不足时静默丢弃该映射。当异常词如 `running` 映射为 `run`（长度3）而 `min_stem_length=4` 时，`len(exception_result) >= self.config.min_stem_length` 条件不成立，`result` 保持 `None` 并落入规则处理分支，最终 Porter 算法同样产出 `run`（长度3），再因长度不足被替换为原始词 `running`。异常字典在此流程中仍被忽略，只是多绕了一层规则处理。根本原因是模型将 `min_stem_length` 设为优先级高于异常字典语义而非将异常字典视为权威覆盖。
+3. 在 `stemmer.py` 的 `__init__` 方法中，模型为内部 `PorterStemmer` 创建了独立的 `StemmerConfig` 副本并固定 `preserve_case=False`，消除了 `stem` 中的冗余 `.lower()` 调用，但引入了一个同步缺陷：`aggressiveness` setter 中手动同步了 `level` 字段（`self._porter.config.level = level`），而 `min_stem_length` 没有对应的同步机制。当外部代码直接修改 `self.config.min_stem_length` 时，`_porter` 内部配置不会同步更新，在 AGGRESSIVE 模式下 `_extra_aggressive_step` 使用的仍是构造时的旧值，导致激进模式下的最小词干长度行为与用户配置不一致。
+
+过程不满意：
+1. 模型在收到提示词的第一步就调用 todo_write 创建了5项子任务计划，之后才开始阅读 `porter.py` 和 `stemmer.py` 的代码内容。这违反了"先分析问题再规划"的原则，导致后续执行中对问题1（y 辅音判定）的处理经历了先错误修改、再大量分析、最后回退的多轮反复，计划与实际情况严重脱节。正确做法是先通读所有相关文件理解当前代码逻辑和问题所在，再制定针对性的修复方案。
+2. 模型对 y 辅音判定问题的处理是典型的试错式调试。第一步便将 `return not _is_consonant(word, i - 1)` 改为 `return _is_consonant(word, i - 1)`，之后运行测试发现 `test_y_as_vowel` 失败，然后花费了从约第279行到第476行的大量篇幅反复推敲 Porter 论文原文中 y 的辅音定义、用 `syzygy` 单词逐字母验证、最终回退到原始代码。同一处代码经历了两轮相反方向的修改才稳定。正确做法是在动手修改前先理解 Porter 算法中 y 的判定规则（前面为辅音时 y 是元音），再决定是否需要修改。
+3. 模型对 `stemmer.py` 的重构经历了至少四次连续编辑：首次编辑创建了每次调用 `stem` 都新建 `PorterStemmer` 的低效方案，然后意识到效率问题改为类级别共享，接着又调整为 `preserve_case=False` 的统一策略，最后再简化 `stem` 方法的双路径逻辑。这四轮编辑本质上在解决同一个架构问题（大小写保留的职责划分），却反复推翻之前的方案。根源是模型在动手前没有规划清楚大小写处理职责的归属边界，正确做法是先画清 `Stemmer` 和 `PorterStemmer` 之间的大小写处理职责划分再一次性完成重构。

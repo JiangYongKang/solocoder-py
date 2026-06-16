@@ -7,7 +7,3 @@ class GraphCycleError(Exception):
 
 class NodeNotFoundError(GraphCycleError):
     pass
-
-
-class InvalidGraphError(GraphCycleError):
-    pass

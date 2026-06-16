@@ -30,7 +30,7 @@ class SentenceScore:
 class SummarizerConfig:
     num_sentences: int = 3
     position_decay: PositionDecayType = PositionDecayType.LINEAR
-    position_weight_factor: float = 1.0
+    position_weight_factor: float = 0.5
     exponential_decay_rate: float = 0.5
     similarity_metric: SimilarityMetric = SimilarityMetric.JACCARD
     similarity_threshold: float = 0.5

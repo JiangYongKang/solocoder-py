@@ -74,6 +74,7 @@ class TextDedupEngine:
 
         self.minhash = MinHash(num_perm=num_perm, n=n, seed=seed)
         self.lsh = MinHashLSH(num_perm=num_perm, num_bands=num_bands, threshold=threshold)
+        self.signature_rows_discarded = self.lsh.signature_rows_discarded
 
         self._texts: list[str] = []
         self._signatures: list[list[int]] = []

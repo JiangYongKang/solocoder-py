@@ -20,7 +20,7 @@ from ..fulltext.tokenizer import Tokenizer
 
 
 _SENTENCE_SPLIT_PATTERN = re.compile(
-    r"(?<=[.!?。！？])\s+(?=[A-Z])"
+    r"(?<=[.!?。！？])\s+"
     r"|(?<=[。！？])"
     r"|(?<=[.!?])$"
 )

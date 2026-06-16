@@ -1,0 +1,5 @@
+产物不满意：
+1. 在 test_minhash_lsh_normal_flows.py 的 test_get_signature 方法中，模型在新增 test_signature_rows_discarded_exposed 和 test_threshold_one_exact_match 两个测试方法时，误删了原有断言 `assert lsh.get_signature(99) is None`。这导致 get_signature 方法对不存在索引返回 None 的行为失去了测试覆盖，如果后续代码改动错误地改变了该方法的返回值语义，无法被测试捕获。根因是编辑替换操作的范围控制不精确，将插入新方法的上边界错误地覆盖到了前一个测试方法的最后一行。应恢复该断言行以保持边界行为的测试完整性。
+过程不满意：
+1. 模型在收到提示词后未经分析就连续两次调用 todo_write 创建了 4 项子任务计划（session-cot-2.md 第 3-18 行），随后才开始用 view_files 查看 lsh.py 和 text_dedup.py 的代码。这种先计划后分析的顺序与标注规范中"应先分析问题再规划"的要求相悖，可能导致计划粒度与实际问题边界不匹配。正确做法是先通读提示词中涉及的源文件和测试文件，理清每个修复点的具体位置和影响范围后再制定执行计划。
+2. 模型在 test_minhash_lsh_normal_flows.py 中追加新测试时使用了 edit_file_search_replace 操作，但未在编辑后立即查看 test_get_signature 方法所在区域的完整代码确认完整性，导致无意中删除了 `assert lsh.get_signature(99) is None`。此外模型在写完 threshold=1.0 的测试后直接运行 pytest，首次结果失败，又进行了两轮测试修改才全部通过。模型未在第一轮写入测试前充分推演 threshold=1.0 时 LSH 的分桶行为（每 band 仅 1 行导致碰撞概率极高），体现出对算法行为的推理不够深入，正确做法是先在白板上推演边界参数下的桶分布再编写测试。

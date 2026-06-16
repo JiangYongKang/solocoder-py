@@ -2,7 +2,6 @@ from .exceptions import (
     EmptyInputError,
     InvalidTextError,
     TokenizerError,
-    UnsupportedScriptError,
 )
 from .models import ScriptType, Token, TokenizationResult
 from .scripts import (
@@ -35,7 +34,6 @@ __all__ = [
     "TokenizerError",
     "EmptyInputError",
     "InvalidTextError",
-    "UnsupportedScriptError",
     "tokenize",
     "tokenize_to_strings",
     "detect_script",

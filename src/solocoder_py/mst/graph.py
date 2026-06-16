@@ -134,19 +134,13 @@ class Kruskal(Generic[T]):
         edges = sorted(self._graph.get_edges(), key=lambda e: e.weight)
 
         forest_edges: List[ForestEdge[T]] = []
-        initial_count = uf.count
+        v = len(nodes)
 
         for edge in edges:
-            if not uf.has(edge.u):
-                raise NodeNotFoundError(f"Node not found in graph: {edge.u}")
-            if not uf.has(edge.v):
-                raise NodeNotFoundError(f"Node not found in graph: {edge.v}")
-
             if uf.union(edge.u, edge.v):
-                root = uf.find(edge.u)
-                roots_list = sorted(uf.roots(), key=lambda x: hash(x))
-                component_id = roots_list.index(root)
-                forest_edges.append(ForestEdge(edge=edge, component_id=component_id))
+                forest_edges.append(ForestEdge(edge=edge, component_id=0))
+                if len(forest_edges) == v - 1:
+                    break
 
         final_components = uf.get_components()
         sorted_components = sorted(

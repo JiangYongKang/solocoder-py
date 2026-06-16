@@ -87,9 +87,11 @@ class MatchmakingEngine:
 
         for ts in TeamSize:
             for team in self._forming_teams[ts]:
-                team.members = [
-                    p for p in team.members if p.player_id != player_id
+                to_remove = [
+                    p for p in team.members if p.player_id == player_id
                 ]
+                for p in to_remove:
+                    team.remove_player(p)
             self._forming_teams[ts] = [
                 t for t in self._forming_teams[ts] if t.members
             ]
@@ -213,6 +215,7 @@ class MatchmakingEngine:
                             team_a=team_a,
                             team_b=team_b,
                             status=MatchStatus.MATCHED,
+                            created_at=now,
                             original_skill_range=(
                                 min(window_a[0], window_b[0]),
                                 max(window_a[1], window_b[1]),
@@ -232,10 +235,36 @@ class MatchmakingEngine:
 
         return matches
 
+    def _check_confirmation_timeouts(self, now: float) -> list[Match]:
+        timed_out_match_ids: list[str] = []
+
+        for match_id, match in list(self._active_matches.items()):
+            if match.status != MatchStatus.MATCHED:
+                continue
+            if now - match.created_at > self.config.confirmation_timeout:
+                timed_out_match_ids.append(match_id)
+
+        resolved: list[Match] = []
+        for match_id in timed_out_match_ids:
+            if match_id not in self._active_matches:
+                continue
+            match = self._active_matches[match_id]
+            timed_out_player_id = match.team_a.members[0].player_id
+            try:
+                updated = self.handle_player_cancellation(match_id, timed_out_player_id)
+                updated.confirm()
+                resolved.append(updated)
+            except NoCandidateError:
+                pass
+
+        return resolved
+
     def tick(self, now: Optional[float] = None) -> list[Match]:
         current_time = now if now is not None else time()
         self._form_teams(current_time)
-        return self._match_ready_teams(current_time)
+        new_matches = self._match_ready_teams(current_time)
+        timeout_resolved = self._check_confirmation_timeouts(current_time)
+        return new_matches + timeout_resolved
 
     def add_to_backup(self, request: MatchRequest) -> None:
         if request.player.player_id in self._player_index:

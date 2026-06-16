@@ -26,10 +26,7 @@ class CycleDetector:
     def add_edge(self, from_node: Any, to_node: Any) -> None:
         self._graph.add_edge(from_node, to_node)
 
-    def detect_cycles(self) -> List[Cycle]:
-        if self._graph.node_count == 0:
-            return []
-
+    def _run_dfs(self, start_nodes: List[Any]) -> List[Cycle]:
         adjacency = self._graph.get_adjacency()
         color: Dict[Any, NodeColor] = {node: NodeColor.WHITE for node in adjacency}
         recursion_stack: List[Any] = []
@@ -40,8 +37,6 @@ class CycleDetector:
             recursion_stack.append(node)
 
             for neighbor in adjacency.get(node, []):
-                if neighbor not in color:
-                    continue
                 if color[neighbor] == NodeColor.GRAY:
                     idx = recursion_stack.index(neighbor)
                     cycle_nodes = recursion_stack[idx:]
@@ -52,40 +47,21 @@ class CycleDetector:
             recursion_stack.pop()
             color[node] = NodeColor.BLACK
 
-        for node in adjacency:
+        for node in start_nodes:
             if color[node] == NodeColor.WHITE:
                 dfs(node)
 
         return sorted(found_cycles, key=lambda c: (len(c), c.canonical_key()))
 
+    def detect_cycles(self) -> List[Cycle]:
+        if self._graph.node_count == 0:
+            return []
+        return self._run_dfs(self._graph.get_nodes())
+
     def detect_cycles_from_node(self, start_node: Any) -> List[Cycle]:
         if not self._graph.has_node(start_node):
             raise NodeNotFoundError(f"Node not found: {start_node}")
-
-        adjacency = self._graph.get_adjacency()
-        color: Dict[Any, NodeColor] = {node: NodeColor.WHITE for node in adjacency}
-        recursion_stack: List[Any] = []
-        found_cycles: Set[Cycle] = set()
-
-        def dfs(node: Any) -> None:
-            color[node] = NodeColor.GRAY
-            recursion_stack.append(node)
-
-            for neighbor in adjacency.get(node, []):
-                if neighbor not in color:
-                    continue
-                if color[neighbor] == NodeColor.GRAY:
-                    idx = recursion_stack.index(neighbor)
-                    cycle_nodes = recursion_stack[idx:]
-                    found_cycles.add(Cycle(nodes=cycle_nodes))
-                elif color[neighbor] == NodeColor.WHITE:
-                    dfs(neighbor)
-
-            recursion_stack.pop()
-            color[node] = NodeColor.BLACK
-
-        dfs(start_node)
-        return sorted(found_cycles, key=lambda c: (len(c), c.canonical_key()))
+        return self._run_dfs([start_node])
 
     def has_cycle(self) -> bool:
         return len(self.detect_cycles()) > 0

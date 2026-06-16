@@ -1,0 +1,7 @@
+产物不满意：
+1. 在 engine.py 的 `_check_confirmation_timeouts` 方法中，模型将匹配级别的确认超时硬编码为 `team_a.members[0].player_id` 的单玩家取消行为，复用了 `handle_player_cancellation` 的单人取消逻辑。提示词描述的"超时未确认的 match"是匹配级别的事件，意味着整个对局超时未获得确认，而非某个特定玩家未确认。在 2v2 或 3v3 多人场景下，应从匹配层面处理超时，不应将超时归咎于 team_a 中的第一个玩家。当前实现混淆了匹配超时和玩家主动取消两个不同概念，正确做法应在 `_check_confirmation_timeouts` 中实现匹配级别的超时处理逻辑，而非复用单玩家取消路径。
+2. 在 `_check_confirmation_timeouts` 方法中备选回填成功后，模型调用 `updated.confirm()` 将匹配自动标记为 CONFIRMED 状态。这导致 `tick()` 方法的返回列表中混入了已确认的匹配对局，改变了原有 API 语义——正常流程下 `tick()` 只返回 MATCHED 状态的新匹配，现在却可能返回 CONFIRMED 状态的匹配。自动确认还绕过了备选玩家和剩余原玩家的确认机会，使得 `confirmation_timeout` 配置对回填后的匹配失去意义。同时 README 中 `tick()` 的描述"返回本轮成功匹配的对局列表"未提及可能返回已确认对局，文档与实现不一致。
+
+过程不满意：
+1. 模型在收到提示词后的首个操作是 `todo_write` 创建任务列表，之后才开始用 `view_files` 读取 engine.py 和 models.py。按标注规范，不应在刚收到任务时立即创建 TodoList，而应先分析提示词要求、阅读现有代码、理清根因和修改范围后再制定执行计划。这种先规划后分析的行为顺序导致后续在测试编写阶段才发现对 team formation 流程理解有误——原以为 2v2 两人入队后仍处于 forming 状态，实际 completed team 会进入 ready_teams——不得不将测试从 2v2 改为 3v3 来挽回。
+2. 模型在编写 `_check_confirmation_timeouts` 方法和超时测试时，未追溯 Match 对象的完整创建链路。Match 数据类的 `created_at` 字段使用 `field(default_factory=time)` 作为默认值，而 `_match_ready_teams` 中创建 Match 时未传入 `created_at=now` 参数，导致超时检测在模拟时间下完全失效。模型在测试失败后编写 `debug_timeout.py` 调试脚本才发现根因。如果编写超时逻辑之前先检查 Match 的创建点，就能提前发现时间源不一致问题，而不需要经历写代码、跑测试失败、写调试脚本、再修复的三轮试错过程。

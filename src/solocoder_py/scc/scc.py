@@ -38,17 +38,17 @@ class TarjanSCC:
                 self._dfs(node)
 
         reversed_components = list(reversed(self._components))
-        new_node_to_component: Dict[int, int] = {}
-        new_component_to_nodes: Dict[int, List[int]] = {}
+        self._node_to_component = {}
+        self._component_to_nodes = {}
 
         for new_cid, component in enumerate(reversed_components):
-            new_component_to_nodes[new_cid] = list(component)
+            self._component_to_nodes[new_cid] = list(component)
             for node in component:
-                new_node_to_component[node] = new_cid
+                self._node_to_component[node] = new_cid
 
         self._result = SCCResult(
-            node_to_component=new_node_to_component,
-            component_to_nodes=new_component_to_nodes,
+            node_to_component=dict(self._node_to_component),
+            component_to_nodes=dict(self._component_to_nodes),
             components=[list(c) for c in reversed_components],
         )
         return self._result
@@ -75,11 +75,7 @@ class TarjanSCC:
                 component.append(w)
                 if w == node:
                     break
-            component_id = len(self._components)
             self._components.append(component)
-            for n in component:
-                self._node_to_component[n] = component_id
-            self._component_to_nodes[component_id] = component
 
     def build_condensation(self, scc_result: SCCResult | None = None) -> CondensationGraph:
         if self._graph.is_empty():

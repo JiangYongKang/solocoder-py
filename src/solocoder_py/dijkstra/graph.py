@@ -131,6 +131,10 @@ class Dijkstra:
             visited_set.add(current_node)
 
             if target is not None and current_node == target:
+                for node in self._graph.get_nodes():
+                    if node not in visited_set:
+                        distances[node] = float("inf")
+                        predecessors[node] = None
                 return ShortestPathResult(
                     source=source,
                     distances=distances,
@@ -139,9 +143,6 @@ class Dijkstra:
                     target=target,
                     terminated_early=True,
                 )
-
-            if current_distance > distances[current_node]:
-                continue
 
             for neighbor, weight in self._graph.get_neighbors(current_node):
                 if neighbor in visited_set:

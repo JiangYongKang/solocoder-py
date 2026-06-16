@@ -93,8 +93,9 @@ class TestMinHashLSHErrors:
             MinHashLSH(num_perm=128, threshold=0)
 
     def test_threshold_one(self):
-        with pytest.raises(InvalidConfigError):
-            MinHashLSH(num_perm=128, threshold=1)
+        lsh = MinHashLSH(num_perm=128, threshold=1.0)
+        assert lsh.band_config.num_bands == 128
+        assert lsh.band_config.rows_per_band == 1
 
     def test_threshold_negative(self):
         with pytest.raises(InvalidConfigError):
@@ -123,8 +124,10 @@ class TestComputeBandConfigErrors:
             compute_band_config(128, threshold=0)
 
     def test_threshold_one(self):
-        with pytest.raises(InvalidConfigError):
-            compute_band_config(128, threshold=1)
+        config = compute_band_config(128, threshold=1.0)
+        assert config.num_bands == 128
+        assert config.rows_per_band == 1
+        assert config.total_rows_used == 128
 
     def test_no_params(self):
         with pytest.raises(InvalidConfigError):

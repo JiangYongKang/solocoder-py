@@ -11,7 +11,3 @@ class EmptyInputError(TokenizerError):
 
 class InvalidTextError(TokenizerError):
     pass
-
-
-class UnsupportedScriptError(TokenizerError):
-    pass

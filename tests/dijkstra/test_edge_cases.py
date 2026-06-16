@@ -8,22 +8,20 @@ from .conftest import build_zero_weight_graph
 
 
 class TestSourceEqualsTarget:
-    def test_source_is_target_distance_zero(self, dijkstra: Dijkstra) -> None:
+    def test_source_is_target_distance_zero(self) -> None:
         graph = WeightedDigraph()
         graph.add_edge("A", "B", 1.0)
         graph.add_edge("B", "C", 2.0)
-        dijkstra._graph = graph
+        dijkstra = Dijkstra(graph=graph)
 
         distance, path = dijkstra.shortest_path("A", "A")
         assert distance == 0.0
         assert path == ["A"]
 
-    def test_source_is_target_in_shortest_paths(
-        self, dijkstra: Dijkstra
-    ) -> None:
+    def test_source_is_target_in_shortest_paths(self) -> None:
         graph = WeightedDigraph()
         graph.add_node("X")
-        dijkstra._graph = graph
+        dijkstra = Dijkstra(graph=graph)
 
         result = dijkstra.shortest_paths("X", target="X")
         assert result.terminated_early
@@ -32,10 +30,10 @@ class TestSourceEqualsTarget:
 
 
 class TestSingleNodeGraph:
-    def test_single_node_no_edges(self, dijkstra: Dijkstra) -> None:
+    def test_single_node_no_edges(self) -> None:
         graph = WeightedDigraph()
         graph.add_node("only")
-        dijkstra._graph = graph
+        dijkstra = Dijkstra(graph=graph)
 
         result = dijkstra.shortest_paths("only")
         assert result.source == "only"
@@ -44,12 +42,10 @@ class TestSingleNodeGraph:
         assert result.visited == ["only"]
         assert not result.terminated_early
 
-    def test_single_node_self_loop_zero_weight(
-        self, dijkstra: Dijkstra
-    ) -> None:
+    def test_single_node_self_loop_zero_weight(self) -> None:
         graph = WeightedDigraph()
         graph.add_edge("only", "only", 0.0)
-        dijkstra._graph = graph
+        dijkstra = Dijkstra(graph=graph)
 
         result = dijkstra.shortest_paths("only")
         assert result.get_distance("only") == 0.0
@@ -57,28 +53,24 @@ class TestSingleNodeGraph:
 
 
 class TestZeroWeightEdges:
-    def test_zero_weight_edge_path(self, dijkstra: Dijkstra) -> None:
-        dijkstra._graph = build_zero_weight_graph()
+    def test_zero_weight_edge_path(self) -> None:
+        dijkstra = Dijkstra(graph=build_zero_weight_graph())
         result = dijkstra.shortest_paths("A")
 
         assert result.get_distance("A") == 0.0
         assert result.get_distance("B") == 0.0
         assert result.get_distance("C") == 0.0
 
-    def test_zero_weight_edge_path_reconstruction(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_zero_weight_graph()
+    def test_zero_weight_edge_path_reconstruction(self) -> None:
+        dijkstra = Dijkstra(graph=build_zero_weight_graph())
         result = dijkstra.shortest_paths("A")
 
         path_c = result.get_path("C")
         assert result.get_distance("C") == 0.0
         assert path_c in (["A", "B", "C"], ["A", "C"])
 
-    def test_zero_weight_edge_does_not_break_algorithm(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_zero_weight_graph()
+    def test_zero_weight_edge_does_not_break_algorithm(self) -> None:
+        dijkstra = Dijkstra(graph=build_zero_weight_graph())
         distance, path = dijkstra.shortest_path("A", "C")
 
         assert distance == 0.0

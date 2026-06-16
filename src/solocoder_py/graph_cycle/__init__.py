@@ -1,6 +1,5 @@
 from .exceptions import (
     GraphCycleError,
-    InvalidGraphError,
     NodeNotFoundError,
 )
 from .models import (
@@ -12,7 +11,6 @@ from .detector import CycleDetector
 
 __all__ = [
     "GraphCycleError",
-    "InvalidGraphError",
     "NodeNotFoundError",
     "Cycle",
     "DirectedGraph",

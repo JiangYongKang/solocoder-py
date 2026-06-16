@@ -1,0 +1,5 @@
+你实现的 MinHash+LSH 文本去重模块存在一些问题，需要修复：
+1. compute_band_config 方法在 num_bands 不能整除 num_perm 时会静默截断签名尾部元素，导致部分哈希信息被丢弃，降低了 LSH 召回精度，且调用方无法感知这一信息丢失。
+2. TextDedupEngine 和 MinHashLSH 两个模块各自独立校验了阈值范围但边界定义不一致——引擎端允许 threshold=1.0，但 LSH 端在该值时抛出异常且错误消息中声明的区间与引擎端矛盾。
+3. test_similar_texts_hit_same_bucket 测试中验证无关文本不被误判的断言使用了 `and` 逻辑组合，当仅一个无关对误判时会静默通过，无法可靠验证无关文本确实未被分到同一桶。
+4. 修复后重新运行 poetry run pytest tests/dedup/ -v，需要让所有测试通过。

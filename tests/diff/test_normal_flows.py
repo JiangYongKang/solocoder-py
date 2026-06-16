@@ -170,3 +170,165 @@ class TestCharGranularity:
         has_insert_a = any(op.is_insert and "a" in [t.content for t in op.tokens] for op in ops)
         assert has_delete_e
         assert has_insert_a
+
+
+class TestCompositeGranularity:
+    def test_line_plus_word_single_modified_line(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "hello world"
+        new = "hello brave world"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
+        assert len(result.operations) == 2
+        assert result.operations[0].is_delete
+        assert result.operations[1].is_insert
+        assert result.operations[0].has_sub_operations
+        sub_ops = result.operations[0].sub_operations
+        assert any(op.is_insert and "brave" in [t.content for t in op.tokens] for op in sub_ops)
+
+    def test_line_plus_char_single_modified_line(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "hello"
+        new = "hallo"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.CHAR))
+        assert result.operations[0].has_sub_operations
+        sub_ops = result.operations[0].sub_operations
+        has_delete = any(op.is_delete and "e" in [t.content for t in op.tokens] for op in sub_ops)
+        has_insert = any(op.is_insert and "a" in [t.content for t in op.tokens] for op in sub_ops)
+        assert has_delete
+        assert has_insert
+
+    def test_line_plus_word_multiple_modified_lines(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "hello world\nfoo bar\nbaz"
+        new = "hello brave world\nfoo baz bar\nqux"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
+        delete_ops = [op for op in result.operations if op.is_delete]
+        insert_ops = [op for op in result.operations if op.is_insert]
+        assert len(delete_ops) >= 1
+        assert len(insert_ops) >= 1
+        for op in delete_ops:
+            assert op.has_sub_operations
+
+    def test_operations_list_with_sub_operations(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "hello world"
+        new = "hello brave world"
+        ops = differ.operations_list(
+            old, new, (DiffGranularity.LINE, DiffGranularity.WORD), include_sub=True
+        )
+        assert len(ops) == 2
+        assert "sub_operations" in ops[0]
+        assert len(ops[0]["sub_operations"]) > 0
+
+    def test_operations_list_without_sub_operations(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "hello world"
+        new = "hello brave world"
+        ops = differ.operations_list(
+            old, new, (DiffGranularity.LINE, DiffGranularity.WORD), include_sub=False
+        )
+        assert "sub_operations" not in ops[0]
+
+    def test_composite_pure_insert_no_sub(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "line1\nline2"
+        new = "line1\nnew_line\nline2"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
+        insert_op = [op for op in result.operations if op.is_insert][0]
+        assert not insert_op.has_sub_operations
+
+    def test_composite_pure_delete_no_sub(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "line1\nto_delete\nline2"
+        new = "line1\nline2"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
+        delete_op = [op for op in result.operations if op.is_delete][0]
+        assert not delete_op.has_sub_operations
+
+
+class TestContextLinesPartialToken:
+    def test_large_equal_block_partial_context_before(self):
+        old_lines = [f"L{i}" for i in range(1, 21)]
+        new_lines = old_lines[:]
+        new_lines[15] = "CHANGED"
+        old = "\n".join(old_lines)
+        new = "\n".join(new_lines)
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        result = differ.diff(old, new, context_lines=3)
+        hunk = result.hunks[0]
+        context_before = 0
+        for op in hunk.operations:
+            if op.is_equal:
+                if context_before + len(op.tokens) <= 3:
+                    context_before += len(op.tokens)
+                else:
+                    break
+            else:
+                break
+        assert context_before == 3
+
+    def test_large_equal_block_partial_context_after(self):
+        old_lines = [f"L{i}" for i in range(1, 21)]
+        new_lines = old_lines[:]
+        new_lines[3] = "CHANGED"
+        old = "\n".join(old_lines)
+        new = "\n".join(new_lines)
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        result = differ.diff(old, new, context_lines=3)
+        hunk = result.hunks[0]
+        context_after = 0
+        found_change = False
+        for op in hunk.operations:
+            if not op.is_equal:
+                found_change = True
+            elif found_change:
+                context_after += len(op.tokens)
+        assert context_after == 3
+
+    def test_partial_context_hunk_header_correct(self):
+        old_lines = [f"L{i}" for i in range(1, 21)]
+        new_lines = old_lines[:]
+        new_lines[9] = "CHANGED"
+        old = "\n".join(old_lines)
+        new = "\n".join(new_lines)
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        diff_str = differ.unified_diff(old, new, context_lines=2)
+        lines = diff_str.split("\n")
+        hunk_line = [l for l in lines if l.startswith("@@")][0]
+        assert "@@ -" in hunk_line
+        parts = hunk_line.split()
+        old_part = parts[1]
+        new_part = parts[2]
+        old_start = int(old_part.split(",")[0].replace("-", ""))
+        new_start = int(new_part.split(",")[0].replace("+", ""))
+        assert old_start > 1
+        assert new_start > 1
+
+
+class TestUnifiedDiffConsistentIndexing:
+    def test_hunk_header_1based_for_all_granularities(self):
+        from solocoder_py.diff import TextDiffer
+        from solocoder_py.diff.unified_diff import format_hunk_header
+        differ = TextDiffer()
+
+        for gran in [DiffGranularity.LINE, DiffGranularity.WORD, DiffGranularity.CHAR]:
+            result = differ.diff("abc", "aXc", gran)
+            if result.hunks:
+                header = format_hunk_header(result.hunks[0])
+                parts = header.split()
+                old_start_str = parts[1].split(",")[0]
+                new_start_str = parts[2].split(",")[0]
+                old_start = int(old_start_str.replace("-", ""))
+                new_start = int(new_start_str.replace("+", ""))
+                assert old_start >= 1
+                assert new_start >= 1

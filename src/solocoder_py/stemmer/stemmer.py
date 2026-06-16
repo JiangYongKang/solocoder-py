@@ -105,7 +105,12 @@ class Stemmer:
         exceptions: dict[str, str] | None = None,
     ) -> None:
         self.config = config or StemmerConfig()
-        self._porter = PorterStemmer(self.config)
+        porter_config = StemmerConfig(
+            level=self.config.level,
+            min_stem_length=self.config.min_stem_length,
+            preserve_case=False,
+        )
+        self._porter = PorterStemmer(porter_config)
         self._exceptions: dict[str, str] = {}
         if exceptions is not None:
             for word, stem in exceptions.items():
@@ -137,18 +142,19 @@ class Stemmer:
         case_style = _detect_case(word) if self.config.preserve_case else 'lower'
         word_lower = word.lower()
 
+        result = None
         if word_lower in self._exceptions:
-            result = self._exceptions[word_lower]
-        else:
+            exception_result = self._exceptions[word_lower]
+            if len(exception_result) >= self.config.min_stem_length:
+                result = exception_result
+
+        if result is None:
             if len(word_lower) <= self.config.min_stem_length:
                 result = word_lower
             else:
                 result = self._porter.stem(word_lower)
-                if self.config.preserve_case:
-                    result = result.lower()
-
-        if len(result) < self.config.min_stem_length:
-            result = word_lower if len(word_lower) >= self.config.min_stem_length else result
+                if len(result) < self.config.min_stem_length:
+                    result = word_lower
 
         if self.config.preserve_case:
             result = _apply_case(result, case_style)

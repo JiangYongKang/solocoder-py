@@ -6,12 +6,20 @@ from .exceptions import InvalidContextLinesError
 from .models import DiffHunk, DiffOperation, DiffOperationType, DiffResult, DiffToken
 
 
-def _count_equal_tokens(ops: List[DiffOperation]) -> int:
-    count = 0
-    for op in ops:
-        if op.is_equal:
-            count += len(op.tokens)
-    return count
+def _slice_equal_op(
+    op: DiffOperation,
+    start_offset: int = 0,
+    end_offset: int = 0,
+) -> DiffOperation:
+    old_tokens = op.tokens[start_offset:len(op.tokens) - end_offset] if end_offset > 0 else op.tokens[start_offset:]
+    return DiffOperation(
+        op_type=DiffOperationType.EQUAL,
+        old_start=op.old_start + start_offset,
+        old_end=op.old_start + start_offset + len(old_tokens),
+        new_start=op.new_start + start_offset,
+        new_end=op.new_start + start_offset + len(old_tokens),
+        tokens=old_tokens,
+    )
 
 
 def build_hunks(
@@ -24,65 +32,103 @@ def build_hunks(
     if not operations:
         return []
 
-    change_regions: List[Tuple[int, int]] = []
+    change_indices: List[int] = []
     for i, op in enumerate(operations):
         if not op.is_equal:
-            change_regions.append((i, i))
+            change_indices.append(i)
 
-    if not change_regions:
+    if not change_indices:
         return []
 
     merged_regions: List[Tuple[int, int]] = []
-    for start, end in change_regions:
+    for idx in change_indices:
         if not merged_regions:
-            merged_regions.append((start, end))
+            merged_regions.append((idx, idx))
             continue
 
         last_start, last_end = merged_regions[-1]
-        gap_ops = operations[last_end + 1:start]
-        equal_token_count = _count_equal_tokens(gap_ops)
-        if equal_token_count <= 2 * context_lines:
-            merged_regions[-1] = (last_start, end)
+
+        equal_between = 0
+        for op in operations[last_end + 1:idx]:
+            if op.is_equal:
+                equal_between += len(op.tokens)
+
+        if equal_between <= 2 * context_lines:
+            merged_regions[-1] = (last_start, idx)
         else:
-            merged_regions.append((start, end))
+            merged_regions.append((idx, idx))
 
     hunks: List[DiffHunk] = []
-    for region_start, region_end in merged_regions:
-        context_before = 0
-        i = region_start - 1
-        while i >= 0 and context_before < context_lines:
-            if operations[i].is_equal:
-                tokens_count = len(operations[i].tokens)
-                if context_before + tokens_count <= context_lines:
-                    context_before += tokens_count
-                    region_start = i
+
+    for region_start_op_idx, region_end_op_idx in merged_regions:
+        context_before_needed = context_lines
+        start_op_idx = region_start_op_idx
+        prefix_skip = 0
+
+        i = region_start_op_idx - 1
+        while i >= 0 and context_before_needed > 0:
+            op = operations[i]
+            if op.is_equal:
+                n = len(op.tokens)
+                if n <= context_before_needed:
+                    context_before_needed -= n
+                    start_op_idx = i
                 else:
-                    break
+                    prefix_skip = n - context_before_needed
+                    start_op_idx = i
+                    context_before_needed = 0
+                i -= 1
             else:
                 break
-            i -= 1
 
-        context_after = 0
-        j = region_end + 1
-        while j < len(operations) and context_after < context_lines:
-            if operations[j].is_equal:
-                tokens_count = len(operations[j].tokens)
-                if context_after + tokens_count <= context_lines:
-                    context_after += tokens_count
-                    region_end = j
+        context_after_needed = context_lines
+        end_op_idx = region_end_op_idx
+        suffix_take = 0
+
+        j = region_end_op_idx + 1
+        while j < len(operations) and context_after_needed > 0:
+            op = operations[j]
+            if op.is_equal:
+                n = len(op.tokens)
+                if n <= context_after_needed:
+                    context_after_needed -= n
+                    end_op_idx = j
                 else:
-                    break
+                    suffix_take = context_after_needed
+                    end_op_idx = j
+                    context_after_needed = 0
+                j += 1
             else:
                 break
-            j += 1
 
-        hunk_ops = operations[region_start:region_end + 1]
+        hunk_ops: List[DiffOperation] = []
+        for k in range(start_op_idx, end_op_idx + 1):
+            op = operations[k]
+            op_copy = DiffOperation(
+                op_type=op.op_type,
+                old_start=op.old_start,
+                old_end=op.old_end,
+                new_start=op.new_start,
+                new_end=op.new_end,
+                tokens=list(op.tokens),
+            )
 
-        old_start = 0
-        new_start = 0
-        if hunk_ops:
-            old_start = hunk_ops[0].old_start
-            new_start = hunk_ops[0].new_start
+            is_first = (k == start_op_idx)
+            is_last = (k == end_op_idx)
+
+            if is_first and is_last and op.is_equal and prefix_skip > 0 and suffix_take > 0:
+                end_skip = len(op.tokens) - (prefix_skip + suffix_take)
+                op_copy = _slice_equal_op(op, prefix_skip, end_skip)
+            elif is_first and op.is_equal and prefix_skip > 0:
+                op_copy = _slice_equal_op(op, prefix_skip, 0)
+            elif is_last and op.is_equal and suffix_take > 0:
+                end_skip = len(op.tokens) - suffix_take
+                op_copy = _slice_equal_op(op, 0, end_skip)
+
+            hunk_ops.append(op_copy)
+
+        old_start = hunk_ops[0].old_start
+        new_start = hunk_ops[0].new_start
 
         old_count = 0
         new_count = 0
@@ -103,13 +149,9 @@ def build_hunks(
     return hunks
 
 
-def format_hunk_header(hunk: DiffHunk, granularity: str = "line") -> str:
+def format_hunk_header(hunk: DiffHunk) -> str:
     old_display_start = hunk.old_start + 1
     new_display_start = hunk.new_start + 1
-
-    if granularity != "line":
-        old_display_start = hunk.old_start
-        new_display_start = hunk.new_start
 
     if hunk.old_count == 1:
         old_part = f"-{old_display_start}"
@@ -137,7 +179,7 @@ def format_unified_diff(
         lines.append(f"+++ {new_filename}")
 
     for hunk in diff_result.hunks:
-        lines.append(format_hunk_header(hunk, diff_result.granularity.value))
+        lines.append(format_hunk_header(hunk))
 
         for op in hunk.operations:
             if op.is_equal:

@@ -15,10 +15,8 @@ from .conftest import build_disconnected_graph, build_simple_graph
 
 
 class TestUnreachableNodes:
-    def test_unreachable_node_is_not_reachable(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_disconnected_graph()
+    def test_unreachable_node_is_not_reachable(self) -> None:
+        dijkstra = Dijkstra(graph=build_disconnected_graph())
         result = dijkstra.shortest_paths("A")
 
         assert result.is_reachable("A")
@@ -28,19 +26,15 @@ class TestUnreachableNodes:
         assert not result.is_reachable("E")
         assert not result.is_reachable("F")
 
-    def test_unreachable_node_distance_is_infinity(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_disconnected_graph()
+    def test_unreachable_node_distance_is_infinity(self) -> None:
+        dijkstra = Dijkstra(graph=build_disconnected_graph())
         result = dijkstra.shortest_paths("A")
 
         assert result.get_distance("D") == float("inf")
         assert result.get_distance("E") == float("inf")
 
-    def test_unreachable_node_get_path_raises(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_disconnected_graph()
+    def test_unreachable_node_get_path_raises(self) -> None:
+        dijkstra = Dijkstra(graph=build_disconnected_graph())
         result = dijkstra.shortest_paths("A")
 
         with pytest.raises(UnreachableNodeError) as exc:
@@ -49,10 +43,8 @@ class TestUnreachableNodes:
         assert "D" in str(exc.value)
         assert "A" in str(exc.value)
 
-    def test_shortest_path_method_raises_for_unreachable(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_disconnected_graph()
+    def test_shortest_path_method_raises_for_unreachable(self) -> None:
+        dijkstra = Dijkstra(graph=build_disconnected_graph())
 
         with pytest.raises(UnreachableNodeError) as exc:
             dijkstra.shortest_path("A", "D")
@@ -82,38 +74,30 @@ class TestNegativeWeightEdges:
 
 
 class TestNodeNotFoundErrors:
-    def test_shortest_paths_source_not_found(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_simple_graph()
+    def test_shortest_paths_source_not_found(self) -> None:
+        dijkstra = Dijkstra(graph=build_simple_graph())
 
         with pytest.raises(NodeNotFoundError) as exc:
             dijkstra.shortest_paths("Z")
         assert "Z" in str(exc.value)
         assert "source" in str(exc.value).lower()
 
-    def test_shortest_paths_target_not_found(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_simple_graph()
+    def test_shortest_paths_target_not_found(self) -> None:
+        dijkstra = Dijkstra(graph=build_simple_graph())
 
         with pytest.raises(NodeNotFoundError) as exc:
             dijkstra.shortest_paths("A", target="Z")
         assert "Z" in str(exc.value)
         assert "target" in str(exc.value).lower()
 
-    def test_shortest_path_source_not_found(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_simple_graph()
+    def test_shortest_path_source_not_found(self) -> None:
+        dijkstra = Dijkstra(graph=build_simple_graph())
 
         with pytest.raises(NodeNotFoundError):
             dijkstra.shortest_path("Z", "A")
 
-    def test_shortest_path_target_not_found(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_simple_graph()
+    def test_shortest_path_target_not_found(self) -> None:
+        dijkstra = Dijkstra(graph=build_simple_graph())
 
         with pytest.raises(NodeNotFoundError):
             dijkstra.shortest_path("A", "Z")
@@ -131,28 +115,22 @@ class TestNodeNotFoundErrors:
         with pytest.raises(NodeNotFoundError):
             graph.remove_node("X")
 
-    def test_result_get_distance_node_not_in_result(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_simple_graph()
+    def test_result_get_distance_node_not_in_result(self) -> None:
+        dijkstra = Dijkstra(graph=build_simple_graph())
         result = dijkstra.shortest_paths("A")
 
         with pytest.raises(NodeNotFoundError):
             result.get_distance("Z")
 
-    def test_result_get_path_node_not_in_result(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_simple_graph()
+    def test_result_get_path_node_not_in_result(self) -> None:
+        dijkstra = Dijkstra(graph=build_simple_graph())
         result = dijkstra.shortest_paths("A")
 
         with pytest.raises(NodeNotFoundError):
             result.get_path("Z")
 
-    def test_result_is_reachable_node_not_in_result(
-        self, dijkstra: Dijkstra
-    ) -> None:
-        dijkstra._graph = build_simple_graph()
+    def test_result_is_reachable_node_not_in_result(self) -> None:
+        dijkstra = Dijkstra(graph=build_simple_graph())
         result = dijkstra.shortest_paths("A")
 
         with pytest.raises(NodeNotFoundError):

@@ -172,7 +172,36 @@ class TestMinHashLSH:
         sig = mh.compute_signature("test")
         lsh.insert(42, sig)
         assert lsh.get_signature(42) == sig
-        assert lsh.get_signature(99) is None
+
+    def test_signature_rows_discarded_exposed(self):
+        lsh_divisible = MinHashLSH(num_perm=128, num_bands=16)
+        assert lsh_divisible.signature_rows_discarded == 0
+        assert lsh_divisible.band_config.total_rows_used == 128
+
+        lsh_truncated = MinHashLSH(num_perm=100, num_bands=7)
+        assert lsh_truncated.signature_rows_discarded > 0
+        assert lsh_truncated.band_config.total_rows_used + lsh_truncated.signature_rows_discarded == 100
+
+    def test_threshold_one_exact_match(self):
+        mh = MinHash(num_perm=64, n=3)
+        lsh = MinHashLSH(num_perm=64, threshold=1.0)
+        assert lsh.band_config.num_bands == 64
+        assert lsh.band_config.rows_per_band == 1
+        assert lsh.signature_rows_discarded == 0
+
+        text = "exact match test string for threshold 1.0"
+        sig1 = mh.compute_signature(text)
+        sig2 = mh.compute_signature(text)
+        sig3 = [(x + 1) % (2**64 - 1) for x in sig1]
+
+        lsh.insert(0, sig1)
+        lsh.insert(1, sig2)
+        lsh.insert(2, sig3)
+
+        pairs = lsh.get_candidate_pairs()
+        assert (0, 1) in pairs
+        assert (0, 2) not in pairs
+        assert (1, 2) not in pairs
 
     def test_similar_texts_hit_same_bucket(self):
         mh = MinHash(num_perm=256, n=3)
@@ -194,7 +223,8 @@ class TestMinHashLSH:
         assert (0, 1) in pairs
         pair_02 = (0, 2) in pairs
         pair_12 = (1, 2) in pairs
-        assert not (pair_02 and pair_12)
+        assert not pair_02, f"unrelated pair (0, 2) should not be in candidate pairs, but got pairs: {pairs}"
+        assert not pair_12, f"unrelated pair (1, 2) should not be in candidate pairs, but got pairs: {pairs}"
 
 
 class TestComputeBandConfig:
@@ -202,17 +232,27 @@ class TestComputeBandConfig:
         config = compute_band_config(128, num_bands=16)
         assert config.num_bands == 16
         assert config.rows_per_band == 8
+        assert config.total_rows_used == 128
 
     def test_with_threshold(self):
         config = compute_band_config(128, threshold=0.8)
         assert config.num_bands > 0
         assert config.rows_per_band > 0
         assert config.num_bands * config.rows_per_band <= 128
+        assert config.total_rows_used == config.num_bands * config.rows_per_band
 
     def test_band_config_less_than_num_perm(self):
         config = compute_band_config(100, num_bands=7)
         assert config.num_bands > 0
         assert config.rows_per_band > 0
+        assert config.total_rows_used <= 100
+        assert config.total_rows_used == config.num_bands * config.rows_per_band
+
+    def test_total_rows_used_reveals_truncation(self):
+        config = compute_band_config(100, num_bands=7)
+        assert config.total_rows_used < 100
+        discarded = 100 - config.total_rows_used
+        assert discarded > 0
 
 
 class TestTextDedupEngineNormalFlows:

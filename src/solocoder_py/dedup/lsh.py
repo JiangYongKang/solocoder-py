@@ -10,6 +10,7 @@ from .exceptions import InvalidConfigError
 class LSHBandConfig:
     num_bands: int
     rows_per_band: int
+    total_rows_used: int
 
 
 def compute_band_config(num_perm: int, num_bands: int | None = None, threshold: float | None = None) -> LSHBandConfig:
@@ -20,11 +21,17 @@ def compute_band_config(num_perm: int, num_bands: int | None = None, threshold: 
         if rows_per_band == 0:
             rows_per_band = 1
         actual_bands = num_perm // rows_per_band
-        return LSHBandConfig(num_bands=actual_bands, rows_per_band=rows_per_band)
+        total_rows_used = actual_bands * rows_per_band
+        return LSHBandConfig(num_bands=actual_bands, rows_per_band=rows_per_band, total_rows_used=total_rows_used)
 
     if threshold is not None:
-        if threshold <= 0 or threshold >= 1:
-            raise InvalidConfigError("threshold must be in (0, 1)")
+        if threshold <= 0 or threshold > 1:
+            raise InvalidConfigError("threshold must be in (0, 1]")
+        if threshold == 1.0:
+            actual_bands = num_perm
+            rows_per_band = 1
+            total_rows_used = actual_bands * rows_per_band
+            return LSHBandConfig(num_bands=actual_bands, rows_per_band=rows_per_band, total_rows_used=total_rows_used)
         best_bands = 1
         best_error = float("inf")
         for b in range(1, num_perm + 1):
@@ -38,7 +45,8 @@ def compute_band_config(num_perm: int, num_bands: int | None = None, threshold: 
                 best_bands = b
         rows_per_band = num_perm // best_bands
         actual_bands = num_perm // rows_per_band
-        return LSHBandConfig(num_bands=actual_bands, rows_per_band=rows_per_band)
+        total_rows_used = actual_bands * rows_per_band
+        return LSHBandConfig(num_bands=actual_bands, rows_per_band=rows_per_band, total_rows_used=total_rows_used)
 
     raise InvalidConfigError("either num_bands or threshold must be provided")
 
@@ -64,8 +72,13 @@ class MinHashLSH:
         if num_bands is None and threshold is None:
             raise InvalidConfigError("either num_bands or threshold must be provided")
 
+        if threshold is not None:
+            if threshold <= 0 or threshold > 1:
+                raise InvalidConfigError("threshold must be in (0, 1]")
+
         self.num_perm = num_perm
         self.band_config = compute_band_config(num_perm, num_bands, threshold)
+        self.signature_rows_discarded = num_perm - self.band_config.total_rows_used
 
         self._buckets: list[dict[str, list[int]]] = [
             {} for _ in range(self.band_config.num_bands)

@@ -100,3 +100,35 @@ class TestDiffResultGetOperationsList:
             assert "new_end" in op
             assert "content" in op
             assert isinstance(op["content"], list)
+
+
+class TestCompositeGranularityErrors:
+    def test_composite_with_word_as_coarse_raises(self):
+        from solocoder_py.diff import DiffGranularity
+        differ = TextDiffer()
+        with pytest.raises(InvalidGranularityError):
+            differ.diff("a", "b", (DiffGranularity.WORD, DiffGranularity.LINE))
+
+    def test_composite_with_line_as_fine_raises(self):
+        from solocoder_py.diff import DiffGranularity
+        differ = TextDiffer()
+        with pytest.raises(InvalidGranularityError):
+            differ.diff("a", "b", (DiffGranularity.LINE, DiffGranularity.LINE))
+
+    def test_composite_invalid_length_tuple_raises(self):
+        from solocoder_py.diff import DiffGranularity
+        differ = TextDiffer()
+        with pytest.raises(InvalidGranularityError):
+            differ.diff("a", "b", (DiffGranularity.LINE,))
+
+    def test_composite_operations_list_invalid_raises(self):
+        from solocoder_py.diff import DiffGranularity
+        differ = TextDiffer()
+        with pytest.raises(InvalidGranularityError):
+            differ.operations_list("a", "b", ("line", "invalid"))
+
+    def test_composite_unified_diff_invalid_raises(self):
+        from solocoder_py.diff import DiffGranularity
+        differ = TextDiffer()
+        with pytest.raises(InvalidGranularityError):
+            differ.unified_diff("a", "b", (DiffGranularity.CHAR, DiffGranularity.WORD))

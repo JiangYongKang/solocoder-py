@@ -19,7 +19,7 @@
 - `summarize(text, num_sentences=None) -> list[str]`：生成文本摘要，返回选中的句子列表（按原文顺序）。
 - `summarize_with_scores(text, num_sentences=None) -> list[SentenceScore]`：生成摘要并返回每个句子的详细打分信息。
 
-### `Summarizer`
+### `summarize_text`
 便捷函数，无需创建实例直接调用。
 
 ## 句子打分策略
@@ -35,15 +35,15 @@
 ### 2. 位置加权
 位置权重根据句子在原文中的位置计算，衰减方式可配置：
 
-- **`PositionDecayType.LINEAR**（默认）：线性衰减
+- **`PositionDecayType.LINEAR`**（默认）：线性衰减
   - 句子越靠近中间，权重越低；两端权重最高。
-  - `position_weight_factor` 控制最低权重（默认 1.0 表示无衰减）。
+  - `position_weight_factor` 控制中间位置的最低权重（默认 0.5）。
 
-- **`PositionDecayType.EXPONENTIAL**：指数衰减
+- **`PositionDecayType.EXPONENTIAL`**：指数衰减
   - 使用指数函数进行衰减，中间部分衰减更快。
   - `exponential_decay_rate` 控制衰减速率。
 
-- **`PositionDecayType.NONE**：不进行位置加权。
+- **`PositionDecayType.NONE`**：不进行位置加权。
 
 最终句子得分 = 词频得分 × 位置权重。
 
@@ -53,8 +53,8 @@
 
 1. 对剩余候选句子计算与已选句子集合的相似度。
 2. 相似度计算方式（可配置）：
-   - **`SimilarityMetric.JACCARD**（默认）：Jaccard 相似度 = |A ∩ B| / |A ∪ B|
-   - **`SimilarityMetric.SHARED_RATIO**：共享词比例 = |A ∩ B| / min(|A|, |B|)
+   - **`SimilarityMetric.JACCARD`**（默认）：Jaccard 相似度 = |A ∩ B| / |A ∪ B|
+   - **`SimilarityMetric.SHARED_RATIO`**：共享词比例 = |A ∩ B| / min(|A|, |B|)
 3. 如果相似度超过 `similarity_threshold`（默认 0.5），则对该候选句得分乘以 `(1 - redundancy_penalty)` 进行惩罚。
 4. 重新排序后继续选取下一句，直到选够指定数量。
 

@@ -152,7 +152,7 @@ def _step2(word: str) -> str:
             stem = word[:-len(suffix)]
             if _measure(stem) > 0:
                 return stem + replacement
-            return word
+            continue
     return word
 
 
@@ -166,7 +166,7 @@ def _step3(word: str) -> str:
             stem = word[:-len(suffix)]
             if _measure(stem) > 0:
                 return stem + replacement
-            return word
+            continue
     return word
 
 
@@ -184,7 +184,7 @@ def _step4(word: str) -> str:
                     continue
             if _measure(stem) > 1:
                 return stem
-            return word
+            continue
     return word
 
 
