@@ -225,6 +225,65 @@ class TestCollisionPair:
         s.add(CollisionPair(collider_a=c2, collider_b=c1))
         assert len(s) == 1
 
+    def test_was_swapped_false_when_already_ordered(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        pair = CollisionPair(collider_a=c1, collider_b=c2)
+        assert pair.was_swapped is False
+        assert pair.collider_a is c1
+        assert pair.collider_b is c2
+
+    def test_was_swapped_true_when_reordered(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        pair = CollisionPair(collider_a=c2, collider_b=c1)
+        assert pair.was_swapped is True
+        assert pair.collider_a is c1
+        assert pair.collider_b is c2
+
+    def test_from_unordered_same_as_default(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        p_default = CollisionPair(collider_a=c2, collider_b=c1)
+        p_factory = CollisionPair.from_unordered(c2, c1)
+
+        assert p_default == p_factory
+        assert p_default.was_swapped == p_factory.was_swapped
+        assert p_default.collider_a.id == p_factory.collider_a.id
+
+    def test_from_ordered_preserves_order(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        pair = CollisionPair.from_ordered(c2, c1)
+        assert pair.was_swapped is False
+        assert pair.collider_a is c2
+        assert pair.collider_b is c1
+        assert pair.collider_a.id == "b"
+        assert pair.collider_b.id == "a"
+
+    def test_from_ordered_not_equal_to_normalized(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        p_normalized = CollisionPair(collider_a=c2, collider_b=c1)
+        p_ordered = CollisionPair.from_ordered(c2, c1)
+
+        assert p_normalized != p_ordered
+        assert hash(p_normalized) != hash(p_ordered)
+
+    def test_from_ordered_already_sorted_stays_same(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        pair = CollisionPair.from_ordered(c1, c2)
+        assert pair.was_swapped is False
+        assert pair.collider_a is c1
+        assert pair.collider_b is c2
+
 
 class TestGlobalCallbacks:
     def test_global_callback_triggered(self):

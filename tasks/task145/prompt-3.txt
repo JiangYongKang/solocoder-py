@@ -1,0 +1,7 @@
+你在上一轮重构内容审核管线时遗留了两个问题，需要修复：
+
+1. engine.py 的 get_rejection_comments 方法在从 ReviewRecord 构造 RejectionComment 时，直接将 ReviewRecord.comment（类型 Optional[str]）赋值给 RejectionComment.comment（类型 str），存在类型不匹配。虽然当前 reject 方法保证驳回记录一定有批注，但如果未来引入其他创建无批注 REJECT 记录的路径，就会传入 None 破坏类型约定。需要添加类型守卫，确保两者类型安全对齐。
+
+2. 测试类合并时你直接删除了 TestReviewOperationOnNonReviewState 类并将其中的独有测试并入 TestInvalidStateTransitions，但丢失了"审核操作在非审核中状态下被调用"这个语义维度的组织线索。当前仅完成了消除重复测试用例的工作，两个类的职责边界并未明确划分。需要重新审视两个测试类的职责，按语义维度划分边界或给出清晰的合并理由。
+
+3. 修复以上问题后重新运行 poetry run pytest tests/content_review/ -q，确保所有测试仍然通过。

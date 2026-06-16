@@ -1,0 +1,7 @@
+你在上一轮修复 Markdown 转 HTML 转换器时遗留了两个问题，需要修复：
+
+1. converter.py 的 _parse_line_breaks 方法在段落解析被重写后变成了死代码。_parse_inline 的调用链末尾执行了 text.replace 做硬换行替换，但 _parse_paragraph 重构后段落内容已不包含换行符，这个替换永远不会匹配到任何内容。这段死代码会让后续维护者误以为这里仍在处理硬换行，应该清理掉或标记为废弃。
+
+2. sanitizer 的安全清洗逻辑会将段落解析产出的 `<br />` 标签中的空格和斜杠属性移除变为 `<br>`，但所有硬换行相关测试都使用了 converter_no_sanitize 固件仅在禁用清洗的路径下验证。在默认启用安全清洗的路径上，br 标签的实际输出与禁清洗路径不一致，这个交互细节未被测试覆盖。需要为硬换行功能补充带默认清洗路径的测试用例，或调整 sanitizer 使其不破坏自闭合标签的完整性。
+
+3. 修复以上问题后重新运行 poetry run pytest tests/markdown_html/ -q，确保所有测试仍然通过。

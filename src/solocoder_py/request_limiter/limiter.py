@@ -63,14 +63,20 @@ class _ChunkedByteStream:
             offset = end
 
     def _from_sequence(self, seq: list | tuple) -> Generator[bytes, None, None]:
-        buffer = io.BytesIO()
+        carry = b""
         for item in seq:
             if isinstance(item, (bytes, bytearray)):
-                buffer.write(bytes(item))
+                carry += bytes(item)
             else:
-                buffer.write(str(item).encode("utf-8"))
-        buffer.seek(0)
-        yield from self._from_bytes(buffer.getvalue())
+                carry += str(item).encode("utf-8")
+            while len(carry) >= self._chunk_size:
+                chunk = carry[: self._chunk_size]
+                carry = carry[self._chunk_size :]
+                self._bytes_read += len(chunk)
+                yield chunk
+        if carry:
+            self._bytes_read += len(carry)
+            yield carry
 
 
 class BodySizeLimiter:
@@ -107,12 +113,12 @@ class BodySizeLimiter:
             },
         )
 
-    def _build_internal_error_response(self, exc: Exception) -> Response:
+    def _build_internal_error_response(self) -> Response:
         return Response(
             status_code=500,
             body={
                 "error": "Internal Server Error",
-                "message": str(exc),
+                "message": "An internal error occurred while processing the request",
             },
         )
 
@@ -279,4 +285,4 @@ class BodySizeLimiter:
                     body=None,
                     error_message=f"Unexpected error: {exc}",
                 )
-            return (self._build_internal_error_response(exc), result)
+            return (self._build_internal_error_response(), result)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from solocoder_py.ecs import (
+    ArchetypeManager,
     CircularDependencyError,
     ComponentAlreadyExistsError,
     ComponentNotFoundError,
@@ -198,6 +199,71 @@ class TestComponentTypeQuery:
         results = list(world.query_entities([Position, Health]))
         assert len(results) == 0
 
+    def test_query_uses_sparse_set_intersection(self):
+        world = World()
+        e1 = world.create_entity()
+        e2 = world.create_entity()
+        e3 = world.create_entity()
+        e4 = world.create_entity()
+
+        world.add_component(e1, Position())
+        world.add_component(e1, Velocity())
+        world.add_component(e2, Position())
+        world.add_component(e3, Position())
+        world.add_component(e3, Velocity())
+        world.add_component(e3, Health())
+        world.add_component(e4, Velocity())
+        world.add_component(e4, Health())
+
+        results = list(world.query_entities([Position, Velocity]))
+        assert len(results) == 2
+        entity_ids = [e.id for e, _ in results]
+        assert e1.id in entity_ids
+        assert e3.id in entity_ids
+
+    def test_query_entities_and_archetype_return_same_results(self):
+        world = World()
+        for i in range(10):
+            e = world.create_entity()
+            world.add_component(e, Position(x=float(i), y=float(i)))
+            if i % 2 == 0:
+                world.add_component(e, Velocity(x=0.5, y=0.5))
+            if i % 3 == 0:
+                world.add_component(e, Health(current=100, max=100))
+
+        sparse_results = list(world.query_entities([Position, Velocity]))
+        archetype_results = list(world.query_entities_archetype([Position, Velocity]))
+
+        assert len(sparse_results) == len(archetype_results)
+
+        sparse_ids = sorted(e.id for e, _ in sparse_results)
+        archetype_ids = sorted(e.id for e, _ in archetype_results)
+        assert sparse_ids == archetype_ids
+
+    def test_single_data_source_no_duplicate_storage(self):
+        world = World()
+        e = world.create_entity()
+        pos = Position(x=1.0, y=2.0)
+        world.add_component(e, pos)
+
+        assert not hasattr(world, '_entity_components')
+        archetype = world._archetypes.get_entity_archetype(e)
+        assert archetype is not None
+        stored_pos = archetype.get_component(e, Position)
+        assert stored_pos is pos
+
+    def test_sparse_set_only_stores_indices_not_data(self):
+        world = World()
+        e = world.create_entity()
+        world.add_component(e, Position(x=1.0, y=2.0))
+
+        ss = world._components[Position]
+        assert not hasattr(ss, '_components')
+        assert hasattr(ss, '_sparse')
+        assert hasattr(ss, '_dense')
+        assert len(ss._dense) == 1
+        assert len(ss._sparse) > 0
+
 
 # ============================================================
 # SparseSet Tests
@@ -271,6 +337,75 @@ class TestSparseSet:
         assert len(ids) == 4
         assert set(ids) == {0, 1, 3, 4}
         assert len(ss) == 4
+
+    def test_get_component_from_sparse_set(self):
+        world = World()
+        e = world.create_entity()
+        pos = Position(x=1.0, y=2.0)
+        world.add_component(e, pos)
+
+        ss = world._components[Position]
+        retrieved = ss.get(e)
+        assert retrieved is not None
+        assert retrieved.x == 1.0
+        assert retrieved.y == 2.0
+
+    def test_get_nonexistent_returns_none(self):
+        archetype_manager = ArchetypeManager()
+        ss = SparseSet(Position, archetype_manager)
+        entity = EntityId(999)
+        assert ss.get(entity) is None
+
+    def test_getitem_operator(self):
+        world = World()
+        e = world.create_entity()
+        pos = Position(x=3.0, y=4.0)
+        world.add_component(e, pos)
+
+        ss = world._components[Position]
+        retrieved = ss[e]
+        assert retrieved.x == 3.0
+        assert retrieved.y == 4.0
+
+    def test_getitem_nonexistent_raises(self):
+        archetype_manager = ArchetypeManager()
+        ss = SparseSet(Position, archetype_manager)
+        entity = EntityId(999)
+        with pytest.raises(KeyError):
+            ss[entity]
+
+    def test_iter_components(self):
+        world = World()
+        positions = [Position(x=float(i), y=float(i)) for i in range(3)]
+        for i, pos in enumerate(positions):
+            e = world.create_entity()
+            world.add_component(e, pos)
+
+        ss = world._components[Position]
+        components = list(ss.iter_components())
+        assert len(components) == 3
+        x_values = sorted(c.x for c in components)
+        assert x_values == [0.0, 1.0, 2.0]
+
+    def test_iter_entities_and_components(self):
+        world = World()
+        for i in range(3):
+            e = world.create_entity()
+            world.add_component(e, Position(x=float(i), y=float(i)))
+
+        ss = world._components[Position]
+        results = list(ss.iter())
+        assert len(results) == 3
+        for entity, pos in results:
+            assert isinstance(entity, EntityId)
+            assert isinstance(pos, Position)
+
+    def test_contains_operator(self):
+        ss = SparseSet(Position)
+        entity = EntityId(0)
+        ss.insert(entity)
+        assert entity in ss
+        assert EntityId(1) not in ss
 
 
 # ============================================================

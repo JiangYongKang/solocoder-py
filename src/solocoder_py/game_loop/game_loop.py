@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Generic, TypeVar, Optional, Callable
 import time
 
-from .exceptions import GameLoopNotRunningError, GameStateNotInterpolableError
+from .exceptions import GameLoopNotRunningError
 from .models import GameState, InterpolatedState, GameLoopConfig, GameLoopStats
 
 T = TypeVar("T", bound="GameState")
@@ -37,7 +37,7 @@ class FixedTimeStepGameLoop(Generic[T]):
             test_curr.update(self._config.time_step)
             test_prev.interpolate(test_curr, 0.5)
             return True
-        except GameStateNotInterpolableError:
+        except Exception:
             return False
 
     @property

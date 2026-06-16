@@ -1,0 +1,9 @@
+你在上一轮重构 ECS 实体组件系统时引入了新的问题，需要修复：
+
+1. 提示词上一轮要求消除 SparseSet 和 Archetype 两套独立结构之间的数据重复，让一处作为唯一数据持有者。但你的实现不仅没有达成这个目标，反而在 world.py 中新增了 _entity_components 字典存储组件数据，导致 add_component 等方法将同一份组件对象同时写入 World._entity_components 和 Archetype._columns 两个容器，形成了新的双重存储。需要让 Archetype._columns 成为唯一的数据持有者，World 需要组件数据时从 Archetype 读取，移除 _entity_components 这个多余的中间字典。
+
+2. world.py 中 query_entities 和 query_entities_archetype 两个方法当前实现完全一致，都委托给 ArchetypeManager.find_matching 查找原型后迭代。query_entities 原本应利用 SparseSet 做 O(1) 按组件快速查找实体，query_entities_archetype 利用 Archetype 做列式批量迭代，两者应有不同的实现路径。当前合并为同一路径后丧失了各自的性能优势，两个方法变为语义重复的冗余 API，需要在保留各自设计意图的前提下恢复差异化实现。
+
+3. sparse_set.py 中原有的 get、iter_components 等数据访问方法被全部移除，只保留了 entity_id 索引。提示词的要求是"一处仅维护索引而不重复存储数据"，意思是删除重复存储的组件数据但保留按组件检索实体的查询能力。目前 SparseSet 失去了快速查询某实体是否拥有某组件的能力，需要恢复这些查询接口，使其通过实体 ID 索引提供 O(1) 的成员判断而不重复存储组件数据。
+
+4. 修复以上问题后，如果因 API 变更导致现有单元测试不再适用，需要更新测试使其仍能有效验证上述功能。最后运行 poetry run pytest tests/ecs/ -q，确保所有测试通过。

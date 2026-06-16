@@ -406,7 +406,7 @@ class CursorPaginationEngine:
         total_estimated = False
         if include_total:
             total = self._compute_total(n, estimate_total)
-            total_estimated = estimate_total or self._config.estimate_total_fn is not None
+            total_estimated = estimate_total and self._config.estimate_total_fn is not None
 
         return PageResult(
             data=result_data,
@@ -422,8 +422,6 @@ class CursorPaginationEngine:
     def _compute_total(self, exact_n: int, estimate_total: bool) -> int:
         fn: Optional[Callable[[], int]] = self._config.estimate_total_fn
         if estimate_total and fn is not None:
-            return fn()
-        if fn is not None:
             return fn()
         return exact_n
 

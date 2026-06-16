@@ -106,6 +106,30 @@ class TestParagraphs:
         assert "<strong>Bold line</strong>" in result.html
         assert "<em>italic line</em>" in result.html
 
+    def test_hard_line_break_with_sanitizer_enabled(self, converter: MarkdownConverter):
+        md = "Line one  \nLine two"
+        result = converter.convert(md)
+        assert "<br />" in result.html
+        assert "Line one" in result.html
+        assert "Line two" in result.html
+
+    def test_hard_line_break_multiple_with_sanitizer(self, converter: MarkdownConverter):
+        md = "Line 1  \nLine 2  \nLine 3"
+        result = converter.convert(md)
+        assert result.html.count("<br />") == 2
+
+    def test_hard_line_break_with_inline_and_sanitizer(self, converter: MarkdownConverter):
+        md = "**Bold line**  \n*italic line*"
+        result = converter.convert(md)
+        assert "<br />" in result.html
+        assert "<strong>Bold line</strong>" in result.html
+        assert "<em>italic line</em>" in result.html
+
+    def test_hr_with_sanitizer_preserves_self_closing(self, converter: MarkdownConverter):
+        md = "---\n\nText"
+        result = converter.convert(md)
+        assert "<hr />" in result.html
+
 
 class TestInlineFormatting:
     def test_bold_with_asterisks(self, converter_no_sanitize: MarkdownConverter):

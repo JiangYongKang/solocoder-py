@@ -430,6 +430,8 @@ class TagHierarchy:
             if parent is not None:
                 parent.children_ids.discard(tag_id)
 
+        descendant_ids = self._get_descendants_internal(tag_id)
+
         child_ids = list(tag_node.children_ids)
         for child_id in child_ids:
             if child_id in self._tags:
@@ -437,9 +439,7 @@ class TagHierarchy:
                 child.parent_id = None
                 child.is_dangling = True
 
-        affected_objects: Set[Any] = set()
         if tag_id in self._tag_direct_objects:
-            affected_objects.update(self._tag_direct_objects[tag_id])
             for obj_id in self._tag_direct_objects[tag_id]:
                 if obj_id in self._object_direct_tags:
                     self._object_direct_tags[obj_id].discard(tag_id)
@@ -452,6 +452,12 @@ class TagHierarchy:
             del self._tag_direct_objects[tag_id]
 
         del self._tags[tag_id]
+
+        for desc_id in descendant_ids:
+            if desc_id in self._tag_direct_objects:
+                for obj_id in list(self._tag_direct_objects[desc_id]):
+                    if obj_id in self._object_direct_tags:
+                        self._recalc_object_effective_tags(obj_id)
 
     def _recalc_object_effective_tags(self, obj_id: Any) -> None:
         if obj_id not in self._object_direct_tags:

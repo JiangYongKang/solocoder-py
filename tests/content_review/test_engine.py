@@ -251,6 +251,12 @@ class TestMultipleRejections:
 
 
 class TestInvalidStateTransitions:
+    """状态机结构完整性测试。
+
+    按起始状态组织，覆盖所有 15 种非法状态转移，
+    验证 _TRANSITIONS 转移表的定义被正确执行。
+    """
+
     def test_draft_publish_rejected(
         self, service: ContentReviewService, draft_content: str
     ) -> None:
@@ -366,6 +372,93 @@ class TestInvalidStateTransitions:
         service.publish(draft_content)
         with pytest.raises(InvalidStateTransitionError):
             service.publish(draft_content)
+
+
+class TestReviewOperationOnNonReviewState:
+    """审核操作业务规则测试。
+
+    从业务语义维度组织，验证"审核操作（approve / reject）必须在
+    审核中状态下执行"这一业务规则。使用参数化将两个审核操作作为
+    同一类别测试，突出业务规则的一致性。断言不仅验证异常，还
+    验证状态未变更、记录未增加等业务语义。
+
+    与 TestInvalidStateTransitions 的职责区别：
+    - 前者是状态机结构完整性测试（全覆盖、轻断言）
+    - 本类是业务规则语义测试（聚焦审核操作、重业务语义断言）
+    """
+
+    @pytest.mark.parametrize("action_name,action_call", [
+        ("approve", lambda s, cid: s.approve(cid, "reviewer-1")),
+        ("reject", lambda s, cid: s.reject(cid, "reviewer-1", "Bad content")),
+    ])
+    def test_review_operation_on_draft_rejected(
+        self,
+        service: ContentReviewService,
+        draft_content: str,
+        action_name: str,
+        action_call,
+    ) -> None:
+        item = service.get_content(draft_content)
+        assert item is not None
+        original_status = item.status
+        original_record_count = len(item.review_records)
+
+        with pytest.raises(InvalidStateTransitionError):
+            action_call(service, draft_content)
+
+        assert item.status == original_status
+        assert len(item.review_records) == original_record_count
+
+    @pytest.mark.parametrize("action_name,action_call", [
+        ("approve", lambda s, cid: s.approve(cid, "reviewer-1")),
+        ("reject", lambda s, cid: s.reject(cid, "reviewer-1", "Bad content")),
+    ])
+    def test_review_operation_on_approved_rejected(
+        self,
+        service: ContentReviewService,
+        draft_content: str,
+        action_name: str,
+        action_call,
+    ) -> None:
+        service.submit_for_review(draft_content)
+        service.approve(draft_content, "reviewer-1")
+
+        item = service.get_content(draft_content)
+        assert item is not None
+        original_status = item.status
+        original_record_count = len(item.review_records)
+
+        with pytest.raises(InvalidStateTransitionError):
+            action_call(service, draft_content)
+
+        assert item.status == original_status
+        assert len(item.review_records) == original_record_count
+
+    @pytest.mark.parametrize("action_name,action_call", [
+        ("approve", lambda s, cid: s.approve(cid, "reviewer-1")),
+        ("reject", lambda s, cid: s.reject(cid, "reviewer-1", "Bad content")),
+    ])
+    def test_review_operation_on_published_rejected(
+        self,
+        service: ContentReviewService,
+        draft_content: str,
+        action_name: str,
+        action_call,
+    ) -> None:
+        service.submit_for_review(draft_content)
+        service.approve(draft_content, "reviewer-1")
+        service.publish(draft_content)
+
+        item = service.get_content(draft_content)
+        assert item is not None
+        original_status = item.status
+        original_record_count = len(item.review_records)
+
+        with pytest.raises(InvalidStateTransitionError):
+            action_call(service, draft_content)
+
+        assert item.status == original_status
+        assert len(item.review_records) == original_record_count
 
 
 class TestContentNotFound:

@@ -487,7 +487,6 @@ class MarkdownConverter:
         text = self._parse_inline_code(text)
         text = self._parse_bold(text)
         text = self._parse_italic(text)
-        text = self._parse_line_breaks(text)
         return text
 
     def _parse_images(self, text: str) -> str:
@@ -682,5 +681,3 @@ class MarkdownConverter:
 
         return "".join(result)
 
-    def _parse_line_breaks(self, text: str) -> str:
-        return text.replace("  \n", "<br />\n")

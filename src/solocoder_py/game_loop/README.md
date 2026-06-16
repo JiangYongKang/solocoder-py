@@ -105,10 +105,17 @@
 4. 恶性循环，程序完全卡住
 
 解决方案：
-1. **最大追帧步数**：限制单帧内最多执行 `max_catch_up_steps` 次逻辑更新
-2. **跳帧机制**：当累积器超过 `max_catch_up_steps × time_step` 时，直接将累积器重置为 `time_step`，丢弃多余的时间
+1. **最大追帧步数**：限制单帧内最多执行 `max_catch_up_steps` 次逻辑更新。即使累积器中有更多时间，也只执行 `max_catch_up_steps` 次，剩余时间丢弃。这保证了单帧内逻辑更新的耗时有上限。
+2. **跳帧机制**：当累积器超过 `max_catch_up_steps × time_step × 2` 时，直接将累积器重置为 `time_step`，丢弃多余的时间。这意味着当极端落后时，游戏时间会"跳跃"到最新状态，而不是尝试执行成千上万次逻辑更新。
 
-这意味着当极端落后时，游戏时间会"跳跃"到最新状态，而不是尝试执行成千上万次逻辑更新。
+**设计理由 - 为什么使用 2 倍乘数？**：
+追帧限制和跳帧机制是两个独立的保护机制：
+- **追帧限制**（max_catch_up_steps）：保护单帧不会因为执行太多逻辑更新而卡顿。只要累积器时间在合理范围内，就执行追帧。
+- **跳帧机制**（2 × max_catch_up_steps × time_step）：处理极端落后场景，避免死亡螺旋。
+
+使用 2 倍乘数可以让追帧机制在适度落后（例如 1.5 × max_catch_up_steps）时正常工作，执行 max_catch_up_steps 次更新来追赶，只有在严重落后（超过 2 倍）时才触发跳帧。这在"避免死亡螺旋"和"尽量追上时间"之间取得了平衡。
+
+如果阈值与追帧限制相同（1 倍），那么只要累积器超过追帧限制就会跳帧，追帧机制实际上永远不会生效。
 
 ### 逻辑插值
 
@@ -226,4 +233,4 @@ print(f"逻辑帧率: {logic_fps:.1f}, 渲染帧率: {render_fps:.1f}")
 | `InvalidTimeStepError` | 配置的时间步长为零或负数 |
 | `InvalidMaxCatchUpStepsError` | 配置的最大追帧步数为零或负数 |
 | `GameLoopNotRunningError` | 未调用 `start()` 就调用 `tick()` |
-| `GameStateNotInterpolableError` | 状态未实现 `interpolate()` 但启用了插值 |
+| `GameStateNotInterpolableError` | 状态未实现 `interpolate()` 时直接调用该方法 |

@@ -1,0 +1,7 @@
+你在上一轮修复版本化文档存储时遗留了两个问题，需要修复：
+
+1. store.py 的 get_version_content 方法在删除冗余的 content 是否为 None 判断后，直接返回 ver.content。但 DocumentVersion 的 content 字段类型为 Optional[str]，而方法返回类型标注为 str，存在静态类型不一致。虽然当前运行路径上 content 不会为 None，但缺少类型保证。需要在 return 前添加类型断言消除歧义，使静态类型检查工具不会在此处报错。
+
+2. store.py 的 _commit_with_merge 方法将冲突和无冲突两条分支合并后，diff 的计算和存储变为了无条件执行。但当合并结果存在冲突时，version_content 被设为带冲突标记的合并文本，相关 diff 对象不会被用于版本重建，其内容也只是 latest_content 到冲突标记文本的变化而非有效差异数据，属于无意义的存储浪费和误导性数据。应在冲突情况下将 diff 设为 None。
+
+3. 修复以上问题后重新运行 poetry run pytest tests/doc_versioning/ -q，确保所有测试仍然通过。

@@ -1,0 +1,5 @@
+你在上一轮修复游标分页引擎时还存在以下问题，需要继续修复：
+
+1. engine.py 的 _compute_total 方法中，当 PaginationConfig 设置 estimate_total_fn 回调后，paginate 调用传入 estimate_total=False 时仍然无条件调用回调返回估算值而非精确计数，且 _build_result 中 total_estimated 也被强制标记为 True。调用方注册回调后就永远无法再获得精确总数，与接口语义矛盾。需要让 estimate_total 参数优先于回调：传 False 时走精确计数路径，传 True 且有回调时才走估算路径。
+
+2. 修复以上问题后重新运行 poetry run pytest tests/cursor_pagination/ -q，确保所有测试仍然通过。

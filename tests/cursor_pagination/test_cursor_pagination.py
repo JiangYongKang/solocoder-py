@@ -495,7 +495,21 @@ class TestTotalCount:
     def test_include_total_estimated_flag(self, basic_engine):
         page = basic_engine.paginate(page_size=3, include_total=True, estimate_total=True)
         assert page.total == 10
+        assert page.total_estimated is False
+
+    def test_include_total_estimated_flag_with_fn(self, sample_data_10):
+        config = PaginationConfig(estimate_total_fn=lambda: 999)
+        engine = CursorPaginationEngine(data=sample_data_10, sort_fields=["id"], config=config)
+        page = engine.paginate(page_size=3, include_total=True, estimate_total=True)
+        assert page.total == 999
         assert page.total_estimated is True
+
+    def test_include_total_exact_with_fn(self, sample_data_10):
+        config = PaginationConfig(estimate_total_fn=lambda: 999)
+        engine = CursorPaginationEngine(data=sample_data_10, sort_fields=["id"], config=config)
+        page = engine.paginate(page_size=3, include_total=True, estimate_total=False)
+        assert page.total == 10
+        assert page.total_estimated is False
 
     def test_exclude_total_default(self, basic_engine):
         page = basic_engine.paginate(page_size=3)
@@ -806,22 +820,39 @@ class TestFix3EstimateTotalExtensionPoint:
         assert page.total_estimated is True
         assert call_count == 1
 
-    def test_estimate_fn_used_even_without_flag(self, sample_data_10):
+    def test_estimate_fn_ignored_when_flag_false(self, sample_data_10):
+        calls = {"n": 0}
+
+        def fake_estimator() -> int:
+            calls["n"] += 1
+            return 500
+
+        config = PaginationConfig(estimate_total_fn=fake_estimator)
+        engine = CursorPaginationEngine(
+            data=sample_data_10, sort_fields=["id"], config=config
+        )
+
+        page = engine.paginate(page_size=3, include_total=True, estimate_total=False)
+        assert page.total == 10
+        assert page.total_estimated is False
+        assert calls["n"] == 0
+
+    def test_estimate_fn_ignored_when_flag_default(self, sample_data_10):
         config = PaginationConfig(estimate_total_fn=lambda: 500)
         engine = CursorPaginationEngine(
             data=sample_data_10, sort_fields=["id"], config=config
         )
 
         page = engine.paginate(page_size=3, include_total=True)
-        assert page.total == 500
-        assert page.total_estimated is True
+        assert page.total == 10
+        assert page.total_estimated is False
 
     def test_no_estimate_fn_uses_exact_count(self, sample_data_10):
         engine = CursorPaginationEngine(data=sample_data_10, sort_fields=["id"])
 
         page = engine.paginate(page_size=3, include_total=True, estimate_total=True)
         assert page.total == 10
-        assert page.total_estimated is True
+        assert page.total_estimated is False
 
     def test_estimate_total_method(self, sample_data_large):
         config = PaginationConfig(estimate_total_fn=lambda: 12345)
@@ -846,6 +877,12 @@ class TestFix3EstimateTotalExtensionPoint:
         page = engine.paginate(page_size=3)
         assert page.total is None
         assert calls["n"] == 0
+
+    def test_flag_true_without_fn_returns_exact(self, sample_data_10):
+        engine = CursorPaginationEngine(data=sample_data_10, sort_fields=["id"])
+        page = engine.paginate(page_size=3, include_total=True, estimate_total=True)
+        assert page.total == 10
+        assert page.total_estimated is False
 
 
 class TestFix4UnifiedBisectMethod:

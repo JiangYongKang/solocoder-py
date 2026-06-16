@@ -1,0 +1,7 @@
+你在上一轮修复固定时间步游戏循环时遗留了两个问题，需要修复：
+
+1. README.md 第 109 行将跳帧触发阈值描述为"当累积器超过 max_catch_up_steps × time_step 时"触发跳帧，但 game_loop.py 的 tick 方法实际使用 2 倍乘数。提示词上一轮要求统一实现与文档，你虽然在 README 中新增了跳帧阈值说明段落，但第 109 行的原始描述并未同步修改。同一文档对阈值的描述存在矛盾，需要在所有涉及阈值描述的位置统一为实际使用的乘数，不能只做增量追加而不修正已有不一致内容。
+
+2. game_loop.py 中 _check_interpolation_support 方法在探测插值能力时对 test_curr 调用了 update 方法，但异常捕获范围仅限 GameStateNotInterpolableError。如果某个 GameState 子类的 update 方法抛出了 TypeError 或 AttributeError 等与插值无关的异常，这些异常会直接向外抛出导致游戏循环初始化崩溃，且错误信息不具备排查意义。需要将异常捕获范围扩大，避免 update 执行失败导致初始化崩溃。
+
+3. 修复以上问题后重新运行 poetry run pytest tests/game_loop/ -q，确保所有测试仍然通过。

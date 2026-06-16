@@ -124,15 +124,21 @@ class ContentReviewService:
 
     def get_rejection_comments(self, content_id: str) -> List[RejectionComment]:
         item = self._get_content(content_id)
-        return [
-            RejectionComment(
-                reviewer=r.reviewer,
-                comment=r.comment,
-                timestamp=r.timestamp,
+        result: List[RejectionComment] = []
+        for record in item.review_records:
+            if record.action != ReviewAction.REJECT:
+                continue
+            comment_text = record.comment
+            if comment_text is None:
+                continue
+            result.append(
+                RejectionComment(
+                    reviewer=record.reviewer,
+                    comment=comment_text,
+                    timestamp=record.timestamp,
+                )
             )
-            for r in item.review_records
-            if r.action == ReviewAction.REJECT
-        ]
+        return result
 
     def _get_content(self, content_id: str) -> ContentItem:
         item = self._contents.get(content_id)

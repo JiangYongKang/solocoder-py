@@ -120,6 +120,7 @@ class DocumentVersionStore:
 
     def get_version_content(self, document_id: str, version: int) -> str:
         ver = self.get_version(document_id, version)
+        assert ver.content is not None
         return ver.content
 
     def _reconstruct_content(self, record: _DocumentRecord, target_version: int) -> str:
@@ -206,18 +207,23 @@ class DocumentVersionStore:
         new_version_num = self._next_version(record.document_id)
         now = datetime.now()
         merged_text = merge_result.get_merged_text()
-        diff = compute_diff(latest_content, merged_text, record.latest_version, 0)
-        diff.target_version = new_version_num
 
         has_conflicts = merge_result.has_conflicts
         merge_status = MergeStatus.CONFLICTED if has_conflicts else MergeStatus.CLEAN
         conflict_count = merge_result.conflict_count if has_conflicts else 0
         version_content = merged_text if has_conflicts else None
 
+        if has_conflicts:
+            version_diff: Optional[DocumentDiff] = None
+        else:
+            version_diff = compute_diff(
+                latest_content, merged_text, record.latest_version, new_version_num
+            )
+
         version = DocumentVersion(
             version=new_version_num,
             content=version_content,
-            diff=diff,
+            diff=version_diff,
             version_type=VersionType.MERGED,
             created_at=now,
             parent_version=record.latest_version,

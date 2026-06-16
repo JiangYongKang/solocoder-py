@@ -1,0 +1,5 @@
+你在上一轮修复 AABB 碰撞检测引擎时还有一个问题只修了一半，需要继续修复：
+
+1. models.py 的 CollisionPair 只添加了 docstring 来说明 __post_init__ 会重新排序 collider 字段，但提示词要求的是"应在文档中说明或在 API 层面减少惊讶"。仅靠 docstring 不足以减少调用方的惊讶：调用方以 CollisionPair(collider_a=b, collider_b=a) 构造后，运行时传入的第一个参数被悄悄换成了另一个对象，排查问题时仍需翻源码才能理解。需要在 API 层面提供保护，例如提供显式的工厂方法、在构造时打印警告、或提供属性标记让排序行为对调用方可见，使调用方即使不看文档也能感知到排序行为。
+
+2. 修复以上问题后重新运行 poetry run pytest tests/collision/ -q，确保所有测试仍然通过。

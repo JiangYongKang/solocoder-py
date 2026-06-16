@@ -143,11 +143,38 @@ class TestHtmlSanitizerEdgeCases:
         assert "ONCLICK" not in result
         assert "onclick" not in result
 
-    def test_self_closing_tags(self):
+    def test_self_closing_tags_preserved(self):
         sanitizer = HtmlSanitizer()
         html = '<img src="test.png" alt="test" />'
         result = sanitizer.sanitize(html)
-        assert '<img src="test.png" alt="test" />' in result or '<img src="test.png" alt="test">' in result
+        assert '<img src="test.png" alt="test" />' in result
+
+    def test_br_self_closing_preserved(self):
+        sanitizer = HtmlSanitizer()
+        html = "<br />"
+        result = sanitizer.sanitize(html)
+        assert "<br />" in result
+
+    def test_hr_self_closing_preserved(self):
+        sanitizer = HtmlSanitizer()
+        html = "<hr />"
+        result = sanitizer.sanitize(html)
+        assert "<hr />" in result
+
+    def test_self_closing_no_space_preserved(self):
+        sanitizer = HtmlSanitizer()
+        html = "<br/>"
+        result = sanitizer.sanitize(html)
+        assert "<br />" in result or "<br/>" in result
+
+    def test_self_closing_with_safe_attributes(self):
+        sanitizer = HtmlSanitizer()
+        html = '<img src="test.png" onclick="alert(1)" alt="test" />'
+        result = sanitizer.sanitize(html)
+        assert 'src="test.png"' in result
+        assert 'alt="test"' in result
+        assert "onclick" not in result
+        assert result.rstrip().endswith(" />")
 
     def test_multiple_event_attributes(self):
         sanitizer = HtmlSanitizer()

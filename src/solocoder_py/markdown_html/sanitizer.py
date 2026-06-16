@@ -68,6 +68,10 @@ class HtmlSanitizer:
         tag_name = match.group(2).lower()
         attr_string = match.group(3) if match.group(3) else ""
 
+        is_self_closing = attr_string.rstrip().endswith("/")
+        if is_self_closing:
+            attr_string = attr_string.rstrip()[:-1].rstrip()
+
         if tag_name not in self.safe_tags:
             self.warnings.append(f"Removed unsafe tag: <{match.group(1)}{match.group(2)}>")
             return escape(f"<{match.group(1)}{match.group(2)}>")
@@ -76,10 +80,13 @@ class HtmlSanitizer:
             return f"</{tag_name}>"
 
         sanitized_attrs = self._sanitize_attributes(tag_name, attr_string)
+
+        self_closing_suffix = " />" if is_self_closing else ">"
+
         if sanitized_attrs:
-            return f"<{tag_name} {sanitized_attrs}>"
+            return f"<{tag_name} {sanitized_attrs}{self_closing_suffix}"
         else:
-            return f"<{tag_name}>"
+            return f"<{tag_name}{self_closing_suffix}"
 
     def _sanitize_attributes(self, tag_name: str, attr_string: str) -> str:
         if not attr_string.strip():

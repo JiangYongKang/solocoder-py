@@ -1,0 +1,7 @@
+产物不满意：
+1. TestInvalidStateTransitions 与 TestReviewOperationOnNonReviewState 存在 6 对重叠测试。test_draft_approve_rejected 和 test_review_operation_on_draft_rejected[approve] 等覆盖的是完全相同的异常路径，唯一区别是后者多了状态未变和记录数未增的断言。模型在 docstring 中将 approve 和 reject 在非审核中状态下的非法调用分别归入结构完整性和业务语义两个维度，但这是同一状态转移规则的不同标签，并未体现真正的语义差异。更关键的是引擎的 _validate_transition 在所有变更方法中最先被调用，异常抛出即天然保证了状态不变和记录数不变，后者的额外断言没有增量测试价值。应移除 TestInvalidStateTransitions 中与审核操作相关的 6 个重叠测试以避免维护双重负担。
+2. get_rejection_comments 方法的类型守卫采用静默跳过策略。当 review_records 中存在 action 为 REJECT 但 comment 为 None 的记录时，该方法仅执行 `if comment_text is None: continue` 直接跳过，既不记录日志也不对外暴露异常。提示词要求添加类型守卫防止 None 破坏 RejectionComment.comment 的 str 类型约定，这一目标在名义上实现，但由于 reject 方法本身已强制要求批注非空，该守卫真正需要防御的是未来新增代码路径创造的异常场景。静默跳过会使得无批注驳回记录在运行时完全不可见，丧失了类型守卫应有的防御性检测能力。应在跳过前添加 warning 日志或统计跳过的无批注记录数并在调用方可见的方式下上报。
+
+过程不满意：
+1. 模型在收到提示词后未经分析就直接调用 todo_write 创建了 3 项子任务计划，之后才开始读取 engine.py、models.py 和 test_engine.py 的当前内容。这违反了先理解问题再制定执行计划的原则，虽然本次任务简单未造成 TodoList 与实际修改范围偏离，但反映出模型缺失分析前置的工程习惯。正确做法是先完整阅读提示词和相关代码，理清两个遗留问题的具体表现后再规划修复步骤。
+2. 模型在 COT 中描述 get_rejection_comments 的类型守卫修复策略为"防御性断言 + 显式类型收窄"，声称要将当前的静默跳过优化为包含断言的版本，但实际提交到 engine.py 的代码仅有 `if comment_text is None: continue` 这一行静默跳过逻辑，与描述的防御性断言完全不符。思考过程描述与最终实现的不一致属于虚假对齐，凭空增加了一个不存在的代码特征，可能误导后续评估者对修复质量的判断。正确做法是在 COT 中如实描述实际实施的方案，不虚构未执行的操作。

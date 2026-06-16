@@ -106,6 +106,103 @@ class TestDanglingTagCleanup:
         tag_hierarchy.cleanup_dangling_tags()
         assert tag_hierarchy.has_tag("child") is False
 
+    def test_delete_nonleaf_tag_invalidates_grandchild_object_cache(
+        self, tag_hierarchy: TagHierarchy
+    ):
+        tag_hierarchy.create_tag("a", "A")
+        tag_hierarchy.create_tag("b", "B", parent_id="a")
+        tag_hierarchy.create_tag("c", "C", parent_id="b")
+
+        tag_hierarchy.tag_object("obj:1", "c")
+
+        tags_before = tag_hierarchy.get_object_tags("obj:1", include_inherited=True)
+        assert tags_before == {"a", "b", "c"}
+
+        tag_hierarchy.delete_tag("a")
+
+        tags_after = tag_hierarchy.get_object_tags("obj:1", include_inherited=True)
+        assert tags_after == {"b", "c"}
+        assert "a" not in tags_after
+
+    def test_delete_nonleaf_tag_invalidates_child_object_cache(
+        self, tag_hierarchy: TagHierarchy
+    ):
+        tag_hierarchy.create_tag("a", "A")
+        tag_hierarchy.create_tag("b", "B", parent_id="a")
+
+        tag_hierarchy.tag_object("obj:1", "b")
+
+        tags_before = tag_hierarchy.get_object_tags("obj:1", include_inherited=True)
+        assert tags_before == {"a", "b"}
+
+        tag_hierarchy.delete_tag("a")
+
+        tags_after = tag_hierarchy.get_object_tags("obj:1", include_inherited=True)
+        assert tags_after == {"b"}
+        assert "a" not in tags_after
+
+    def test_delete_nonleaf_tag_object_has_tag_no_longer_true(
+        self, tag_hierarchy: TagHierarchy
+    ):
+        tag_hierarchy.create_tag("a", "A")
+        tag_hierarchy.create_tag("b", "B", parent_id="a")
+
+        tag_hierarchy.tag_object("obj:1", "b")
+        assert tag_hierarchy.object_has_tag("obj:1", "a") is True
+
+        tag_hierarchy.delete_tag("a")
+
+        with pytest.raises(TagNotFoundError):
+            tag_hierarchy.object_has_tag("obj:1", "a")
+
+    def test_delete_nonleaf_tag_deep_chain_cache_invalidation(
+        self, tag_hierarchy: TagHierarchy
+    ):
+        tag_hierarchy.create_tag("l0", "L0")
+        tag_hierarchy.create_tag("l1", "L1", parent_id="l0")
+        tag_hierarchy.create_tag("l2", "L2", parent_id="l1")
+        tag_hierarchy.create_tag("l3", "L3", parent_id="l2")
+        tag_hierarchy.create_tag("l4", "L4", parent_id="l3")
+
+        tag_hierarchy.tag_object("obj:1", "l4")
+        tag_hierarchy.tag_object("obj:2", "l2")
+
+        tags1_before = tag_hierarchy.get_object_tags("obj:1", include_inherited=True)
+        assert tags1_before == {"l0", "l1", "l2", "l3", "l4"}
+
+        tags2_before = tag_hierarchy.get_object_tags("obj:2", include_inherited=True)
+        assert tags2_before == {"l0", "l1", "l2"}
+
+        tag_hierarchy.delete_tag("l1")
+
+        tags1_after = tag_hierarchy.get_object_tags("obj:1", include_inherited=True)
+        assert tags1_after == {"l2", "l3", "l4"}
+        assert "l0" not in tags1_after
+        assert "l1" not in tags1_after
+
+        tags2_after = tag_hierarchy.get_object_tags("obj:2", include_inherited=True)
+        assert tags2_after == {"l2"}
+        assert "l0" not in tags2_after
+        assert "l1" not in tags2_after
+
+    def test_delete_nonleaf_tag_find_objects_by_tag_uses_correct_cache(
+        self, tag_hierarchy: TagHierarchy
+    ):
+        tag_hierarchy.create_tag("a", "A")
+        tag_hierarchy.create_tag("b", "B", parent_id="a")
+        tag_hierarchy.create_tag("other_root", "Other Root")
+
+        tag_hierarchy.tag_object("obj:1", "b")
+        tag_hierarchy.tag_object("obj:2", "other_root")
+
+        result_before = tag_hierarchy.find_objects_by_tags(["a", "other_root"])
+        assert result_before == set()
+
+        tag_hierarchy.delete_tag("a")
+
+        result_after = tag_hierarchy.find_objects_by_tags(["b", "other_root"])
+        assert result_after == set()
+
 
 class TestCircularReference:
     def test_move_tag_to_itself_raises(self, tag_hierarchy: TagHierarchy):

@@ -1,0 +1,7 @@
+产物不满意：
+1. limiter.py 中 safe_process 方法的 except Exception 兜底分支在构造 LimitResult 时使用 `f"Unexpected error: {exc}"` 将原始异常字符串写入了 error_message 字段（对应 line 286）。提示词要求修复 _build_internal_error_response 方法将异常详情暴露到 HTTP 响应体造成的信息泄露，模型正确地使该方法返回了固定通用提示，响应体不再包含异常信息。但当 safe_process 被调用时，返回给调用方的 LimitResult 对象中 error_message 仍然携带了 `{exc}` 的原始内容，调用方如果将这个 LimitResult 写入日志、序列化为 API 响应或传递给下游服务，异常对象的完整字符串表示会沿这条路径泄露出去。根因是模型只对提示词点名的 _build_internal_error_response 做了点状修复，而未以异常信息泄露为根因线索排查 safe_process 方法内所有 error_message 赋值语句。正确做法是将 line 286 的 `f"Unexpected error: {exc}"` 改为与响应体一致的固定通用字符串，确保 safe_process 的所有信息输出路径都不暴露内部异常详情。
+
+过程不满意：
+1. 模型在第一步就直接调用 todo_write 创建了 3 项子任务计划，到了第二步才通过 view_files 读取 limiter.py 源码。这说明模型在充分分析问题之前就制定了执行计划，违反了标注规范中"应先分析问题再规划"的过程质量要求。虽然本轮两个缺陷的定位直接且修复路径明确，提前规划没有导致后续返工或任务划分与实际模块边界不匹配，但这种行为模式在复杂任务中会带来严重风险，例如计划粒度与代码结构脱节导致执行阶段反复调整架构。正确做法是先阅读相关源码和测试文件，理解问题的具体范围和涉及的全部代码路径，然后再创建 TodoList 并逐一执行。
+
+2. 模型在完成 _build_internal_error_response 和 _from_sequence 的修复后，使用了两次 search_by_regex 来检查测试文件中是否存在对旧行为的断言，但未对 limiter.py 源码本身做系统性的异常信息泄露扫描。模型只关注了被提示词直接点名的 _build_internal_error_response 方法，而 safe_process 方法中 line 286 的 `error_message=f"Unexpected error: {exc}"` 同样是一条异常信息泄露路径，却因未被提示词点名而遗漏。根因是模型以方法名为搜索目标而非以异常信息泄露这个根因问题为线索做关联代码审查。正确做法是在读完代码后对所有 `error_message=...` 的赋值语句做逐一排查，确保没有任何路径将异常的完整字符串暴露出去，而不应仅局限在被点名的单个方法上做孤立修复。
