@@ -1,0 +1,5 @@
+你在上一轮修复请求体大小限制器时遗漏了一处异常信息泄露路径，需要继续修复：
+
+1. limiter.py 中 safe_process 方法的 except Exception 兜底分支在构造 LimitResult 时，将 `f"Unexpected error: {exc}"` 写入了 error_message 字段（对应 line 286）。上一轮你修复了 _build_internal_error_response 方法使其不再将异常详情写入 HTTP 响应体，但 safe_process 返回的 LimitResult 对象中 error_message 仍然携带了原始异常的完整字符串。调用方如果将这个 LimitResult 写入日志、序列化为 API 响应或传递给下游服务，异常信息同样会泄露出去。需要确保 safe_process 的所有信息输出路径都不暴露内部异常详情。
+
+2. 修复以上问题后重新运行 poetry run pytest tests/request_limiter/ -q，确保所有测试仍然通过。

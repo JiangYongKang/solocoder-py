@@ -7,6 +7,8 @@ from .entity import EntityId
 if TYPE_CHECKING:
     from .archetype import ArchetypeManager
 
+_MISSING = object()
+
 
 class SparseSet:
     def __init__(self, component_type: type, archetype_manager: ArchetypeManager | None = None) -> None:
@@ -51,43 +53,52 @@ class SparseSet:
         entity_id = entity.id
         return entity_id < len(self._sparse) and self._sparse[entity_id] != -1
 
-    def get(self, entity: EntityId) -> Any:
+    def get(self, entity: EntityId, default: Any = None) -> Any:
         if not self.contains(entity):
-            return None
+            return default
+        value = self._get_internal(entity)
+        if value is _MISSING:
+            return default
+        return value
+
+    def iter_entities(self) -> Iterator[EntityId]:
+        return (EntityId(eid) for eid in self._dense)
+
+    def _get_internal(self, entity: EntityId) -> Any:
         if self._archetype_manager is None:
             raise RuntimeError("SparseSet not initialized with ArchetypeManager for data access")
         archetype = self._archetype_manager.get_entity_archetype(entity)
         if archetype is None:
-            return None
+            return _MISSING
         return archetype.get_component(entity, self._component_type)
-
-    def iter_entities(self) -> Iterator[EntityId]:
-        return (EntityId(eid) for eid in self._dense)
 
     def iter_components(self) -> Iterator[Any]:
         if self._archetype_manager is None:
             raise RuntimeError("SparseSet not initialized with ArchetypeManager for data access")
         for entity_id in self._dense:
             entity = EntityId(entity_id)
-            archetype = self._archetype_manager.get_entity_archetype(entity)
-            if archetype is not None:
-                yield archetype.get_component(entity, self._component_type)
+            value = self._get_internal(entity)
+            if value is not _MISSING:
+                yield value
 
     def iter(self) -> Iterator[tuple[EntityId, Any]]:
         if self._archetype_manager is None:
             raise RuntimeError("SparseSet not initialized with ArchetypeManager for data access")
         for entity_id in self._dense:
             entity = EntityId(entity_id)
-            archetype = self._archetype_manager.get_entity_archetype(entity)
-            if archetype is not None:
-                yield entity, archetype.get_component(entity, self._component_type)
+            value = self._get_internal(entity)
+            if value is not _MISSING:
+                yield entity, value
 
     def __getitem__(self, entity: EntityId) -> Any:
         if not self.contains(entity):
             raise KeyError(entity.id)
-        value = self.get(entity)
-        if value is None:
-            raise KeyError(entity.id)
+        value = self._get_internal(entity)
+        if value is _MISSING:
+            raise RuntimeError(
+                f"SparseSet index contains entity {entity.id} but no Archetype found. "
+                f"This indicates data inconsistency between SparseSet and ArchetypeManager."
+            )
         return value
 
     def __len__(self) -> int:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import warnings
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from .exceptions import ColliderNotFoundError, InvalidGridSizeError
@@ -125,14 +126,18 @@ class CollisionEngine:
             pairs: Set[CollisionPair] = set()
             colliders = self._spatial_hash.get_all_colliders()
 
-            for collider in colliders:
-                candidates = self._spatial_hash.get_candidates(collider.aabb)
-                for candidate in candidates:
-                    if collider.id == candidate.id:
-                        continue
-                    if collider.intersects(candidate):
-                        pair = CollisionPair(collider_a=collider, collider_b=candidate)
-                        pairs.add(pair)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                for collider in colliders:
+                    candidates = self._spatial_hash.get_candidates(collider.aabb)
+                    for candidate in candidates:
+                        if collider.id == candidate.id:
+                            continue
+                        if collider.intersects(candidate):
+                            pair = CollisionPair(
+                                collider_a=collider, collider_b=candidate
+                            )
+                            pairs.add(pair)
 
             return list(pairs)
 

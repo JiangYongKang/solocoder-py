@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -11,6 +12,8 @@ from .exceptions import (
     RejectionCommentRequiredError,
 )
 from .models import ContentItem, RejectionComment, ReviewRecord
+
+logger = logging.getLogger(__name__)
 
 _TRANSITIONS: Dict[ReviewStatus, Dict[ReviewAction, ReviewStatus]] = {
     ReviewStatus.DRAFT: {
@@ -130,6 +133,13 @@ class ContentReviewService:
                 continue
             comment_text = record.comment
             if comment_text is None:
+                logger.warning(
+                    "Skipping rejection record with None comment: "
+                    "content_id=%s, reviewer=%s, timestamp=%s",
+                    content_id,
+                    record.reviewer,
+                    record.timestamp,
+                )
                 continue
             result.append(
                 RejectionComment(

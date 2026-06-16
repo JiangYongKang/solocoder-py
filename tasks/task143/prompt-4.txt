@@ -1,0 +1,5 @@
+你在上一轮修复层级标签系统时引入了执行顺序问题，需要修复：
+
+1. tag_hierarchy.py 的 _delete_tag_internal 方法中，对直接标记被删除标签的对象的 _recalc_object_effective_tags 重算调用发生在 `del self._tags[tag_id]` 执行之前。当同一对象同时标记了被删除标签和其后代标签时，_recalc_object_effective_tags 内部遍历祖先链，此时被删除标签仍残留在 _tags 数据结构中，_get_ancestor_ids_internal 会错误地将其纳入祖先集合并写回缓存，导致第一次重算结果仍包含已删除标签。虽然后续的后代遍历重算环节能在第二次重算时纠正该错误，但正确性依赖了冗余重算的副作用而非显式的执行顺序保证。需要调整执行顺序，确保在删除标签后再进行所有缓存重算。
+
+2. 修复以上问题后重新运行 poetry run pytest tests/tag_hierarchy/ -q，确保所有测试仍然通过。

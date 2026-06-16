@@ -1,0 +1,5 @@
+你在上一轮修复 ECS 实体组件系统时，sparse_set.py 的 __getitem__ 方法存在哨兵语义混用的问题，需要修复：
+
+1. sparse_set.py 的 __getitem__ 方法在 contains 返回 True 后调用 get 方法获取组件值，再用 `if value is None: raise KeyError` 判断是否找到，形成双重哨兵混用。当实体在 SparseSet 索引中存在但 ArchetypeManager 中找不到对应 Archetype 时（如 remove_component 中先 ss.remove 再 migrate_entity 的瞬时窗口期内），get 返回 None 导致 __getitem__ 抛出 KeyError，与实际根因"实体数据不一致"完全不符，调试时容易误导排查方向。更严重的是该设计将 None 同时作为"未找到"和"组件值为空"的合并信号，若后续引入带 Optional 字段的组件类型，合法的 None 值会被误判为"不存在"。需要在 get 方法内部区分"实体不存在于 Archetype"和"组件值为 None"两种语义，使 __getitem__ 能准确反映真实的失败原因。
+
+2. 修复以上问题后重新运行 poetry run pytest tests/ecs/ -q，确保所有测试仍然通过。

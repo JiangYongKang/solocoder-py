@@ -439,19 +439,29 @@ class TagHierarchy:
                 child.parent_id = None
                 child.is_dangling = True
 
+        objects_to_cleanup: Set[Any] = set()
+        objects_to_recalc: Set[Any] = set()
         if tag_id in self._tag_direct_objects:
             for obj_id in self._tag_direct_objects[tag_id]:
                 if obj_id in self._object_direct_tags:
                     self._object_direct_tags[obj_id].discard(tag_id)
                     if not self._object_direct_tags[obj_id]:
-                        del self._object_direct_tags[obj_id]
-                        if obj_id in self._object_effective_tags:
-                            del self._object_effective_tags[obj_id]
+                        objects_to_cleanup.add(obj_id)
                     else:
-                        self._recalc_object_effective_tags(obj_id)
+                        objects_to_recalc.add(obj_id)
             del self._tag_direct_objects[tag_id]
 
         del self._tags[tag_id]
+
+        for obj_id in objects_to_cleanup:
+            if obj_id in self._object_direct_tags:
+                del self._object_direct_tags[obj_id]
+            if obj_id in self._object_effective_tags:
+                del self._object_effective_tags[obj_id]
+
+        for obj_id in objects_to_recalc:
+            if obj_id in self._object_direct_tags:
+                self._recalc_object_effective_tags(obj_id)
 
         for desc_id in descendant_ids:
             if desc_id in self._tag_direct_objects:

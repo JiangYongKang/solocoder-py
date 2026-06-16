@@ -283,6 +283,6 @@ class BodySizeLimiter:
                     total_read_bytes=0,
                     limit_bytes=self._config.max_body_bytes,
                     body=None,
-                    error_message=f"Unexpected error: {exc}",
+                    error_message="An internal error occurred while processing the request",
                 )
             return (self._build_internal_error_response(), result)

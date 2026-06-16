@@ -1,0 +1,5 @@
+你在上一轮修复内容审核管线时，get_rejection_comments 方法的类型守卫实现存在防御性不足的问题，需要修复：
+
+1. engine.py 的 get_rejection_comments 方法中，当 review_records 中存在 action 为 REJECT 但 comment 为 None 的异常记录时，该方法仅执行 `if comment_text is None: continue` 直接跳过，既不记录日志也不对外暴露异常。虽然当前 reject 方法保证了驳回记录必定有批注，但类型守卫的真正价值在于防御未来新增代码路径可能制造的异常场景。当前的静默跳过策略会使无批注驳回记录在运行时完全不可见，一旦出现异常数据无法及时发现和排查。需要输出 warning 日志记录被跳过的异常记录信息，使异常数据在运行时可追踪。
+
+2. 修复以上问题后重新运行 poetry run pytest tests/content_review/ -q，确保所有测试仍然通过。

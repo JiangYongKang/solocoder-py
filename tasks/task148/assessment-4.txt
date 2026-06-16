@@ -1,0 +1,9 @@
+产物不满意：
+1. from_ordered 工厂方法虽然通过 _preserve_order 标记让 __post_init__ 正确识别了调用来源并执行了校验流程，但仍使用 cls.__new__(cls) 加上手动逐字段赋值的方式创建实例，完全绕过了 dataclass 生成的 __init__。提示词要求"而非完全绕过 post_init 流程"，模型只解决了 post_init 跳过问题，但初始化路径的分裂并未根治。如果未来 CollisionPair 新增带默认值的字段（如 collision_time: float = field(default_factory=time.time)），默认构造函数会通过 __init__ 自动填充默认值，而 from_ordered 的手动赋值会遗漏新字段，导致实例缺少该属性并在后续访问时抛出 AttributeError。正确做法是在 from_ordered 中通过 object.__new__ 预置 _preserve_order 后仍调用 __init__，让 dataclass 自动处理字段初始化，使两个构造路径真正汇聚到同一套初始化逻辑。
+
+过程不满意：
+1. 模型在收到提示词后的第一步就是创建 3 项 TODO，随后才开始查看 models.py 了解代码现状。从思考过程可以看到，模型在未阅读任何代码文件的情况下就预先划分了子任务，这不符合标注规范中"先分析问题再制定计划"的要求。提示词中两个问题的修复涉及 models.py 的 post_init 逻辑重构和 engine.py 的调用方适配，但模型在未确认代码结构、调用方分布和技术约束的情况下就锁定了 TODO 粒度，导致后续在 engine.py 警告抑制方式上反复推敲（从"用 from_unordered"到"用 catch_warnings"），未能在规划阶段就做出决策。
+
+2. 模型在 models.py 的 __post_init__ 中实现排序警告时使用了 warnings.warn 的默认类别 UserWarning，运行测试后因测试断言的是 RuntimeWarning 而失败，随后才修改为 RuntimeWarning。这是试错式调试：模型在编码时没有先明确 Python 警告体系的设计约定（RuntimeWarning 才是运行时非错误警告的正确父类），而是先写出代码再让测试失败驱动修改，缺少编码前的设计思考。
+
+3. 测试运行出现警告匹配失败后，模型没有阅读失败信息中具体的 warning type 差异（UserWarning vs RuntimeWarning），而是假设问题出在 pytest 的警告过滤配置上，继而搜索 conftest.py、pyproject.toml、pytest.ini、setup.cfg 等文件查找 filterwarnings 配置，试图通过全局抑制来解决。实际上 engine.py 中已经正确使用了 catch_warnings 抑制 RuntimeWarning，问题的真正根源只是生产代码发出了 UserWarning 而非 RuntimeWarning。模型在错误方向上浪费了数步操作，正确做法是先核对警告的 category 参数是否与测试断言一致，而非假设 pytest 配置有误。

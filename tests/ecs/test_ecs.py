@@ -407,6 +407,63 @@ class TestSparseSet:
         assert entity in ss
         assert EntityId(1) not in ss
 
+    def test_none_component_value_not_mistaken_for_missing(self):
+        @component
+        class OptionalComponent:
+            value: int | None = None
+
+        world = World()
+        e = world.create_entity()
+        world.add_component(e, OptionalComponent(value=None))
+
+        ss = world._components[OptionalComponent]
+        retrieved = ss.get(e)
+        assert retrieved is not None
+        assert retrieved.value is None
+
+        retrieved_via_getitem = ss[e]
+        assert retrieved_via_getitem is not None
+        assert retrieved_via_getitem.value is None
+
+    def test_getitem_throws_runtime_error_on_inconsistency(self):
+        from solocoder_py.ecs import ArchetypeManager
+
+        am = ArchetypeManager()
+        ss = SparseSet(Position, am)
+        entity = EntityId(0)
+        ss.insert(entity)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            ss[entity]
+
+        assert "data inconsistency" in str(exc_info.value).lower()
+        assert "SparseSet index contains entity 0" in str(exc_info.value)
+
+    def test_get_returns_default_on_inconsistency(self):
+        from solocoder_py.ecs import ArchetypeManager
+
+        am = ArchetypeManager()
+        ss = SparseSet(Position, am)
+        entity = EntityId(0)
+        ss.insert(entity)
+
+        default_pos = Position(x=-1.0, y=-1.0)
+        result = ss.get(entity, default_pos)
+        assert result is default_pos
+
+    def test_get_with_default_works(self):
+        world = World()
+        e1 = world.create_entity()
+        e2 = world.create_entity()
+        world.add_component(e1, Position(x=1.0, y=2.0))
+
+        ss = world._components[Position]
+
+        default = Position(x=0.0, y=0.0)
+        assert ss.get(e1, default).x == 1.0
+        assert ss.get(e2, default) is default
+        assert ss.get(EntityId(999), default) is default
+
 
 # ============================================================
 # Archetype Tests

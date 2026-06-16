@@ -209,7 +209,8 @@ class TestCollisionPair:
         c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
 
         p1 = CollisionPair(collider_a=c1, collider_b=c2)
-        p2 = CollisionPair(collider_a=c2, collider_b=c1)
+        with pytest.warns(RuntimeWarning):
+            p2 = CollisionPair(collider_a=c2, collider_b=c1)
 
         assert p1 == p2
         assert hash(p1) == hash(p2)
@@ -222,7 +223,8 @@ class TestCollisionPair:
 
         s = set()
         s.add(CollisionPair(collider_a=c1, collider_b=c2))
-        s.add(CollisionPair(collider_a=c2, collider_b=c1))
+        with pytest.warns(RuntimeWarning):
+            s.add(CollisionPair(collider_a=c2, collider_b=c1))
         assert len(s) == 1
 
     def test_was_swapped_false_when_already_ordered(self):
@@ -238,38 +240,97 @@ class TestCollisionPair:
         c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
         c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
 
-        pair = CollisionPair(collider_a=c2, collider_b=c1)
+        with pytest.warns(RuntimeWarning):
+            pair = CollisionPair(collider_a=c2, collider_b=c1)
         assert pair.was_swapped is True
         assert pair.collider_a is c1
         assert pair.collider_b is c2
+
+    def test_swap_emits_runtime_warning(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        with pytest.warns(RuntimeWarning, match="reordered by ID") as record:
+            CollisionPair(collider_a=c2, collider_b=c1)
+
+        assert len(record) == 1
+        assert "from_ordered" in str(record[0].message)
+        assert "'b'" in str(record[0].message)
+        assert "'a'" in str(record[0].message)
+
+    def test_already_ordered_no_warning(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            pair = CollisionPair(collider_a=c1, collider_b=c2)
+
+        assert pair.was_swapped is False
 
     def test_from_unordered_same_as_default(self):
         c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
         c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
 
-        p_default = CollisionPair(collider_a=c2, collider_b=c1)
-        p_factory = CollisionPair.from_unordered(c2, c1)
+        with pytest.warns(RuntimeWarning):
+            p_default = CollisionPair(collider_a=c2, collider_b=c1)
+        with pytest.warns(RuntimeWarning):
+            p_factory = CollisionPair.from_unordered(c2, c1)
 
         assert p_default == p_factory
         assert p_default.was_swapped == p_factory.was_swapped
         assert p_default.collider_a.id == p_factory.collider_a.id
 
+    def test_from_unordered_already_sorted_no_warning(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            pair = CollisionPair.from_unordered(c1, c2)
+
+        assert pair.was_swapped is False
+
+    def test_from_unordered_emits_same_warning(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        with pytest.warns(RuntimeWarning, match="reordered by ID"):
+            CollisionPair.from_unordered(c2, c1)
+
     def test_from_ordered_preserves_order(self):
         c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
         c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
 
-        pair = CollisionPair.from_ordered(c2, c1)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            pair = CollisionPair.from_ordered(c2, c1)
+
         assert pair.was_swapped is False
         assert pair.collider_a is c2
         assert pair.collider_b is c1
         assert pair.collider_a.id == "b"
         assert pair.collider_b.id == "a"
 
+    def test_from_ordered_never_emits_warning(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            CollisionPair.from_ordered(c1, c2)
+            CollisionPair.from_ordered(c2, c1)
+
     def test_from_ordered_not_equal_to_normalized(self):
         c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
         c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
 
-        p_normalized = CollisionPair(collider_a=c2, collider_b=c1)
+        with pytest.warns(RuntimeWarning):
+            p_normalized = CollisionPair(collider_a=c2, collider_b=c1)
         p_ordered = CollisionPair.from_ordered(c2, c1)
 
         assert p_normalized != p_ordered
@@ -283,6 +344,23 @@ class TestCollisionPair:
         assert pair.was_swapped is False
         assert pair.collider_a is c1
         assert pair.collider_b is c2
+
+    def test_from_ordered_goes_through_post_init_path(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        pair = CollisionPair.from_ordered(c2, c1)
+        assert pair._preserve_order is True
+        assert pair.was_swapped is False
+        assert pair.collider_a is c2
+        assert pair.collider_b is c1
+
+    def test_default_constructor_preserve_order_false(self):
+        c1 = Collider(id="a", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+        c2 = Collider(id="b", aabb=AABB(min_x=0, min_y=0, max_x=10, max_y=10))
+
+        pair = CollisionPair(collider_a=c1, collider_b=c2)
+        assert pair._preserve_order is False
 
 
 class TestGlobalCallbacks:

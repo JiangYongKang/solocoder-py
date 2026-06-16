@@ -1,0 +1,7 @@
+你在上一轮修复 AABB 碰撞检测引擎时遗留了两个实现质量问题，需要修复：
+
+1. models.py 中 CollisionPair 的 was_swapped 属性是一个被动标记字段，调用方必须预先知晓该属性存在并主动检查才能感知排序是否发生。提示词要求"使调用方即使不看文档也能感知到排序行为"，当前仅靠被动标记无法在构造时主动通知调用方参数已被交换。需要在 __post_init__ 中当检测到 collider 顺序被交换时输出运行时警告，让调用方在构造瞬间就能感知排序行为的发生。
+
+2. models.py 中 from_ordered 工厂方法通过 cls.__new__(cls) 完全绕过 dataclass 的 __init__ 和 __post_init__ 流程，手动赋值 collider_a、collider_b、was_swapped 三个字段来创建实例。这种做法人为制造了初始化路径分歧：默认构造函数走 dataclass 生成的 __init__ 加 __post_init__ 路径，from_ordered 走 __new__ 加手动赋值路径。如果未来在 __post_init__ 中新增除排序之外的校验逻辑，from_ordered 会静默跳过这些校验产生潜在非法对象。需要通过内部条件标记让 __post_init__ 识别是否来自工厂方法，而非完全绕过 post_init 流程。
+
+3. 修复以上问题后重新运行 poetry run pytest tests/collision/ -q，确保所有测试仍然通过。

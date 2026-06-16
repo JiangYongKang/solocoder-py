@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Tuple
 
@@ -97,26 +98,46 @@ class CollisionPair:
     that CollisionPair(A, B) and CollisionPair(B, A) are equal and have
     the same hash, which is useful for deduplication in sets and dicts.
 
-    Use the ``was_swapped`` attribute to check whether the arguments
-    were reordered during construction.
+    When the default constructor reorders its arguments (i.e. when the
+    first argument ends up as collider_b), a RuntimeWarning is emitted
+    at construction time so callers can notice the reordering even
+    without reading the documentation. Use ``pair.was_swapped`` to
+    programmatically check whether a swap occurred.
 
     Factory methods
     ---------------
     - ``from_unordered(a, b)``: Explicitly constructs a normalized pair
       (same as the default constructor, but makes the intent clear).
+      Still emits a RuntimeWarning when reordering occurs.
     - ``from_ordered(a, b)``: Preserves the given order without
-      swapping. Use this when you care about which collider is "first"
-      and which is "second".
+      swapping and without warning. Use this when you care about which
+      collider is "first" and which is "second".
     """
 
     collider_a: Collider
     collider_b: Collider
     was_swapped: bool = field(init=False, default=False)
+    _preserve_order: bool = field(init=False, default=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self._preserve_order:
+            self.was_swapped = False
+            return
         if self.collider_a.id > self.collider_b.id:
+            original_a_id = self.collider_a.id
+            original_b_id = self.collider_b.id
             self.collider_a, self.collider_b = self.collider_b, self.collider_a
             self.was_swapped = True
+            warnings.warn(
+                f"CollisionPair arguments were reordered by ID: "
+                f"collider with id '{original_a_id}' was passed as collider_a "
+                f"but is now collider_b, and collider with id '{original_b_id}' "
+                f"was passed as collider_b but is now collider_a. "
+                f"Use CollisionPair.from_ordered() to preserve the input order "
+                f"and suppress this warning.",
+                category=RuntimeWarning,
+                stacklevel=2,
+            )
 
     @classmethod
     def from_unordered(cls, collider_a: Collider, collider_b: Collider) -> "CollisionPair":
@@ -127,8 +148,9 @@ class CollisionPair:
         name makes it explicit that the pair will be reordered so that
         ``collider_a.id <= collider_b.id``.
 
-        Use ``pair.was_swapped`` to check whether the inputs were
-        swapped during construction.
+        A RuntimeWarning is emitted if the inputs are swapped during
+        construction. Use ``pair.was_swapped`` to check this
+        programmatically.
 
         Args:
             collider_a: First collider (order may change).
@@ -145,12 +167,18 @@ class CollisionPair:
         Create a CollisionPair preserving the given order.
 
         Unlike the default constructor and ``from_unordered``, this
-        factory method does NOT reorder the colliders by ID. The
-        collider passed as ``collider_a`` stays as ``collider_a``, and
-        the one passed as ``collider_b`` stays as ``collider_b``.
+        factory method does NOT reorder the colliders by ID and does
+        NOT emit a reordering warning. The collider passed as
+        ``collider_a`` stays as ``collider_a``, and the one passed as
+        ``collider_b`` stays as ``collider_b``.
 
         ``was_swapped`` will always be ``False`` for pairs created via
         this method.
+
+        Internally, this method sets a private ``_preserve_order``
+        flag before allowing ``__post_init__`` to run, so all
+        validation logic in ``__post_init__`` still executes uniformly
+        across every construction path.
 
         Use this constructor when the ordering of the two colliders
         carries meaning (e.g. "source" vs "target", "actor" vs "victim")
@@ -172,6 +200,8 @@ class CollisionPair:
         pair.collider_a = collider_a
         pair.collider_b = collider_b
         pair.was_swapped = False
+        pair._preserve_order = True
+        pair.__post_init__()
         return pair
 
     def __eq__(self, other: object) -> bool:
