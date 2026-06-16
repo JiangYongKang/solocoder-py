@@ -1,0 +1,4 @@
+你上一轮对词干提取器的修复引入了新的问题，需要修复：
+1. 上一轮为了通过最小词干长度测试，你从 DEFAULT_EXCEPTIONS 中批量删除了约五十条词条，包括 "gotten"→"get" 等。但其中部分被删除的词条（如 "gotten"）是 Porter 规则无法正确还原的真正不规则变化词——"gotten" 经 Porter 处理后输出的是 "gotten" 自身而非 "get"，移除后该词无法被正确提取。需要恢复这些被误删的不规则词条，只保留真正能被 Porter 规则正确处理的原词条。
+2. _sync_porter_config 方法通过逐个字段赋值的方式同步内部 PorterStemmer 的配置。当 StemmerConfig 未来增加新字段时，该方法不会感知到新增字段，新配置无法传播到内部组件，导致配置不一致再次出现。应该让 Stemmer 和内部 _porter 共享同一个配置对象，而不是维护两份独立拷贝再手动同步字段。
+3. 修复后重新运行 poetry run pytest tests/stemmer/ -v，需要让所有测试通过。注意修复代码而非修改测试期望值。

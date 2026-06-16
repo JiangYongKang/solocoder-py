@@ -107,23 +107,41 @@ class TextDiffer:
     ) -> List[DiffOperation]:
         refined: List[DiffOperation] = []
         i = 0
+        processed_indices: set[int] = set()
+
         while i < len(operations):
+            if i in processed_indices:
+                i += 1
+                continue
+
             op = operations[i]
+            pair_found = False
 
             if op.is_delete and i + 1 < len(operations) and operations[i + 1].is_insert:
                 delete_op = op
                 insert_op = operations[i + 1]
+                pair_found = True
+            elif op.is_insert and i + 1 < len(operations) and operations[i + 1].is_delete:
+                insert_op = op
+                delete_op = operations[i + 1]
+                pair_found = True
 
+            if pair_found:
                 old_lines = [t.content for t in delete_op.tokens]
                 new_lines = [t.content for t in insert_op.tokens]
 
                 self._refine_line_pair(delete_op, insert_op, old_lines, new_lines, fine_granularity)
 
-                refined.append(delete_op)
-                refined.append(insert_op)
+                if op.is_delete:
+                    refined.append(delete_op)
+                    refined.append(insert_op)
+                else:
+                    refined.append(insert_op)
+                    refined.append(delete_op)
+
+                processed_indices.add(i)
+                processed_indices.add(i + 1)
                 i += 2
-            elif op.is_insert and i > 0 and operations[i - 1].is_delete:
-                i += 1
             else:
                 refined.append(op)
                 i += 1
@@ -197,8 +215,48 @@ class TextDiffer:
                     tokens=extra_new_tokens,
                 ))
 
-        delete_op.sub_operations = all_sub_ops
-        insert_op.sub_operations = all_sub_ops
+        delete_sub_ops: List[DiffOperation] = []
+        insert_sub_ops: List[DiffOperation] = []
+
+        for sub_op in all_sub_ops:
+            if sub_op.is_insert:
+                insert_sub_ops.append(DiffOperation(
+                    op_type=sub_op.op_type,
+                    old_start=sub_op.old_start,
+                    old_end=sub_op.old_end,
+                    new_start=sub_op.new_start,
+                    new_end=sub_op.new_end,
+                    tokens=list(sub_op.tokens),
+                ))
+            elif sub_op.is_delete:
+                delete_sub_ops.append(DiffOperation(
+                    op_type=sub_op.op_type,
+                    old_start=sub_op.old_start,
+                    old_end=sub_op.old_end,
+                    new_start=sub_op.new_start,
+                    new_end=sub_op.new_end,
+                    tokens=list(sub_op.tokens),
+                ))
+            else:
+                delete_sub_ops.append(DiffOperation(
+                    op_type=sub_op.op_type,
+                    old_start=sub_op.old_start,
+                    old_end=sub_op.old_end,
+                    new_start=sub_op.new_start,
+                    new_end=sub_op.new_end,
+                    tokens=list(sub_op.tokens),
+                ))
+                insert_sub_ops.append(DiffOperation(
+                    op_type=sub_op.op_type,
+                    old_start=sub_op.old_start,
+                    old_end=sub_op.old_end,
+                    new_start=sub_op.new_start,
+                    new_end=sub_op.new_end,
+                    tokens=list(sub_op.tokens),
+                ))
+
+        delete_op.sub_operations = delete_sub_ops
+        insert_op.sub_operations = insert_sub_ops
 
     def unified_diff(
         self,

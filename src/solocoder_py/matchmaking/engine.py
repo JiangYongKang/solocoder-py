@@ -254,6 +254,23 @@ class MatchmakingEngine:
 
         return resolved
 
+    def _requeue_players(
+        self,
+        players: list[Player],
+        team_size: TeamSize,
+    ) -> None:
+        for p in players:
+            if p.player_id in self._player_index:
+                self._player_index.discard(p.player_id)
+            requeue_req = MatchRequest(
+                player=p,
+                team_size=team_size,
+                initial_skill_range=self.config.max_skill_range * 0.5,
+                enqueue_time=time(),
+            )
+            self._wait_queue[team_size].append(requeue_req)
+            self._player_index.add(p.player_id)
+
     def handle_match_timeout(self, match_id: str) -> Optional[Match]:
         if match_id not in self._active_matches:
             raise MatchNotFoundError(f"Match {match_id} not found")
@@ -262,24 +279,34 @@ class MatchmakingEngine:
 
         team_size = old_match.team_size
         skill_window = old_match.original_skill_range
+        old_players = old_match.all_players
 
-        for p in old_match.all_players:
+        for p in old_players:
             self._player_index.discard(p.player_id)
 
-        backup_a = self._find_backup_candidate(team_size, skill_window)
-        backup_b = self._find_backup_candidate(team_size, skill_window)
+        needed = team_size.value
+        backups_a = self._find_backup_candidates(team_size, skill_window, needed)
+        backups_b = self._find_backup_candidates(team_size, skill_window, needed)
 
-        if backup_a is not None and backup_b is not None:
-            self._player_index.discard(backup_a.player.player_id)
-            self._player_index.discard(backup_b.player.player_id)
+        if len(backups_a) == needed and len(backups_b) == needed:
+            for req in backups_a + backups_b:
+                self._player_index.discard(req.player.player_id)
 
             new_team_a = Team(team_size=team_size)
-            new_team_a.add_player(backup_a.player, backup_a)
+            for req in backups_a:
+                new_team_a.add_player(req.player, req)
+
             new_team_b = Team(team_size=team_size)
-            new_team_b.add_player(backup_b.player, backup_b)
+            for req in backups_b:
+                new_team_b.add_player(req.player, req)
+
+            assert new_team_a.is_complete
+            assert new_team_b.is_complete
 
             old_match.fail()
             del self._active_matches[match_id]
+
+            self._requeue_players(old_players, team_size)
 
             new_match = Match(
                 team_size=team_size,
@@ -292,33 +319,14 @@ class MatchmakingEngine:
             self._active_matches[new_match.match_id] = new_match
             return new_match
 
-        candidates: list[MatchRequest] = []
-        if backup_a is not None:
-            candidates.append(backup_a)
-        if backup_b is not None:
-            candidates.append(backup_b)
-
-        for req in candidates:
+        partial_backups = backups_a + backups_b
+        for req in partial_backups:
             self._player_index.discard(req.player.player_id)
-            requeue_req = MatchRequest(
-                player=req.player,
-                team_size=team_size,
-                initial_skill_range=self.config.max_skill_range * 0.5,
-                enqueue_time=time(),
-            )
-            self._wait_queue[team_size].append(requeue_req)
-            self._player_index.add(req.player.player_id)
 
-        for p in old_match.all_players:
-            if p.player_id not in self._player_index:
-                requeue_req = MatchRequest(
-                    player=p,
-                    team_size=team_size,
-                    initial_skill_range=self.config.max_skill_range * 0.5,
-                    enqueue_time=time(),
-                )
-                self._wait_queue[team_size].append(requeue_req)
-                self._player_index.add(p.player_id)
+        self._requeue_players(old_players, team_size)
+        self._requeue_players(
+            [req.player for req in partial_backups], team_size
+        )
 
         old_match.fail()
         del self._active_matches[match_id]
@@ -350,6 +358,33 @@ class MatchmakingEngine:
             if self._in_window(req.player.skill_rating, skill_window):
                 return self._backup_queue.pop(i)
         return None
+
+    def _find_backup_candidates(
+        self,
+        team_size: TeamSize,
+        skill_window: tuple[float, float],
+        count: int,
+    ) -> list[MatchRequest]:
+        found: list[MatchRequest] = []
+        remaining: list[MatchRequest] = []
+
+        for req in self._backup_queue:
+            if len(found) >= count:
+                remaining.append(req)
+                continue
+            if req.team_size != team_size:
+                remaining.append(req)
+                continue
+            if self._in_window(req.player.skill_rating, skill_window):
+                found.append(req)
+            else:
+                remaining.append(req)
+
+        if len(found) < count:
+            return []
+
+        self._backup_queue = remaining
+        return found
 
     def handle_player_cancellation(
         self,

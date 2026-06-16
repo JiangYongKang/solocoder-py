@@ -1,0 +1,5 @@
+产物不满意：
+1. Stemmer 的 __init__ 方法中，`self.config.preserve_case = False` 这一行直接修改了用户传入的 StemmerConfig 对象。如果调用方传入一个自定义配置并在创建 Stemmer 后继续依赖该配置对象的原始 preserve_case 值（例如用于日志记录或后续创建另一个实例），该值已被意外覆盖为 False，属于对外部传入对象的副作用污染，可能引发隐蔽且难以排查的调用方 bug。提示词要求 Stemmer 与内部 _porter 共享同一个配置对象以消除手动同步是正确的方向，但实现时没有对用户传入的 config 做拷贝就直接原地修改，违反了"不修改调用方持有的对象"的基础设计原则。正确做法是先深拷贝一份配置，在副本上将 preserve_case 设为 False 后传给 PorterStemmer 共享，使内部修改与外部原始配置完全隔离。
+
+过程不满意：
+过程无明显问题。

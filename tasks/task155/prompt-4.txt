@@ -1,0 +1,4 @@
+你上一轮声称 diff 模块的修复已完成但实际未做任何代码变更，模块中还存在以下两个缺陷需要修复：
+1. _refine_modified_lines 方法只检测 DELETE 后紧跟 INSERT 的连续操作对来生成细粒度 diff 信息。但 Myers 算法回溯编辑路径时可能产出 INSERT 在 DELETE 之前的序列，当出现 INSERT-DELETE 顺序时该操作对被跳过，对应位置的细粒度差异信息会丢失。需要对两种顺序都做处理。
+2. _refine_line_pair 方法中将同一个 all_sub_ops 列表同时赋给了 delete_op.sub_operations 和 insert_op.sub_operations。DELETE 操作的 sub_operations 中因此包含了 INSERT 类型的子操作，打破了操作类型的单向语义——调用方迭代 DELETE 操作的子操作时期望看到的应该是删除和不变的内容，而非新增内容。
+3. 修复后重新运行 poetry run pytest tests/diff/ -v，需要让所有测试通过。

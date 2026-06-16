@@ -1,0 +1,5 @@
+产物不满意：
+产物无明显缺陷。两个问题均得到正确修复：_refine_modified_lines 方法新增了 INSERT-DELETE 顺序的检测分支，引入 processed_indices 集合防止重复处理，同时保留了原始操作顺序；_refine_line_pair 方法拆分为 delete_sub_ops 和 insert_sub_ops 两个独立列表，INSERT 子操作只进入 insert_sub_ops，DELETE 子操作只进入 delete_sub_ops，EQUAL 子操作共享给两者，操作类型的单向语义已恢复。75 个测试全部通过。不过有两处代码质量可改进：_refine_line_pair 方法中多次使用 DiffOperation 构造函数逐个字段手动复制来创建子操作副本，这种模式分散在多处，如果 DiffOperation 数据类未来新增字段容易被遗漏，建议改用 copy.deepcopy 或实现统一的 copy 方法；test_insert_delete_order_handled 测试在构造 DiffToken 对象时使用了 `__import__('solocoder_py.diff.models', fromlist=['DiffToken']).DiffToken(...)` 的内联导入方式，写法晦涩且导入语句出现在对象构造语句之后，可读性差，应改为顶部标准导入。
+
+过程不满意：
+过程无明显问题。模型先阅读了 differ.py 源代码确认问题所在，然后编写了临时验证脚本 _debug_diff.py 来验证两个缺陷的真实存在，这是一种先验证再修复的严谨做法。修复完成后模型先用验证脚本确认修复生效，再更新并新增测试用例（新增 TestCompositeSubOpSemantics 和 TestCompositeMultiLineSubOps 两个测试类共 7 个测试），最后清理临时文件并运行完整测试套件。整个过程依次验证、修复、测试、清理，步骤清晰，没有出现反复修改或试错式调试，工具使用规范。

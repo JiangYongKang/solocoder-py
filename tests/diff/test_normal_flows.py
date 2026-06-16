@@ -180,11 +180,18 @@ class TestCompositeGranularity:
         new = "hello brave world"
         result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
         assert len(result.operations) == 2
-        assert result.operations[0].is_delete
-        assert result.operations[1].is_insert
-        assert result.operations[0].has_sub_operations
-        sub_ops = result.operations[0].sub_operations
-        assert any(op.is_insert and "brave" in [t.content for t in op.tokens] for op in sub_ops)
+        delete_op = result.operations[0]
+        insert_op = result.operations[1]
+        assert delete_op.is_delete
+        assert insert_op.is_insert
+        assert delete_op.has_sub_operations
+        assert insert_op.has_sub_operations
+        delete_sub_types = [op.op_type for op in delete_op.sub_operations]
+        insert_sub_types = [op.op_type for op in insert_op.sub_operations]
+        assert DiffOperationType.INSERT not in delete_sub_types
+        assert DiffOperationType.DELETE not in insert_sub_types
+        assert any(op.is_insert and "brave" in [t.content for t in op.tokens] for op in insert_op.sub_operations)
+        assert any(op.is_delete and "world" not in [t.content for t in op.tokens] for op in delete_op.sub_operations) or any(op.is_equal for op in delete_op.sub_operations)
 
     def test_line_plus_char_single_modified_line(self):
         from solocoder_py.diff import TextDiffer
@@ -192,12 +199,18 @@ class TestCompositeGranularity:
         old = "hello"
         new = "hallo"
         result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.CHAR))
-        assert result.operations[0].has_sub_operations
-        sub_ops = result.operations[0].sub_operations
-        has_delete = any(op.is_delete and "e" in [t.content for t in op.tokens] for op in sub_ops)
-        has_insert = any(op.is_insert and "a" in [t.content for t in op.tokens] for op in sub_ops)
-        assert has_delete
-        assert has_insert
+        delete_op = [op for op in result.operations if op.is_delete][0]
+        insert_op = [op for op in result.operations if op.is_insert][0]
+        assert delete_op.has_sub_operations
+        assert insert_op.has_sub_operations
+        delete_has_e = any(op.is_delete and "e" in [t.content for t in op.tokens] for op in delete_op.sub_operations)
+        insert_has_a = any(op.is_insert and "a" in [t.content for t in op.tokens] for op in insert_op.sub_operations)
+        assert delete_has_e
+        assert insert_has_a
+        delete_sub_types = [op.op_type for op in delete_op.sub_operations]
+        insert_sub_types = [op.op_type for op in insert_op.sub_operations]
+        assert DiffOperationType.INSERT not in delete_sub_types
+        assert DiffOperationType.DELETE not in insert_sub_types
 
     def test_line_plus_word_multiple_modified_lines(self):
         from solocoder_py.diff import TextDiffer
@@ -332,3 +345,113 @@ class TestUnifiedDiffConsistentIndexing:
                 new_start = int(new_start_str.replace("+", ""))
                 assert old_start >= 1
                 assert new_start >= 1
+
+
+class TestCompositeSubOpSemantics:
+    def test_delete_sub_ops_contains_no_insert(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "the old value is here"
+        new = "the new value is here"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
+        delete_op = [op for op in result.operations if op.is_delete][0]
+        for sub in delete_op.sub_operations:
+            assert not sub.is_insert, f"DELETE sub_operations should not contain INSERT, got {sub.op_type}"
+
+    def test_insert_sub_ops_contains_no_delete(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "the old value is here"
+        new = "the new value is here"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
+        insert_op = [op for op in result.operations if op.is_insert][0]
+        for sub in insert_op.sub_operations:
+            assert not sub.is_delete, f"INSERT sub_operations should not contain DELETE, got {sub.op_type}"
+
+    def test_both_sub_ops_contain_equal(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "hello world foo"
+        new = "hello brave world foo"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
+        delete_op = [op for op in result.operations if op.is_delete][0]
+        insert_op = [op for op in result.operations if op.is_insert][0]
+        assert any(sub.is_equal for sub in delete_op.sub_operations)
+        assert any(sub.is_equal for sub in insert_op.sub_operations)
+
+    def test_insert_delete_order_handled(self):
+        from solocoder_py.diff import TextDiffer, DiffOperation
+        differ = TextDiffer()
+
+        fake_ops = [
+            DiffOperation(op_type=DiffOperationType.EQUAL, old_start=0, old_end=1, new_start=0, new_end=1,
+                         tokens=[__import__('solocoder_py.diff.models', fromlist=['DiffToken']).DiffToken(content="A")]),
+            DiffOperation(op_type=DiffOperationType.INSERT, old_start=1, old_end=1, new_start=1, new_end=2,
+                         tokens=[__import__('solocoder_py.diff.models', fromlist=['DiffToken']).DiffToken(content="NEW")]),
+            DiffOperation(op_type=DiffOperationType.DELETE, old_start=1, old_end=2, new_start=2, new_end=2,
+                         tokens=[__import__('solocoder_py.diff.models', fromlist=['DiffToken']).DiffToken(content="OLD")]),
+            DiffOperation(op_type=DiffOperationType.EQUAL, old_start=2, old_end=3, new_start=2, new_end=3,
+                         tokens=[__import__('solocoder_py.diff.models', fromlist=['DiffToken']).DiffToken(content="B")]),
+        ]
+
+        from solocoder_py.diff.models import DiffToken
+        fake_old = [DiffToken("A"), DiffToken("OLD"), DiffToken("B")]
+        fake_new = [DiffToken("A"), DiffToken("NEW"), DiffToken("B")]
+
+        refined = differ._refine_modified_lines(fake_ops, fake_old, fake_new, DiffGranularity.WORD)
+
+        insert_processed = any(
+            op.is_insert and op.has_sub_operations for op in refined
+        )
+        delete_processed = any(
+            op.is_delete and op.has_sub_operations for op in refined
+        )
+        assert insert_processed, "INSERT-DELETE pair should be processed, INSERT should have sub_operations"
+        assert delete_processed, "INSERT-DELETE pair should be processed, DELETE should have sub_operations"
+
+    def test_operations_list_include_sub_semantics(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "abc def"
+        new = "abc XYZ def"
+        ops = differ.operations_list(
+            old, new, (DiffGranularity.LINE, DiffGranularity.WORD), include_sub=True
+        )
+        delete_op_dict = [op for op in ops if op["type"] == "delete"][0]
+        insert_op_dict = [op for op in ops if op["type"] == "insert"][0]
+        assert "sub_operations" in delete_op_dict
+        assert "sub_operations" in insert_op_dict
+        for sub in delete_op_dict["sub_operations"]:
+            assert sub["type"] != "insert"
+        for sub in insert_op_dict["sub_operations"]:
+            assert sub["type"] != "delete"
+
+
+class TestCompositeMultiLineSubOps:
+    def test_multiple_modified_lines_semantics(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "line one here\nline two here"
+        new = "line ONE here\nline TWO here"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.WORD))
+        delete_op = [op for op in result.operations if op.is_delete][0]
+        insert_op = [op for op in result.operations if op.is_insert][0]
+        for sub in delete_op.sub_operations:
+            assert sub.op_type != DiffOperationType.INSERT
+        for sub in insert_op.sub_operations:
+            assert sub.op_type != DiffOperationType.DELETE
+
+    def test_char_level_semantics(self):
+        from solocoder_py.diff import TextDiffer
+        differ = TextDiffer()
+        old = "test123"
+        new = "test456"
+        result = differ.diff(old, new, (DiffGranularity.LINE, DiffGranularity.CHAR))
+        delete_op = [op for op in result.operations if op.is_delete][0]
+        insert_op = [op for op in result.operations if op.is_insert][0]
+        delete_sub_types = set(s.op_type for s in delete_op.sub_operations)
+        insert_sub_types = set(s.op_type for s in insert_op.sub_operations)
+        assert DiffOperationType.INSERT not in delete_sub_types
+        assert DiffOperationType.DELETE not in insert_sub_types
+        assert DiffOperationType.EQUAL in delete_sub_types
+        assert DiffOperationType.EQUAL in insert_sub_types

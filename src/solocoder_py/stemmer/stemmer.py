@@ -15,6 +15,7 @@ from .porter import (
 DEFAULT_EXCEPTIONS: dict[str, str] = {
     "ran": "run",
     "mice": "mouse",
+    "mouse": "mouse",
     "better": "good",
     "best": "good",
     "worse": "bad",
@@ -25,6 +26,7 @@ DEFAULT_EXCEPTIONS: dict[str, str] = {
     "teeth": "tooth",
     "feet": "foot",
     "geese": "goose",
+    "goose": "goose",
     "was": "be",
     "were": "be",
     "been": "be",
@@ -36,14 +38,23 @@ DEFAULT_EXCEPTIONS: dict[str, str] = {
     "does": "do",
     "did": "do",
     "went": "go",
+    "goes": "go",
+    "gone": "go",
     "said": "say",
+    "say": "say",
+    "says": "say",
+    "saying": "say",
     "got": "get",
+    "gotten": "get",
     "made": "make",
     "knew": "know",
+    "known": "know",
     "thought": "think",
     "saw": "see",
+    "seen": "see",
     "came": "come",
     "took": "take",
+    "taken": "take",
 }
 
 
@@ -58,12 +69,9 @@ class Stemmer:
         exceptions: dict[str, str] | None = None,
     ) -> None:
         self.config = config or StemmerConfig()
-        self._porter_config = StemmerConfig(
-            level=self.config.level,
-            min_stem_length=self.config.min_stem_length,
-            preserve_case=False,
-        )
-        self._porter = PorterStemmer(self._porter_config)
+        self._preserve_case = self.config.preserve_case
+        self.config.preserve_case = False
+        self._porter = PorterStemmer(self.config)
         self._exceptions: dict[str, str] = {}
         if exceptions is not None:
             for word, stem in exceptions.items():
@@ -71,10 +79,6 @@ class Stemmer:
         else:
             for word, stem in DEFAULT_EXCEPTIONS.items():
                 self._exceptions[word.lower()] = stem.lower()
-
-    def _sync_porter_config(self) -> None:
-        self._porter_config.level = self.config.level
-        self._porter_config.min_stem_length = self.config.min_stem_length
 
     def add_exception(self, word: str, stem: str) -> None:
         self._exceptions[word.lower()] = stem.lower()
@@ -96,9 +100,7 @@ class Stemmer:
         if not _is_english_word(word):
             return word
 
-        self._sync_porter_config()
-
-        case_style = _detect_case(word) if self.config.preserve_case else 'lower'
+        case_style = _detect_case(word) if self._preserve_case else 'lower'
         word_lower = word.lower()
 
         if word_lower in self._exceptions:
@@ -111,7 +113,7 @@ class Stemmer:
                 if len(result) < self.config.min_stem_length:
                     result = word_lower
 
-        if self.config.preserve_case:
+        if self._preserve_case:
             result = _apply_case(result, case_style)
 
         return result
@@ -126,4 +128,3 @@ class Stemmer:
     @aggressiveness.setter
     def aggressiveness(self, level: AggressivenessLevel) -> None:
         self.config.level = level
-        self._sync_porter_config()

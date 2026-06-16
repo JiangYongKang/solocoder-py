@@ -223,6 +223,34 @@ class TestConfirmationTimeout:
         assert "a" not in all_ids
         assert "b" not in all_ids
 
+    def test_timeout_refill_success_original_players_requeued(self, engine, base_time):
+        engine.enqueue(Player("a", 1000.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
+        engine.enqueue(Player("b", 1020.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
+
+        engine.tick(now=base_time)
+
+        backup_a = Player("bk_a", 1010.0)
+        backup_b = Player("bk_b", 1015.0)
+        engine.add_to_backup(MatchRequest(
+            player=backup_a, team_size=TeamSize.ONE_V_ONE,
+            initial_skill_range=100.0, enqueue_time=base_time,
+        ))
+        engine.add_to_backup(MatchRequest(
+            player=backup_b, team_size=TeamSize.ONE_V_ONE,
+            initial_skill_range=100.0, enqueue_time=base_time,
+        ))
+
+        after_timeout = base_time + engine.config.confirmation_timeout + 1.0
+        engine.tick(now=after_timeout)
+
+        waiting_ids: set[str] = set()
+        for req in engine._wait_queue[TeamSize.ONE_V_ONE]:
+            waiting_ids.add(req.player.player_id)
+        assert "a" in waiting_ids
+        assert "b" in waiting_ids
+        assert "a" in engine._player_index
+        assert "b" in engine._player_index
+
     def test_timeout_no_backup_fails_match(self, engine, base_time):
         engine.enqueue(Player("a", 1000.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
         engine.enqueue(Player("b", 1020.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
@@ -257,6 +285,13 @@ class TestConfirmationTimeout:
 
         assert len(resolved) == 0
 
+        waiting_ids: set[str] = set()
+        for req in engine._wait_queue[TeamSize.ONE_V_ONE]:
+            waiting_ids.add(req.player.player_id)
+        assert "a" in waiting_ids
+        assert "b" in waiting_ids
+        assert "bk_a" in waiting_ids
+
     def test_confirmed_match_not_affected_by_timeout(self, engine, base_time):
         engine.enqueue(Player("a", 1000.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
         engine.enqueue(Player("b", 1020.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
@@ -272,7 +307,7 @@ class TestConfirmationTimeout:
 
         assert match.status == MatchStatus.CONFIRMED
 
-    def test_timeout_2v2_both_teams_replaced(self, base_time):
+    def test_timeout_2v2_both_teams_complete(self, base_time):
         config = MatchmakingConfig(confirmation_timeout=10.0)
         eng = MatchmakingEngine(config=config)
 
@@ -284,11 +319,8 @@ class TestConfirmationTimeout:
         assert len(matches) == 1
         old_match_id = matches[0].match_id
 
-        bk1 = Player("bk1", 1005.0)
-        bk2 = Player("bk2", 1010.0)
-        bk3 = Player("bk3", 1015.0)
-        bk4 = Player("bk4", 1020.0)
-        for bk in [bk1, bk2, bk3, bk4]:
+        backups = [Player(f"bk{i}", 1005.0 + i * 3.0) for i in range(4)]
+        for bk in backups:
             eng.add_to_backup(MatchRequest(
                 player=bk, team_size=TeamSize.TWO_V_TWO,
                 initial_skill_range=100.0, enqueue_time=base_time,
@@ -300,10 +332,93 @@ class TestConfirmationTimeout:
         with pytest.raises(MatchNotFoundError):
             eng.get_active_match(old_match_id)
 
-        if resolved:
-            new_match = resolved[-1]
-            assert new_match.status == MatchStatus.MATCHED
-            assert new_match.team_size == TeamSize.TWO_V_TWO
-            old_ids = {f"p{i}" for i in range(4)}
-            new_ids = {p.player_id for p in new_match.all_players}
-            assert len(old_ids & new_ids) == 0
+        assert len(resolved) >= 1
+        new_match = resolved[-1]
+        assert new_match.status == MatchStatus.MATCHED
+        assert new_match.team_size == TeamSize.TWO_V_TWO
+
+        assert new_match.team_a.is_complete
+        assert new_match.team_b.is_complete
+        assert len(new_match.team_a.members) == 2
+        assert len(new_match.team_b.members) == 2
+
+        old_ids = {f"p{i}" for i in range(4)}
+        backup_ids = {f"bk{i}" for i in range(4)}
+        new_ids = {p.player_id for p in new_match.all_players}
+        assert len(new_ids) == 4
+        assert len(old_ids & new_ids) == 0
+        assert new_ids.issubset(backup_ids)
+
+    def test_timeout_2v2_refill_success_original_players_requeued(self, base_time):
+        config = MatchmakingConfig(confirmation_timeout=10.0)
+        eng = MatchmakingEngine(config=config)
+
+        players = [Player(f"p{i}", 1000.0 + i * 5.0) for i in range(4)]
+        for p in players:
+            eng.enqueue(p, TeamSize.TWO_V_TWO, 50.0, enqueue_time=base_time)
+
+        eng.tick(now=base_time)
+
+        backups = [Player(f"bk{i}", 1005.0 + i * 3.0) for i in range(4)]
+        for bk in backups:
+            eng.add_to_backup(MatchRequest(
+                player=bk, team_size=TeamSize.TWO_V_TWO,
+                initial_skill_range=100.0, enqueue_time=base_time,
+            ))
+
+        after_timeout = base_time + config.confirmation_timeout + 1.0
+        eng.tick(now=after_timeout)
+
+        waiting_ids: set[str] = set()
+        for req in eng._wait_queue[TeamSize.TWO_V_TWO]:
+            waiting_ids.add(req.player.player_id)
+
+        for i in range(4):
+            assert f"p{i}" in waiting_ids
+            assert f"p{i}" in eng._player_index
+
+    def test_timeout_3v3_both_teams_complete(self, base_time):
+        config = MatchmakingConfig(confirmation_timeout=10.0)
+        eng = MatchmakingEngine(config=config)
+
+        players = [Player(f"p{i}", 1000.0 + i * 2.0) for i in range(6)]
+        for p in players:
+            eng.enqueue(p, TeamSize.THREE_V_THREE, 100.0, enqueue_time=base_time)
+
+        matches = eng.tick(now=base_time)
+        assert len(matches) == 1
+        old_match_id = matches[0].match_id
+
+        backups = [Player(f"bk{i}", 1010.0 + i * 2.0) for i in range(6)]
+        for bk in backups:
+            eng.add_to_backup(MatchRequest(
+                player=bk, team_size=TeamSize.THREE_V_THREE,
+                initial_skill_range=200.0, enqueue_time=base_time,
+            ))
+
+        after_timeout = base_time + config.confirmation_timeout + 1.0
+        resolved = eng.tick(now=after_timeout)
+
+        with pytest.raises(MatchNotFoundError):
+            eng.get_active_match(old_match_id)
+
+        assert len(resolved) >= 1
+        new_match = resolved[-1]
+        assert new_match.team_size == TeamSize.THREE_V_THREE
+
+        assert new_match.team_a.is_complete
+        assert new_match.team_b.is_complete
+        assert len(new_match.team_a.members) == 3
+        assert len(new_match.team_b.members) == 3
+
+        old_ids = {f"p{i}" for i in range(6)}
+        new_ids = {p.player_id for p in new_match.all_players}
+        assert len(new_ids) == 6
+        assert len(old_ids & new_ids) == 0
+
+        waiting_ids: set[str] = set()
+        for req in eng._wait_queue[TeamSize.THREE_V_THREE]:
+            waiting_ids.add(req.player.player_id)
+        for i in range(6):
+            assert f"p{i}" in waiting_ids
+            assert f"p{i}" in eng._player_index
