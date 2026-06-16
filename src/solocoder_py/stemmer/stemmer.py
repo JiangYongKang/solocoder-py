@@ -14,83 +14,36 @@ from .porter import (
 
 DEFAULT_EXCEPTIONS: dict[str, str] = {
     "ran": "run",
-    "runs": "run",
-    "running": "run",
     "mice": "mouse",
-    "mouse": "mouse",
     "better": "good",
     "best": "good",
     "worse": "bad",
     "worst": "bad",
     "men": "man",
-    "man": "man",
     "women": "woman",
-    "woman": "woman",
     "children": "child",
-    "child": "child",
     "teeth": "tooth",
-    "tooth": "tooth",
     "feet": "foot",
-    "foot": "foot",
     "geese": "goose",
-    "goose": "goose",
     "was": "be",
     "were": "be",
-    "be": "be",
     "been": "be",
-    "being": "be",
     "am": "be",
     "is": "be",
     "are": "be",
-    "have": "have",
     "has": "have",
     "had": "have",
-    "having": "have",
-    "do": "do",
     "does": "do",
     "did": "do",
-    "doing": "do",
-    "go": "go",
-    "goes": "go",
     "went": "go",
-    "gone": "go",
-    "going": "go",
-    "say": "say",
-    "says": "say",
     "said": "say",
-    "saying": "say",
-    "get": "get",
-    "gets": "get",
     "got": "get",
-    "gotten": "get",
-    "getting": "get",
-    "make": "make",
-    "makes": "make",
     "made": "make",
-    "making": "make",
-    "know": "know",
-    "knows": "know",
     "knew": "know",
-    "known": "know",
-    "knowing": "know",
-    "think": "think",
-    "thinks": "think",
     "thought": "think",
-    "thinking": "think",
-    "see": "see",
-    "sees": "see",
     "saw": "see",
-    "seen": "see",
-    "seeing": "see",
-    "come": "come",
-    "comes": "come",
     "came": "come",
-    "coming": "come",
-    "take": "take",
-    "takes": "take",
     "took": "take",
-    "taken": "take",
-    "taking": "take",
 }
 
 
@@ -105,12 +58,12 @@ class Stemmer:
         exceptions: dict[str, str] | None = None,
     ) -> None:
         self.config = config or StemmerConfig()
-        porter_config = StemmerConfig(
+        self._porter_config = StemmerConfig(
             level=self.config.level,
             min_stem_length=self.config.min_stem_length,
             preserve_case=False,
         )
-        self._porter = PorterStemmer(porter_config)
+        self._porter = PorterStemmer(self._porter_config)
         self._exceptions: dict[str, str] = {}
         if exceptions is not None:
             for word, stem in exceptions.items():
@@ -118,6 +71,10 @@ class Stemmer:
         else:
             for word, stem in DEFAULT_EXCEPTIONS.items():
                 self._exceptions[word.lower()] = stem.lower()
+
+    def _sync_porter_config(self) -> None:
+        self._porter_config.level = self.config.level
+        self._porter_config.min_stem_length = self.config.min_stem_length
 
     def add_exception(self, word: str, stem: str) -> None:
         self._exceptions[word.lower()] = stem.lower()
@@ -139,16 +96,14 @@ class Stemmer:
         if not _is_english_word(word):
             return word
 
+        self._sync_porter_config()
+
         case_style = _detect_case(word) if self.config.preserve_case else 'lower'
         word_lower = word.lower()
 
-        result = None
         if word_lower in self._exceptions:
-            exception_result = self._exceptions[word_lower]
-            if len(exception_result) >= self.config.min_stem_length:
-                result = exception_result
-
-        if result is None:
+            result = self._exceptions[word_lower]
+        else:
             if len(word_lower) <= self.config.min_stem_length:
                 result = word_lower
             else:
@@ -171,4 +126,4 @@ class Stemmer:
     @aggressiveness.setter
     def aggressiveness(self, level: AggressivenessLevel) -> None:
         self.config.level = level
-        self._porter.config.level = level
+        self._sync_porter_config()

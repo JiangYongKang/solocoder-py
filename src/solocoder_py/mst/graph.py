@@ -138,7 +138,7 @@ class Kruskal(Generic[T]):
 
         for edge in edges:
             if uf.union(edge.u, edge.v):
-                forest_edges.append(ForestEdge(edge=edge, component_id=0))
+                forest_edges.append(ForestEdge(edge=edge, component_id=-1))
                 if len(forest_edges) == v - 1:
                     break
 

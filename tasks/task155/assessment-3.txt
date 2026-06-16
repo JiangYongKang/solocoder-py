@@ -1,0 +1,10 @@
+产物不满意：
+1. differ.py 的 _refine_modified_lines 方法在第 113 行只检测 DELETE 后紧跟 INSERT 的连续操作对，但 Myers 算法在回溯编辑路径时可能生成 INSERT 后紧跟 DELETE 的操作序列。当出现这种 INSERT-DELETE 顺序时，该操作对被跳过而未生成 sub_operations，导致该修改位置的细粒度 diff 信息丢失。虽然这种顺序在实际文本对比中较罕见，但提示词要求的"先按行第一轮比较再在变更行内按词第二轮精确标注"功能对这种边界情况覆盖不完整，调用方在特定输入下无法获得细粒度差异标注。
+2. differ.py 的 _refine_line_pair 方法在第 200-201 行将 delete_op.sub_operations 和 insert_op.sub_operations 都设置为同一个 all_sub_ops 可变列表。DELETE 类型操作的 sub_operations 中因此包含了 INSERT 类型的子操作。例如 test_line_plus_word_single_modified_line 测试中 delete_op.sub_operations 里出现了内容为 brave 的 INSERT 操作。这种设计打破了操作类型的单向语义：调用方迭代 DELETE 操作的 sub_operations 时期望只看到删除相关的细粒度变化，实际却拿到了新增内容。虽然不影响当前功能正确性，但这种 API 语义不一致在复杂消费场景下可能引发误判。
+
+过程不满意：
+1. 模型在会话开头即称"这些问题我在上一轮对话中已经全部修复了"，但整个 session 从未读取 src/solocoder_py/diff/ 中任一源代码文件。提示词明确要求修复 diff 模块的三项具体缺陷，模型仅运行 pytest 看到 68 passed 就断言修复完成，未通过阅读 differ.py、unified_diff.py 等文件展示每项修复对应的代码位置与修改逻辑。这属于幻觉与虚假完成：把测试通过等同于修复完成，跳过了对修复内容的实质性验证环节。正确做法是先逐文件检查每个修复点的实际代码实现，再运行测试作为最终确认。
+2. 模型在项目根目录创建了临时验证脚本 _verify_fixes.py，运行后又将其删除。将临时脚本直接写入项目根目录是不规范的工程实践，可能干扰项目工具链（如 pytest 收集规则），也不符合临时文件应放入特定临时目录的约定。验证逻辑的正确做法是直接在 tests/diff/ 下编写针对性测试用例，或在 Python 交互式环境中验证修改效果，不应在项目根目录遗留临时文件。
+3. 模型在收到提示词后没有进行任何需求分析或制定 TodoList 就直接进入验证环节。提示词涉及三项具备相当复杂度的修复需求：组合粒度架构设计、上下文 token 部分截取算法、header 索引统一规范。合理的流程应先创建 TodoList 规划逐一排查这些修复点的存在性和正确性，而非一步跳过分析直接运行测试。
+4. 会话记录中 toolName 为 run_command 的调用参数末尾携带 undefined 字面值（command 行：poetry run pytest tests/diff/ -v undefined），Write 工具的 changes 字段也为 undefined。这些参数值格式异常，表明模型在生成工具调用时存在参数质量缺陷，虽然未影响实际执行，但降低了思考过程记录的可信度和可读性。
+5. 模型在整个 session 中未对 diff 包做任何代码变更或文件读取，仅执行了一次 pytest 命令和创建删除临时脚本。提示词本意是让模型实施代码修复，而模型将修复任务曲解为"确认已有代码能通过测试"的验证任务。这属于对故障修复类提示词的根本性目标理解偏差，模型没有认识到修复任务的核心在于主动定位并解决代码缺陷而非被动确认代码运行状态。

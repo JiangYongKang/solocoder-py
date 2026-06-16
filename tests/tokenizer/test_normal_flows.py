@@ -96,8 +96,38 @@ class TestEnglishTokenization:
         result = tokenizer.tokenize(text)
         strings = result.to_strings()
 
-        assert "don" in strings
-        assert "t" in strings
+        assert len(strings) == 9
+
+        assert strings == ["don", "'", "t", "won", "'", "t", "can", "'", "t"]
+
+        assert result.tokens[0].script == ScriptType.LATIN
+        assert result.tokens[1].script == ScriptType.PUNCTUATION
+        assert result.tokens[2].script == ScriptType.LATIN
+        assert result.tokens[3].script == ScriptType.LATIN
+        assert result.tokens[4].script == ScriptType.PUNCTUATION
+        assert result.tokens[5].script == ScriptType.LATIN
+        assert result.tokens[6].script == ScriptType.LATIN
+        assert result.tokens[7].script == ScriptType.PUNCTUATION
+        assert result.tokens[8].script == ScriptType.LATIN
+
+        assert result.tokens[0].start == 0
+        assert result.tokens[0].end == 3
+        assert result.tokens[1].start == 3
+        assert result.tokens[1].end == 4
+        assert result.tokens[2].start == 4
+        assert result.tokens[2].end == 5
+        assert result.tokens[3].start == 6
+        assert result.tokens[3].end == 9
+        assert result.tokens[4].start == 9
+        assert result.tokens[4].end == 10
+        assert result.tokens[5].start == 10
+        assert result.tokens[5].end == 11
+        assert result.tokens[6].start == 12
+        assert result.tokens[6].end == 15
+        assert result.tokens[7].start == 15
+        assert result.tokens[7].end == 16
+        assert result.tokens[8].start == 16
+        assert result.tokens[8].end == 17
 
 
 class TestMixedTextTokenization:

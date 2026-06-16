@@ -200,9 +200,14 @@ class TestConfirmationTimeout:
         match = matches[0]
         assert match.status == MatchStatus.MATCHED
 
-        backup = Player("bk", 1010.0)
+        backup_a = Player("bk_a", 1010.0)
+        backup_b = Player("bk_b", 1015.0)
         engine.add_to_backup(MatchRequest(
-            player=backup, team_size=TeamSize.ONE_V_ONE,
+            player=backup_a, team_size=TeamSize.ONE_V_ONE,
+            initial_skill_range=100.0, enqueue_time=base_time,
+        ))
+        engine.add_to_backup(MatchRequest(
+            player=backup_b, team_size=TeamSize.ONE_V_ONE,
             initial_skill_range=100.0, enqueue_time=base_time,
         ))
 
@@ -210,10 +215,13 @@ class TestConfirmationTimeout:
         resolved = engine.tick(now=after_timeout)
 
         assert len(resolved) >= 1
-        updated = resolved[-1]
-        assert updated.status == MatchStatus.CONFIRMED
-        all_ids = {p.player_id for p in updated.all_players}
-        assert "bk" in all_ids
+        new_match = resolved[-1]
+        assert new_match.status == MatchStatus.MATCHED
+        all_ids = {p.player_id for p in new_match.all_players}
+        assert "bk_a" in all_ids
+        assert "bk_b" in all_ids
+        assert "a" not in all_ids
+        assert "b" not in all_ids
 
     def test_timeout_no_backup_fails_match(self, engine, base_time):
         engine.enqueue(Player("a", 1000.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
@@ -227,6 +235,27 @@ class TestConfirmationTimeout:
 
         with pytest.raises(MatchNotFoundError):
             engine.get_active_match(match_id)
+
+    def test_timeout_partial_backup_requeues_all(self, engine, base_time):
+        engine.enqueue(Player("a", 1000.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
+        engine.enqueue(Player("b", 1020.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
+
+        matches = engine.tick(now=base_time)
+        old_match_id = matches[0].match_id
+
+        backup_a = Player("bk_a", 1010.0)
+        engine.add_to_backup(MatchRequest(
+            player=backup_a, team_size=TeamSize.ONE_V_ONE,
+            initial_skill_range=100.0, enqueue_time=base_time,
+        ))
+
+        after_timeout = base_time + engine.config.confirmation_timeout + 1.0
+        resolved = engine.tick(now=after_timeout)
+
+        with pytest.raises(MatchNotFoundError):
+            engine.get_active_match(old_match_id)
+
+        assert len(resolved) == 0
 
     def test_confirmed_match_not_affected_by_timeout(self, engine, base_time):
         engine.enqueue(Player("a", 1000.0), TeamSize.ONE_V_ONE, 50.0, enqueue_time=base_time)
@@ -242,3 +271,39 @@ class TestConfirmationTimeout:
         assert len(timeout_matches) == 0
 
         assert match.status == MatchStatus.CONFIRMED
+
+    def test_timeout_2v2_both_teams_replaced(self, base_time):
+        config = MatchmakingConfig(confirmation_timeout=10.0)
+        eng = MatchmakingEngine(config=config)
+
+        players = [Player(f"p{i}", 1000.0 + i * 5.0) for i in range(4)]
+        for p in players:
+            eng.enqueue(p, TeamSize.TWO_V_TWO, 50.0, enqueue_time=base_time)
+
+        matches = eng.tick(now=base_time)
+        assert len(matches) == 1
+        old_match_id = matches[0].match_id
+
+        bk1 = Player("bk1", 1005.0)
+        bk2 = Player("bk2", 1010.0)
+        bk3 = Player("bk3", 1015.0)
+        bk4 = Player("bk4", 1020.0)
+        for bk in [bk1, bk2, bk3, bk4]:
+            eng.add_to_backup(MatchRequest(
+                player=bk, team_size=TeamSize.TWO_V_TWO,
+                initial_skill_range=100.0, enqueue_time=base_time,
+            ))
+
+        after_timeout = base_time + config.confirmation_timeout + 1.0
+        resolved = eng.tick(now=after_timeout)
+
+        with pytest.raises(MatchNotFoundError):
+            eng.get_active_match(old_match_id)
+
+        if resolved:
+            new_match = resolved[-1]
+            assert new_match.status == MatchStatus.MATCHED
+            assert new_match.team_size == TeamSize.TWO_V_TWO
+            old_ids = {f"p{i}" for i in range(4)}
+            new_ids = {p.player_id for p in new_match.all_players}
+            assert len(old_ids & new_ids) == 0

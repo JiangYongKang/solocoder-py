@@ -16,8 +16,6 @@ class TarjanSCC:
         self._stack_set: Set[int] = set()
         self._time: int = 0
         self._components: List[List[int]] = []
-        self._node_to_component: Dict[int, int] = {}
-        self._component_to_nodes: Dict[int, List[int]] = {}
         self._result: SCCResult | None = None
 
     def find_sccs(self) -> SCCResult:
@@ -30,25 +28,23 @@ class TarjanSCC:
         self._stack_set = set()
         self._time = 0
         self._components = []
-        self._node_to_component = {}
-        self._component_to_nodes = {}
 
         for node in self._graph.nodes:
             if node not in self._disc:
                 self._dfs(node)
 
         reversed_components = list(reversed(self._components))
-        self._node_to_component = {}
-        self._component_to_nodes = {}
+        node_to_component: Dict[int, int] = {}
+        component_to_nodes: Dict[int, List[int]] = {}
 
         for new_cid, component in enumerate(reversed_components):
-            self._component_to_nodes[new_cid] = list(component)
+            component_to_nodes[new_cid] = list(component)
             for node in component:
-                self._node_to_component[node] = new_cid
+                node_to_component[node] = new_cid
 
         self._result = SCCResult(
-            node_to_component=dict(self._node_to_component),
-            component_to_nodes=dict(self._component_to_nodes),
+            node_to_component=node_to_component,
+            component_to_nodes=component_to_nodes,
             components=[list(c) for c in reversed_components],
         )
         return self._result

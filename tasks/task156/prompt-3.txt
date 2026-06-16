@@ -1,0 +1,3 @@
+你实现的文本摘要器模块还存在一处遗漏问题，需要修复：
+1. 上一轮修复了配置类的 position_weight_factor 默认值，但模块中便捷函数的同名参数默认值仍为旧值 1.0，导致调用方不显式传参时位置权重不生效。需要将便捷函数的 position_weight_factor 默认值与配置类保持一致。
+2. 修复后重新运行 poetry run pytest tests/summarizer/ -v，需要让所有测试通过。

@@ -172,6 +172,7 @@ class TestMinHashLSH:
         sig = mh.compute_signature("test")
         lsh.insert(42, sig)
         assert lsh.get_signature(42) == sig
+        assert lsh.get_signature(99) is None
 
     def test_signature_rows_discarded_exposed(self):
         lsh_divisible = MinHashLSH(num_perm=128, num_bands=16)

@@ -248,16 +248,81 @@ class MatchmakingEngine:
         for match_id in timed_out_match_ids:
             if match_id not in self._active_matches:
                 continue
-            match = self._active_matches[match_id]
-            timed_out_player_id = match.team_a.members[0].player_id
-            try:
-                updated = self.handle_player_cancellation(match_id, timed_out_player_id)
-                updated.confirm()
-                resolved.append(updated)
-            except NoCandidateError:
-                pass
+            result = self.handle_match_timeout(match_id)
+            if result is not None:
+                resolved.append(result)
 
         return resolved
+
+    def handle_match_timeout(self, match_id: str) -> Optional[Match]:
+        if match_id not in self._active_matches:
+            raise MatchNotFoundError(f"Match {match_id} not found")
+
+        old_match = self._active_matches[match_id]
+
+        team_size = old_match.team_size
+        skill_window = old_match.original_skill_range
+
+        for p in old_match.all_players:
+            self._player_index.discard(p.player_id)
+
+        backup_a = self._find_backup_candidate(team_size, skill_window)
+        backup_b = self._find_backup_candidate(team_size, skill_window)
+
+        if backup_a is not None and backup_b is not None:
+            self._player_index.discard(backup_a.player.player_id)
+            self._player_index.discard(backup_b.player.player_id)
+
+            new_team_a = Team(team_size=team_size)
+            new_team_a.add_player(backup_a.player, backup_a)
+            new_team_b = Team(team_size=team_size)
+            new_team_b.add_player(backup_b.player, backup_b)
+
+            old_match.fail()
+            del self._active_matches[match_id]
+
+            new_match = Match(
+                team_size=team_size,
+                team_a=new_team_a,
+                team_b=new_team_b,
+                status=MatchStatus.MATCHED,
+                created_at=time(),
+                original_skill_range=skill_window,
+            )
+            self._active_matches[new_match.match_id] = new_match
+            return new_match
+
+        candidates: list[MatchRequest] = []
+        if backup_a is not None:
+            candidates.append(backup_a)
+        if backup_b is not None:
+            candidates.append(backup_b)
+
+        for req in candidates:
+            self._player_index.discard(req.player.player_id)
+            requeue_req = MatchRequest(
+                player=req.player,
+                team_size=team_size,
+                initial_skill_range=self.config.max_skill_range * 0.5,
+                enqueue_time=time(),
+            )
+            self._wait_queue[team_size].append(requeue_req)
+            self._player_index.add(req.player.player_id)
+
+        for p in old_match.all_players:
+            if p.player_id not in self._player_index:
+                requeue_req = MatchRequest(
+                    player=p,
+                    team_size=team_size,
+                    initial_skill_range=self.config.max_skill_range * 0.5,
+                    enqueue_time=time(),
+                )
+                self._wait_queue[team_size].append(requeue_req)
+                self._player_index.add(p.player_id)
+
+        old_match.fail()
+        del self._active_matches[match_id]
+        return None
 
     def tick(self, now: Optional[float] = None) -> list[Match]:
         current_time = now if now is not None else time()
