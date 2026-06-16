@@ -1,0 +1,3 @@
+你在上一轮将配置共享机制重构为 Stemmer 和内部 PorterStemmer 共享同一个配置对象，消除了 _sync_porter_config 的手动同步问题。但实现中存在一个副作用污染缺陷，需要修复：
+1. Stemmer.__init__ 中通过 `self.config.preserve_case = False` 直接修改了用户传入的 StemmerConfig 对象。正确做法是先对用户传入的 config 做深拷贝，在副本上将 preserve_case 设为 False 后传给 PorterStemmer，确保外部原始配置不被污染。同时需要在 stem 方法中通过 `self._preserve_case` 而非 `self.config.preserve_case` 来获取用户的原始大小写偏好，保持当前已正确实现的大小写处理逻辑不变。
+2. 修复后重新运行 poetry run pytest tests/stemmer/ -v，需要让所有测试通过。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 from typing import Iterable
 
@@ -68,8 +69,9 @@ class Stemmer:
         config: StemmerConfig | None = None,
         exceptions: dict[str, str] | None = None,
     ) -> None:
-        self.config = config or StemmerConfig()
-        self._preserve_case = self.config.preserve_case
+        user_config = config or StemmerConfig()
+        self._preserve_case = user_config.preserve_case
+        self.config = copy.deepcopy(user_config)
         self.config.preserve_case = False
         self._porter = PorterStemmer(self.config)
         self._exceptions: dict[str, str] = {}
