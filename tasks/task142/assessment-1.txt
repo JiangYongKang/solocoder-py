@@ -1,0 +1,9 @@
+产物不满意：
+1. limiter.py 的 `_ChunkedByteStream._from_readable` 方法在流读取异常时用 `self._buffer.tell()` 获取已读字节数来构造 `IncompleteReadError`，但 `_buffer` 这个 BytesIO 对象自构造后从未被写入数据，`tell()` 始终返回 0，导致连接中断场景下 `received_bytes` 永远为 0，丢失了中断前实际已读取字节数的信息。测试 `test_connection_interrupt_stream_raises_incomplete` 只校验了异常类型而未断言 received_bytes 的值，未能暴露此缺陷。根因是忘记在每次成功读取后调用 `_buffer.write(chunk)` 更新缓冲位置，应补上写入逻辑或用整数计数器替代 BytesIO。
+2. limiter.py 的 `safe_process` 方法在捕获 `PayloadTooLargeError` 后构造 LimitResult 时，将 `total_read_bytes` 硬编码为 `self._config.max_body_bytes + 1`，丢弃了异常对象自身的 `received_bytes` 属性。当 Content-Length 快速拒绝路径触发时实际读取字节数为 0（尚未读任何数据），但统计结果仍记为 max_body_bytes + 1，导致 LimitStats 的统计数据失真。根因是异常对象携带的有效信息未被利用，应改为 `total_read_bytes=exc.received_bytes`。
+3. limiter.py 中 `process_request` 与 `safe_process` 两个方法对 `PayloadTooLargeError` 和 `IncompleteReadError` 的错误响应构造逻辑完全重复，分别在两处硬编码了 413 和 400 响应的 status_code、body 结构以及错误消息字符串。后续修改响应格式时需同步改动两个方法，容易遗漏导致不一致。应提取 `_build_too_large_response` 和 `_build_incomplete_response` 两个私有方法消除重复，使两条路径共享同一份响应构造代码。
+4. `_ChunkedByteStream.__init__` 中定义了 `self._exhausted = False` 字段，但在整个类的任何方法中都从未被读取或赋值修改，属于无用的死代码。此外当 body_source 为 list 或 tuple 时 `__iter__` 方法逐元素遍历，完全忽略配置的 chunk_size 参数，降低了配置语义的一致性。
+
+过程不满意：
+1. 模型在尚未阅读任何现有模块代码的情况下就在第 4 行通过 todo_write 创建了 6 项子任务计划，之后才开始阅读 pyproject.toml 和 bulkhead、interceptor 等已有模块来了解项目约定与代码风格。这违反了标注规范中"应先分析需求文档和代码骨架再规划"的要求，正确的顺序应是先探索完项目骨架和现有模块，理解整体架构和代码约定后，再制定具体的任务分解与实施计划。
+2. 测试发现 Content-Length 短路径未抛出异常的失败后，模型在第 352 行和第 361 行连续两次用 view_files 查看同一个文件 limiter.py 的相同内容，之后才进行 edit_file_search_replace 修复。这种重复读取同一文件的同一区域属于低效推理，正确的做法是读取一次后分析失败原因、定位到具体代码行，然后直接做最小范围修改，无需反复查看相同的文件区域。

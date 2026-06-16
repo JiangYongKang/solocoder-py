@@ -1,0 +1,7 @@
+产物不满意：
+1. engine.py 中 approve() 和 reject() 调用 _validate_transition 后又调用 _validate_review_state 检查状态。但转移表已定义 APPROVE 和 REJECT 只能从 UNDER_REVIEW 发起，转移表校验必先抛 InvalidStateTransitionError，使 InvalidOperationError 成为不可达的死代码。模型未理清各校验层职责边界，应删除冗余或将两层合并。
+2. engine.py 的 reject() 方法同时向 review_records 追加 ReviewRecord 和向 rejection_comments 追加 RejectionComment，两者存储相同的审核人、批注和时间戳，造成同一条驳回数据被重复写入两个独立列表。若后续维护中只修改一个列表（如编辑批注），会导致数据不一致。正确做法是让 rejection_comments 作为 review_records 中 REJECT 动作的视图而不是独立副本。
+3. test_engine.py 中 TestInvalidStateTransitions 与 TestReviewOperationOnNonReviewState 两个测试类之间存在 4 对语义相同的用例：approve 在 draft 状态的校验、reject 在 approved 状态的校验、approve 和 reject 在 published 状态的校验。每组操作路径和期待异常完全一致，属于无意义冗余，反映模型编写测试时未先规划好两个测试类的职责边界。
+过程不满意：
+1. 模型在思考过程第一步就执行了 todo_write 创建 6 项子任务，随后才开始浏览现有项目结构、查阅 approval_workflow 模块和 pyproject.toml 配置。这种"先规划后分析"的顺序违反了应先充分了解上下文再分解任务的原则，虽然在本次任务中未引起返工，但反映出模型缺乏先分析再规划的工程习惯。
+2. 整个思考过程中模型共调用 6 次 todo_write 更新任务状态，几乎每写一两个文件就更新一次进度。这种微管理式的状态跟踪增加了不必要的工具调用开销，分散了本应集中在代码实现上的注意力，属于典型的低效行为。对于该规模的功能开发任务，1 到 2 次关键节点更新就已足够，过度更新反映出模型对工具使用的边界意识不足。
