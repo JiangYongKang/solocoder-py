@@ -1,7 +1,8 @@
 产物不满意：
-1. 当 `test_min_stem_length_custom` 因异常优先级提升后失败时，模型从 DEFAULT_EXCEPTIONS 中批量删除了约五十条词条，如 "running"→"run"、"goes"→"go" 等规则变化词形。删除后这些词形降级走 Porter 规则再经长度检查，语义已变。根因是模型以通过测试为目标，面对异常优先级与长度约束冲突时修改生产数据回避，未分析异常字典应有的语义范围。正确做法是保留原词条，异常映射产生短词干是优先级策略的预期结果，不应为适配测试剪裁数据字典。
-2. `_sync_porter_config` 通过逐字段赋值同步内部 PorterStemmer 配置而非共享同一个 StemmerConfig 引用。当 StemmerConfig 未来增加新字段时该方法不感知，新字段无法传播到内部组件，配置不一致将复现。根因是选择性字段拷贝而非对象引用共享，耦合脆弱。正确做法是构造 `_porter` 时传入 `self.config` 共享同一实例，在 PorterStemmer 内部将 preserve_case 固定为 False 而非依赖独立配置副本。
+1. test_min_stem_length_custom 因异常优先级提升后失败时，模型从 DEFAULT_EXCEPTIONS 里批量删了约五十条词条，像 "running"→"run"、"goes"→"go" 这些规则变化词形。删除后这些词降级走 Porter 规则再经长度检查，语义已经变了。根因是以通过测试为目标，面对异常优先级跟长度约束的冲突选择修改生产数据来回避。应该保留原词条，异常映射产出短词干是优先级策略的预期结果，不该为适配测试剪裁数据字典。
+2. _sync_porter_config 通过逐字段赋值来同步内部配置，不是共享同一个 StemmerConfig 引用。将来 StemmerConfig 新增字段时，这个方法感知不到，新字段传不到内部组件。根因是选了选择性字段拷贝而不是对象引用共享，耦合脆弱。应该在构造 _porter 时直接传 self.config 共享同一实例。
+
 过程不满意：
-1. 模型运行 pytest 发现 `test_min_stem_length_custom` 失败后，未先分析断言逻辑与异常优先级提升间的语义冲突，而是立即质疑 "running" 是否该在异常字典，经历了判断 Porter 能否处理、计算移除后规则路径会不会因长度约束回退、搜索哪些词条冗余等多轮推理，最后一次性清除约五十条词条。这是试错式修复，从让测试通过出发逆向推演可改哪些数据，以测试驱动数据修改易引入隐蔽语义回归。
-2. 模型在一次编辑中批量删除 DEFAULT_EXCEPTIONS 约五十条词条但未逐条验证每个被删词条的 Porter 处理结果是否与异常映射等价。例如 "gotten"→"get" 中 "gotten" 并非 Porter 能正确处理（Porter 输出 "gotten" 自身而非 "get"），删除后用户输入的 "gotten" 无法被正确提取为 "get"。根因是为快速通过测试采用大量删除的捷径。正确做法是逐条运行 stem() 验证规则路径输出与映射是否一致。
-3. 模型在同一会话中反复读取 stemmer.py 至少四次：初始理解、修改 stem 方法后、修改 aggressiveness setter 后、检查词条冗余时，每次读取目标区域高度重叠（均涉及 DEFAULT_EXCEPTIONS 和 stem 方法），最后一次读取前已完成两轮编辑，这些重复读取未获取新的增量信息，属于推理效率低下。
+1. 模型跑 pytest 发现 test_min_stem_length_custom 失败后，没先分析断言逻辑跟异常优先级提升之间的语义冲突，而是立即质疑 "running" 该不该在异常字典里，经历了判断 Porter 能不能处理、计算移除后会不会因长度约束回退、搜索哪些词条冗余等多轮推理，最后一次性清了约五十条词条。这是试错式修复，从让测试通过出发倒着推演哪些数据可以改。
+2. 模型在一次编辑中批量删了 DEFAULT_EXCEPTIONS 约五十条词条但没逐条验证每个被删词条 Porter 处理结果是否跟异常映射等价。比如 "gotten"→"get" 中 "gotten" 不是 Porter 能正确处理的，删了之后用户输入 "gotten" 没法正确提取为 "get"。根因是为快速通过测试用了大量删除的捷径。
+3. 模型在同一会话中反复读了 stemmer.py 至少四次：初始理解、改 stem 方法后、改 aggressiveness setter 后、检查词条冗余时，每次读的目标区域高度重叠（都涉及 DEFAULT_EXCEPTIONS 和 stem 方法），最后一次读之前已完成两轮编辑，这些重复读取没拿到新信息，属于推理效率低下。

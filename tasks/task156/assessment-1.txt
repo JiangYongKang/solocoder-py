@@ -1,7 +1,8 @@
 产物不满意：
-1. 在summarizer.py的_split_sentences函数中，英文句尾分割正则要求后续字符必须为大写字母`(?=[A-Z])`，当英文句子后紧跟中文如"Machine learning is important. 机器学习非常重要。"时，中文首字"机"不满足大写要求，正则无法匹配，导致英中混合文本被误判为单个句子。这使词频统计将两个句子混合计算，句子打分失真。根因是正则设计未覆盖英语后接非大写字符的场景，应在分割逻辑中增加对中文等非大写字符起头的处理，或将`(?<=[.!?])\s+`后的断言改为匹配任意非空白字符而非仅大写字母。
-2. 在models.py的SummarizerConfig中，position_weight_factor默认值为1.0，配合summarizer.py的_compute_position_weight中线性衰减公式`weight = factor + distance_from_center * (1.0 - factor)`，当factor=1.0时计算结果恒为1.0，所有句子位置权重完全相同。这导致默认配置下LINEAR衰减与NONE完全等价，提示词要求"开头和结尾句子给予更高权重"在默认参数下不生效。根因是factor的默认值设为无衰减上限，应改为0.5等小于1.0的值，让默认线性衰减真正产生差异化的位置权重。
-3. 在README.md的核心类职责章节中，"Summarizer"段落将summarize_text便捷函数错误地描述为一个名为Summarizer的类，但`__init__.py`的实际导出中只有函数summarize_text，代码库中不存在Summarizer这个类。用户按照README文档使用时会因找不到该类而产生困惑，属于文档与代码不一致的错误。根因是模型在编写README时未与`__init__.py`的实际导出内容做交叉核对，应在文档定稿前确认所有引用的类名和函数名都真实存在于代码中。
+1. _split_sentences 里英文句尾分割正则要求后续字符必须是大写字母 (?=[A-Z])，但英文句子后紧跟中文比如"Machine learning is important. 机器学习非常重要。"时，中文"机"不满足大写要求，正则匹配不上，中英混合文本被当成一个句子。词频统计把两句混算，句子打分就歪了。根因是正则没覆盖英语后面接非大写字符的场景，应该在分割逻辑里增加处理。
+2. SummarizerConfig 的 position_weight_factor 默认值是 1.0，配合线性衰减公式 weight = factor + distance * (1.0 - factor)，当 factor=1.0 时计算结果永远是 1.0，所有句子位置权重一样。这导致默认配置下 LINEAR 衰减跟 NONE 完全等价，提示词要求"开头和结尾句子给更高权重"在默认参数下根本不生效。应该把默认值改成 0.5 之类的值，让默认线性衰减真的产生差异。
+3. README 核心类职责章节把 summarize_text 便捷函数错描述成一个叫 Summarizer 的类，但 __init__.py 实际导出的只有函数 summarize_text，代码里根本不存在 Summarizer 这个类。用户按 README 用会困惑。根因是写 README 时没跟 __init__.py 的实际导出内容做交叉核对。
+
 过程不满意：
-1. 模型在两次运行测试时都使用了`python -m pytest tests/summarizer/ -v`而非项目约定的`poetry run pytest`。虽然本次因虚拟环境恰好激活没有造成实质问题，但这绕过了pyproject.toml中定义的依赖管理和测试配置，在其他场景可能因缺少依赖包或配置缺失而导致测试报错。根因是模型没有在编写测试前查看pyproject.toml了解项目的测试运行约定，应统一使用poetry run pytest作为标准测试执行命令，保证与项目构建系统的兼容性一致。
-2. 模型首次提交的summarizer.py中存在两处核心算法错误：_compute_position_weight的位置权重计算颠倒了（中间句子得到更高权重而非两端），以及_SENTENCE_SPLIT_PATTERN对中文标点的分割正则不完整。首轮测试出现3个失败用例后才回头修正，属于一轮试错式修复。根因是模型写完核心打分和分句逻辑后没有先用简单样例做人工验证就直接写测试运行，应在编码阶段用笔算检查几个典型场景（如4句的线性衰减权重分布、中英文混合断句）确保逻辑正确后再进入测试阶段。
+1. 模型两次跑测试都用了 python -m pytest 而不是 poetry run pytest，虽然这次虚拟环境恰好激活没出事，但这绕过了 pyproject.toml 定义的依赖管理和测试配置。根因是没在写测试前看 pyproject.toml 了解测试运行约定。
+2. 模型首版 summarizer.py 有两处核心算法错：位置权重算反了（中间句子权重更高），以及中文标点分割正则不完整。首轮测试出 3 个失败才回头改，属于一轮试错修复。根因是写完核心逻辑后没先用简单样例做笔算验证就直接跑测试，应该在编码阶段用笔算检查几个典型场景再进测试。

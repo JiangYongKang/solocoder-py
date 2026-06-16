@@ -1,10 +1,10 @@
 产物不满意：
-1. porter.py 的 _is_consonant 函数中 y 字母的辅音判定逻辑写反了。第 36 行 `return not _is_consonant(word, i - 1)` 的实际行为是当 y 前一个字母为辅音时将 y 判为元音、前一个字母为元音时将 y 判为辅音。这与 Porter 原始论文规定的 "y is consonant only if preceded by a consonant" 完全相反。test_y_as_vowel 测试中 "syzygy" 的三个 y 全部被错误判为元音，导致 _contains_vowel 返回 True 触发 Step 1c 将词干错误转为 "syzygi"，正确的 Porter 输出应为 "syzygy" 不变。根因是对 y 的特殊判定规则理解反了，应将 `not` 去掉改为 `return _is_consonant(word, i - 1)`。
-2. porter.py 的 _step2 和 _step3 函数在匹配到后缀但 measure 条件不满足时直接返回原单词而非继续检查列表中后续后缀。第 155 行 `return word` 导致例如 "rational" 优先匹配 "ational" 后缀后 stem 为 "r" measure 为零条件不满足，函数立即返回原词不再遍历 "tional" 后缀，而标准算法此时应继续遍历，"tional" 的 stem "ra" measure 为一本应得到 "ration"。虽然实际输出因后续 Step 4 意外补救未暴露错误，但算法行为偏离了 Porter 原始规范。应改为在条件失败时 continue 到下个后缀。
-3. stemmer.py 的 Stemmer.stem 方法第 148 行 `result = result.lower()` 存在逻辑冗余。该行位于 else 分支中 porter.stem 调用之后将结果再次转小写，但方法末尾第 154 行的 `_apply_case(result, case_style)` 会根据已记录的大小写风格重新设置大小写。当 preserve_case 为 True 时，先转小写再重新应用大小写的流程完全是多余操作，说明模型没有理顺大小写保留处理的完整数据流。应删除第 148 至 149 行的冗余分支。
-4. stemmer.py 的 Stemmer.stem 方法中最小词干长度检查会覆盖异常字典的映射结果。第 150 行 `if len(result) < self.config.min_stem_length` 在异常字典优先返回映射结果后仍然生效，当映射词干长度不足最小长度时映射被原始单词替换，异常字典被静默忽略。用户设置 min_stem_length 为 5、"testing" 映射为 "test" 时，stem 返回 "testing" 而非预期的 "test"。test_exception_stem_shorter_than_min_length 测试中使用 `or result == "test"` 的宽松断言掩盖了此问题。异常字典映射结果应豁免长度检查或此行为需明确文档化。
+1. _is_consonant 里 y 字母的辅音判定逻辑写反了。第 36 行 return not _is_consonant(word, i - 1) 的实际效果是前一个字母是辅音时 y 被判为元音，是元音时 y 反被判为辅音，跟 Porter 论文说的"y 前面是辅音时 y 才是辅音"正好相反。"syzygy" 的三个 y 全被错判为元音，导致 _contains_vowel 返回 True 触发 Step 1c 把词干错误改成 "syzygi"，正确结果应该是不变。去掉 not 就行。
+2. _step2 和 _step3 匹配到后缀但 measure 不满足时直接 return 原词，不继续检查列表里的后续后缀。"rational" 先匹配 "ational" 后缀，stem 为 "r" measure 为零被跳过，函数就直接返回不再看 "tional"，而 "tional" 的 stem "ra" measure 为一本应得到 "ration"。虽然 Step 4 意外补救了，但算法行为偏离了 Porter 规范。条件失败时应该 continue 到下一个后缀。
+3. stem 方法里 result.lower() 存在逻辑冗余。它在 else 分支里调用完 porter.stem 后又转了小写，但方法末尾 _apply_case 会根据记录的大小写风格重新改回来，所以先转小写再还原完全是多余的。说明模型没理清大小写处理的完整数据流。
+4. stem 方法的最小词干长度检查会压过异常字典的映射结果。异常字典优先返回的映射词干如果不够长，会被长度检查静默替换为原始词。用户设 min_stem_length=5、"testing" 映射 "test" 时，stem 返回 "testing" 而不是 "test"。异常字典映射结果应该豁免长度检查，或者至少文档说明这个行为。
 
 过程不满意：
-1. 模型在接收 Prompt 后未经任何分析就用 todo_write 直接创建了 11 项子任务计划，随后才开始阅读 fulltext/stemmer.py 与 fuzzy_match/ 下的参考文件。Porter 算法本身的五步规则、VC 模式和 measure 计算有较高的实现复杂度，过早制定计划忽略了这些技术细节，导致 todo 粒度与后续实际编码需求错位。正确做法是先深入分析提示词的技术要求、阅读参考代码和 pyproject.toml 了解项目约定，理清 porter.py 算法核心与 stemmer.py 业务封装之间的职责边界后再制定执行计划。
-2. 首次运行 pytest 发现测试失败后，模型没有逐个阅读失败用例的堆栈信息或失败原因，而是直接断言 "大部分失败是因为测试预期与 Porter 算法的标准行为不符"，随后通过多次 edit_file_search_replace 将测试期望值向下适配有缺陷的生产代码。例如将 test_y_as_vowel 中 "syzygy" 的期望从正确的 "syzygy" 修改为错误实现的输出 "syzygi"。这是典型的测试向代码妥协，完全违背了用测试驱动修复的初衷。正确做法是逐条分析失败用例指向的具体缺陷，定位到 _is_consonant 的逻辑错误并修复代码，保留正确的测试期望不变。
-3. 模型在实现过程中从未将自己的 Porter 算法代码与原始论文或权威参考实现做对照验证。_is_consonant 中 y 的辅音判定规则完全写反，这种基础规则错误如果参考过 Porter 论文中 "consonant takes the value of true if c is a consonant" 的正式定义就不会出现。但模型在总结中声称 "完整实现 Porter 五步规则算法"，在未核实算法正确性的情况下就断言功能完成，属于对自身产物的虚假信心。正确做法是在实现核心算法步骤后用 Porter 论文的标准测试用例集对照验证每个步骤的输出，确保与规范一致。
+1. 模型收到提示词后没任何分析就用 todo_write 建了 11 项计划，然后才去读参考文件。Porter 算法的五步规则和 VC 模式有相当复杂度，过早计划没考虑这些技术细节。应该先深入分析技术要求、阅读参考代码和 pyproject.toml 了解约定，理清算法核心和业务封装之间的职责边界再做计划。
+2. 首次跑 pytest 有失败，模型没逐个看堆栈就断言"大部分失败是测试期望跟 Porter 标准行为不符"，然后多次编辑把测试期望往下适配有问题的代码。比如把 "syzygy" 的期望从正确的 "syzygy" 改成错误实现输出的 "syzygi"。这是典型测试向代码妥协，完全违背了用测试驱动修复的本意。
+3. 模型在实现过程中从来没有把自己的 Porter 算法代码跟原始论文或权威参考实现对照过。y 的辅音判定这种基础规则完全写反了，如果参考过 Porter 论文就不会犯。但模型在总结里声称"完整实现 Porter 五步规则算法"，没核实算法正确性就断言功能完成，属于对自己产物的虚假信心。

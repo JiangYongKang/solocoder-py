@@ -1,7 +1,7 @@
 产物不满意：
-1. handle_match_timeout 方法在候补回填成功的路径中使用了 `assert new_team_a.is_complete` 和 `assert new_team_b.is_complete` 来校验新对局两队是否为完整队伍，而非使用显式的 if-raise 条件判断。Python 的 assert 语句在解释器以 `-O` 优化模式运行时会被整体跳过，此时即便未来代码重构引入了队伍不完整的缺陷，这个安全校验也会静默失效，导致无效对局被交付给上层调用方。虽然当前实现中 `_find_backup_candidates` 已通过返回数量不足时返回空列表的全有或全无策略确保了取到的候补数量恰好等于 needed，且 handle_match_timeout 循环调用 add_player 将全部候补加入队伍，因此队伍必然完整、assert 在当前逻辑下实为冗余校验，但用 assert 代替显式异常抛出作为领域不变量的防线仍是不稳健的工程实践。正确做法是将 assert 替换为 `if not new_team_a.is_complete: raise RuntimeError(...)` 形式的显式校验。
-2. _requeue_players 辅助方法在创建重新入队请求时直接调用 `time()` 获取当前时间作为 enqueue_time，而非接受一个 now 参数。这与引擎中 tick、_form_teams 等方法统一接受 now 参数以支持时间注入的设计风格不一致。虽然当前测试仅验证玩家是否出现在等待队列中而未断言入队时间，不影响测试通过，但这种不一致会使得未来编写时间敏感的重入队测试时需要额外处理真实时间与模拟时间的差异，降低了代码的可测试性。正确做法是让 _requeue_players 接受 now 参数并传递给 MatchRequest 的 enqueue_time。
+1. handle_match_timeout 在回填成功后用 assert 校验队伍是否完整，但 Python 的 assert 在 -O 模式下会被跳过。以后万一代码重构引入了队伍不完整的 bug，这个校验就静默失效了。虽然当前逻辑确保取到的候补数量一定够、队伍肯定完整，但用 assert 当领域不变量的防线不靠谱。应该换成 if not 开头的显式 raise RuntimeError。
+2. _requeue_players 里直接调 time() 取当前时间，没接受 now 参数，跟引擎里 tick、_form_teams 这些统一接 now 参数的风格不一致。虽然现在测试没验入队时间不影响通过，但以后写时间敏感的测试就麻烦了，可测试性被降低了。应该让 _requeue_players 也接 now 参数传进 MatchRequest。
 
 过程不满意：
-1. 模型在收到提示词后的第一个动作就是调用 todo_write 创建了 4 项子任务计划，之后才开始通过 view_files 阅读 engine.py 的现有实现。标注规范明确要求"不能刚收到任务时就创建 TodoList，应先分析问题再规划"。模型未先理解当前超时处理逻辑就直接制定了执行计划。值得关注的是，这一行为模式在 assessment-3.txt 中已被标注过（"模型在收到提示词后的第一个动作就是调用 todo_write 创建 3 项任务计划"），第 4 轮再次出现同样问题，说明模型存在"先规划再分析"的惯性行为模式且未从上轮标注中吸取教训。正确做法是先用 view_files 完整阅读 engine.py 和现有测试代码，理解当前 handle_match_timeout 的两个缺陷的具体表现，再据此规划需要新增哪些辅助方法和测试用例。
-2. 模型在第一次尝试通过 edit_file_search_replace 修改 engine.py 时返回了 status: failed，随后重新 view_files 读取了引擎文件的最新内容后再次编辑并成功。第一次编辑失败说明模型在未确认文件当前确切内容的情况下就尝试了字符串替换，使用的 old_string 与实际文件内容存在差异。虽然模型通过重新读取文件后修正了这一错误，属于合理的自纠正行为，但初次编辑时未基于最新读取的文件内容而是依赖记忆中的代码进行替换，增加了不必要的试错往返。正确做法是在每次编辑前确保已基于最新的文件内容构造替换字符串，避免依赖可能过时的代码快照。
+1. 模型收到提示词又是先建 TodoList、再读 engine.py。规范早就说了不能刚收到任务就建计划。更值得关注的是，第三轮的 assessment-3 里已经标过这个问题了，第四轮又犯一样的事，说明模型有个"先规划再分析"的惯性，没从上轮标注里学到教训。
+2. 模型第一次 edit_file_search_replace 返回了 failed，重新读完文件后才成功。说明首次编辑时是凭记忆在改，没确认文件当前内容。虽然最终自己纠正了，但这种依赖旧代码快照做替换的做法多了不必要的一次试错。每次编辑前应该确保已经读了最新文件内容。

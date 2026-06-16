@@ -1,7 +1,7 @@
 产物不满意：
-1. 提示词要求修复 diff 模块的三级粒度组合使用问题，但模型完全没有修改 src/solocoder_py/diff/ 下的任何文件。differ.py 中的组合粒度支持、unified_diff.py 中 build_hunks 的上下文收集逻辑、format_hunk_header 的索引一致性这三个修复项全部未被执行。原因是模型从会话一开始就将修复目标错误识别为 dedup 去重模块而非 diff 差异对比模块，导致四个提示词需求全部落空。
-2. 模型在 dedup 模块中修改了 lsh.py 和 text_dedup.py，但这些修改与提示词要求完全无关。提示词明确要求"修复后重新运行 poetry run pytest tests/diff/ -v"，而模型实际运行的是 tests/dedup/ 目录下的测试，报告 284 passed，这个测试结果对 diff 模块的验证毫无意义。根本原因是模型完全没有审阅提示词中涉及的模块名称和测试路径，将 diff 和 dedup 两个单词混淆。
+1. 提示词要求修复 diff 模块的三个问题，但模型完全没有修改 src/solocoder_py/diff/ 下的任何文件。组合粒度支持、上下文收集逻辑、hunk header 索引一致性三项修复全都没执行。原因是模型从一开始就把修复目标错误识别为 dedup 去重模块而不是 diff 差异对比模块，四个需求全部落空。
+2. 模型在 dedup 模块里改了 lsh.py 和 text_dedup.py，但这些修改跟提示词要求完全无关。提示词明确要求运行 poetry run pytest tests/diff/ -v，而模型实际跑的是 tests/dedup/，报告 284 passed，这个测试结果对 diff 模块的验证毫无意义。根因是模型完全没有审阅提示词里的模块名称和测试路径，把 diff 和 dedup 两个词弄混了。
 
 过程不满意：
-1. 模型在收到提示词后第一组操作就是读取 dedup/lsh.py 和 dedup/text_dedup.py，而非 diff 包下的任何文件。提示词中明确出现了"Myers 文本差异对比模块"、"build_hunks 函数"、"format_hunk_header 方法"、"pytest tests/diff/"等关键词，这些全部指向 diff 模块而绝非 dedup 模块。模型从第一步就定位到了错误的目标包，属于严重的目标理解偏差，后续所有操作都建立在这个错误前提之上。
-2. 在整个会话过程中模型从未读取或修改 src/solocoder_py/diff/ 下的任一文件，也从未运行 tests/diff/ 下的任一测试。提示词中第 4 条明确要求运行 poetry run pytest tests/diff/ -v，但模型最终运行的是 tests/dedup/。这不仅是目标理解错误，还暴露出模型在收到提示词后没有对关键路径关键词（diff）做最基本的核对和确认，导致整个 session 的产出对实际任务零贡献。
+1. 模型收到提示词后第一组操作就是读 dedup/lsh.py 和 dedup/text_dedup.py，不是 diff 包下的任何文件。提示词里明确出现了"Myers","build_hunks","format_hunk_header","pytest tests/diff/"等关键词，全部指向 diff 模块。模型从第一步就定位错了目标包，属于严重的目标理解偏差，后续所有操作都建在这个错误前提上。
+2. 整个会话中模型从未读或修改过 diff/ 下的任一文件，也从未跑过 tests/diff/ 下的任一测试。提示词第 4 条明确要求跑 tests/diff/，但模型最终跑了 tests/dedup/。这不仅是对目标理解的错误，还暴露出模型收到提示词后没有对关键路径关键词做最基本的核对和确认，导致整个 session 的产出对实际任务零贡献。

@@ -1,9 +1,9 @@
 产物不满意：
-1. exceptions.py 中定义了 `InvalidGraphError` 异常类，该异常继承自 `GraphCycleError` 并在 `__init__.py` 中作为公开 API 导出，但全模块代码中没有任何路径会抛出此异常。在 `detector.py` 的 `detect_cycles` 方法中接收一个空图时直接返回空列表而不做任何校验，`InvalidGraphError` 完全未被使用。这属于无实际用途的死代码，会给使用者造成"模块会在某种场景下抛出此异常"的错误预期，同时增加了 API 表面积的无谓膨胀。
-2. detector.py 的 `detect_cycles` 方法和 `detect_cycles_from_node` 方法中包含两个几乎完全相同的 DFS 内嵌函数，从 `color` 字典初始化到递归遍历中的三色状态判定和环路径提取逻辑全部重复，两个方法之间仅有"遍历所有节点"与"仅从指定节点遍历"这一处差异。代码重复度极高，如果后续需要修改三色标记逻辑或环路径提取策略，必须在两处同步修改，极易因维护遗漏导致两个方法行为不一致。
-3. detector.py 的 DFS 内嵌函数中 `if neighbor not in color: continue` 是一段在正常流程中永远不可能触发的死代码。`color` 字典由 `self._graph.get_adjacency()` 返回的全部键初始化，而 `DirectedGraph.__post_init__` 的归一化逻辑确保了图中所有出现过的节点都在邻接表中拥有条目，因此遍历邻居时 `neighbor not in color` 条件恒为假。这种静默跳过语句不仅没有防御价值，一旦因数据异常导致 `color` 字典未正确初始化，它会将问题掩盖为"跳过邻居"而非显式报错，增大了问题排查难度。
+1. exceptions.py 定义了 InvalidGraphError 异常类，继承自 GraphCycleError 且在 __init__.py 里公开导出，但全模块没有任何地方会实际抛它。detect_cycles 收空图时直接返回空列表不做校验，InvalidGraphError 完全没被用。这是一个无实际用途的死代码，给使用者造成"模块会在某场景下抛这个异常"的错觉。
+2. detect_cycles 和 detect_cycles_from_node 两个方法里有两套几乎一样的 DFS 内嵌函数，从 color 字典初始化到递归里的三色判定和环路径提取全重复了。唯一的区别是"遍历所有节点"和"仅从指定节点遍历"。如果后续要改三色标记逻辑或路径提取策略，得在两处同步改，很容易遗漏导致行为不一致。
+3. DFS 内嵌函数里有一行 if neighbor not in color: continue，这在正常流程下永远不可能触发。因为 color 字典由邻接表的全部键初始化，图中所有节点在邻接表里都有条目。这个静默跳过语句不仅没有防御价值，一旦数据出异常它还会把问题掩盖为"跳过邻居"而不是显式报错。
 
 过程不满意：
-1. 模型在收到提示词后仅查看了项目根目录、src 和 tests 三层文件夹结构，就立即创建了包含 8 项子任务的 TodoList，然后才去阅读 dag 模块的现有代码和 pyproject.toml 配置文件。这种"先规划后分析"的流程与本项目标注规范中"应先分析问题再规划"的要求相违背，导致计划粒度与实际需求的匹配缺乏充分论证。模型在规划阶段没有深入理解 DFS 三色标记法的边界行为，也没有先梳理环去重策略中 canonical_key 的旋转归一化方案与提示词"节点集合相同视为同一环"的语义对应关系，就把所有任务拆解完开始编码。
-2. 模型在编写 conftest.py 中的 `build_compound_cycle_with_subcycle_graph` 图辅助函数时，初始版本中只有 D 指向 A 的一条边，却不包含从 C 到 B 的回边，导致该图中唯一存在的环是 A 到 B 到 C 到 D 再回 A 的四节点大环，根本不存在测试用例中断言的 `B, C, D` 三节点子环。模型写完测试后未在纸面上验算图拓扑与预期去重后环结果的一致性就直接运行 pytest，果然失败。这说明模型在构造测试数据时缺乏"先用图论直觉校验测试输入与预期输出之间的因果关系"的严谨习惯。
-3. 模型运行测试时使用 `python -m pytest tests/graph_cycle/ -v` 而非项目规范中约定的 `poetry run pytest`。虽然在此次单任务场景下功能等价，但 `poetry run` 是项目统一的工作流入口，它可以确保始终在正确的虚拟环境和依赖配置下执行命令。跳过 poetry 直接使用全局或路径上的 Python 解释器可能在多任务批量标注或 CI 环境中引入因虚拟环境路径差异导致的 `ModuleNotFoundError` 等问题，属于工具使用的规范性偏差。
+1. 模型只看了项目根目录和 src、tests 三层文件夹结构就立即建了 8 项任务计划，然后才去读代码和配置。这种先规划后分析的流程违反规范，导致计划粒度跟实际需求的匹配缺乏论证。
+2. 模型写 conftest.py 里 build_compound_cycle_with_subcycle_graph 时，初版只有 D 指向 A 一条边，没包含 C 到 B 的回边，导致图中只存在 ABCD 四节点大环，根本不存在测试中断言的 BCD 三节点子环。写完没在纸面上验算图拓扑跟预期去重后环结果的一致性就直接跑 pytest，果然失败。说明构造测试数据时缺乏先用图论直觉校验因果关系的习惯。
+3. 模型跑测试用 python -m pytest 而不是 poetry run pytest，虽然此次等价，但 poetry run 是项目统一入口，能保证始终在正确虚拟环境和依赖配置下执行。
