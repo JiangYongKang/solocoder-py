@@ -1,0 +1,4 @@
+在当前项目 Geohash 编解码器的实现中，仍存在以下问题需要修复：
+
+1. 上次提示词中要求修复 test_edge_cases.py 中存在的括号配对或缩进等语法错误，但该文件未收到任何代码修改。当前仅凭语法检查和测试通过就判定"问题已不存在"，没有逐方法定位提示词所指的具体语法隐患位置，也没有将检查过程和证据记录下来。
+2. test_edge_cases.py 中存在多组条件断言测试反模式。test_north_pole_neighbors、test_south_pole_neighbors、test_pole_neighbor_nonexistence、test_east_neighbor_crosses_antimeridian、test_west_neighbor_crosses_antimeridian、test_antimeridian_adjacency 共六个测试方法使用了 if-else 分支来分别断言两种对立预期：if 分支断言 A，else 分支断言与 A 相反的 B。无论代码实际返回什么结果，测试都一定通过而永远不会报告失败，这些测试失去了验证代码正确性的能力。

@@ -53,21 +53,52 @@ class TestInvalidLatitude:
         with pytest.raises(InvalidLatitudeError):
             GeoPoint(math.inf, 0.0)
 
-    def test_center_latitude_invalid_raises_on_search(self, beijing_center):
+    def test_engine_search_validates_coordinates_despite_geopoint_construction(self, beijing_center):
+        class MockInvalidLatGeoPoint:
+            @property
+            def latitude(self):
+                return 91.0
+
+            @property
+            def longitude(self):
+                return 0.0
+
         engine = GeoSearchEngine()
+        invalid_center = MockInvalidLatGeoPoint()
         with pytest.raises(InvalidLatitudeError):
-            invalid_center = GeoPoint(91.0, 0.0)
             engine.search(invalid_center, radius_km=10.0)
 
-    def test_add_candidate_invalid_latitude_raises(self):
+    def test_engine_add_candidate_validates_coordinates(self):
+        class MockInvalidLatGeoPoint:
+            @property
+            def latitude(self):
+                return 91.0
+
+            @property
+            def longitude(self):
+                return 0.0
+
         engine = GeoSearchEngine()
+        invalid_point = MockInvalidLatGeoPoint()
         with pytest.raises(InvalidLatitudeError):
-            invalid_point = GeoPoint(91.0, 0.0)
             engine.add_candidate(invalid_point)
 
-    def test_init_with_invalid_latitude_raises(self):
+    def test_engine_init_validates_all_candidate_coordinates(self):
+        class MockInvalidLatGeoPoint:
+            def __init__(self, lat, lng):
+                self._lat = lat
+                self._lng = lng
+
+            @property
+            def latitude(self):
+                return self._lat
+
+            @property
+            def longitude(self):
+                return self._lng
+
+        invalid_points = [MockInvalidLatGeoPoint(91.0, 0.0)]
         with pytest.raises(InvalidLatitudeError):
-            invalid_points = [GeoPoint(91.0, 0.0)]
             GeoSearchEngine(candidates=invalid_points)
 
 
@@ -112,21 +143,52 @@ class TestInvalidLongitude:
         with pytest.raises(InvalidLongitudeError):
             GeoPoint(0.0, math.inf)
 
-    def test_center_longitude_invalid_raises_on_search(self):
+    def test_engine_search_validates_longitude_coordinates(self):
+        class MockInvalidLngGeoPoint:
+            @property
+            def latitude(self):
+                return 0.0
+
+            @property
+            def longitude(self):
+                return 181.0
+
         engine = GeoSearchEngine()
+        invalid_center = MockInvalidLngGeoPoint()
         with pytest.raises(InvalidLongitudeError):
-            invalid_center = GeoPoint(0.0, 181.0)
             engine.search(invalid_center, radius_km=10.0)
 
-    def test_add_candidate_invalid_longitude_raises(self):
+    def test_engine_add_candidate_validates_longitude(self):
+        class MockInvalidLngGeoPoint:
+            @property
+            def latitude(self):
+                return 0.0
+
+            @property
+            def longitude(self):
+                return 181.0
+
         engine = GeoSearchEngine()
+        invalid_point = MockInvalidLngGeoPoint()
         with pytest.raises(InvalidLongitudeError):
-            invalid_point = GeoPoint(0.0, 181.0)
             engine.add_candidate(invalid_point)
 
-    def test_init_with_invalid_longitude_raises(self):
+    def test_engine_init_validates_longitude_coordinates(self):
+        class MockInvalidLngGeoPoint:
+            def __init__(self, lat, lng):
+                self._lat = lat
+                self._lng = lng
+
+            @property
+            def latitude(self):
+                return self._lat
+
+            @property
+            def longitude(self):
+                return self._lng
+
+        invalid_points = [MockInvalidLngGeoPoint(0.0, 181.0)]
         with pytest.raises(InvalidLongitudeError):
-            invalid_points = [GeoPoint(0.0, 181.0)]
             GeoSearchEngine(candidates=invalid_points)
 
 
@@ -334,7 +396,7 @@ class TestInvalidCandidatesSkippedDuringSearch:
         with pytest.raises(InvalidLongitudeError):
             GeoSearchEngine(candidates=points)
 
-    def test_geopoint_construction_rejects_entire_list_if_any_invalid(self):
+    def test_list_literal_evaluation_stops_at_first_invalid_geopoint(self):
         with pytest.raises(InvalidLatitudeError):
             [
                 GeoPoint(0.0, 0.0),

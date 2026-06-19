@@ -107,6 +107,12 @@ class TsDeltaDecompressor:
 
         self._read_pos = HEADER_SIZE
 
+        if self._value_count <= 2 and self._simple8b_length != 0:
+            raise CorruptedDataError(
+                f"Corrupted header: value_count={self._value_count} but "
+                f"simple8b_length={self._simple8b_length} (expected 0 for value_count <= 2)"
+            )
+
         if self._simple8b_length > 0 and self._simple8b_length % 8 != 0:
             raise CorruptedDataError(
                 f"Invalid Simple-8b length: {self._simple8b_length} is not a multiple of 8"

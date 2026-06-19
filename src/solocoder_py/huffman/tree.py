@@ -7,10 +7,7 @@ from .exceptions import (
     HuffmanEmptyFrequencyTableError,
     HuffmanCodeLengthOverflowError,
 )
-from .frequency import (
-    prepare_frequency_table,
-    validate_frequency_table,
-)
+from .frequency import prepare_frequency_table
 from .models import (
     CodeLengthTable,
     FrequencyTable,
@@ -20,11 +17,9 @@ from .models import (
 MAX_CODE_LENGTH = 64
 
 
-def build_huffman_tree(
-    freq_table: dict[Any, int] | FrequencyTable,
+def _build_tree_from_clean_freqs(
+    valid_freqs: dict[Any, int],
 ) -> Optional[HuffmanNode]:
-    valid_freqs = prepare_frequency_table(freq_table)
-
     if len(valid_freqs) == 1:
         symbol, freq = next(iter(valid_freqs.items()))
         return HuffmanNode(frequency=freq, symbol=symbol, order=0)
@@ -54,13 +49,18 @@ def build_huffman_tree(
     return heap[0] if heap else None
 
 
-def extract_code_lengths(
-    root: Optional[HuffmanNode],
+def build_huffman_tree(
     freq_table: dict[Any, int] | FrequencyTable,
-    max_code_length: int = MAX_CODE_LENGTH,
-) -> CodeLengthTable:
+) -> Optional[HuffmanNode]:
     valid_freqs = prepare_frequency_table(freq_table)
+    return _build_tree_from_clean_freqs(valid_freqs)
 
+
+def _extract_lengths_from_tree(
+    root: Optional[HuffmanNode],
+    valid_freqs: dict[Any, int],
+    max_code_length: int,
+) -> CodeLengthTable:
     lengths: dict[Any, int] = {}
 
     if root is None:
@@ -68,7 +68,12 @@ def extract_code_lengths(
 
     if len(valid_freqs) == 1:
         single_symbol = next(iter(valid_freqs.keys()))
-        lengths[single_symbol] = 1
+        single_length = 1
+        if single_length > max_code_length:
+            raise HuffmanCodeLengthOverflowError(
+                f"Code length {single_length} exceeds maximum allowed {max_code_length}"
+            )
+        lengths[single_symbol] = single_length
         return CodeLengthTable(lengths=lengths)
 
     def _traverse(node: HuffmanNode, depth: int) -> None:
@@ -96,9 +101,19 @@ def extract_code_lengths(
     return CodeLengthTable(lengths=lengths)
 
 
+def extract_code_lengths(
+    root: Optional[HuffmanNode],
+    freq_table: dict[Any, int] | FrequencyTable,
+    max_code_length: int = MAX_CODE_LENGTH,
+) -> CodeLengthTable:
+    valid_freqs = prepare_frequency_table(freq_table)
+    return _extract_lengths_from_tree(root, valid_freqs, max_code_length)
+
+
 def build_code_lengths(
     freq_table: dict[Any, int] | FrequencyTable,
     max_code_length: int = MAX_CODE_LENGTH,
 ) -> CodeLengthTable:
-    root = build_huffman_tree(freq_table)
-    return extract_code_lengths(root, freq_table, max_code_length)
+    valid_freqs = prepare_frequency_table(freq_table)
+    root = _build_tree_from_clean_freqs(valid_freqs)
+    return _extract_lengths_from_tree(root, valid_freqs, max_code_length)

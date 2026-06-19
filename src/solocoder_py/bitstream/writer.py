@@ -63,7 +63,8 @@ class BitWriter:
         value_shifted = value
 
         while remaining > 0:
-            if (self._bit_offset == 0 and len(self._buffer) == 0) or self._bit_offset == 8:
+            need_new_byte = (self._bit_offset == 0 and len(self._buffer) == 0) or (self._bit_offset == 8)
+            if need_new_byte:
                 self._buffer.append(0)
                 self._bit_offset = 0
 

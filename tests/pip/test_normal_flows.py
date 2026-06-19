@@ -82,6 +82,8 @@ class TestTrianglePointInPolygon:
 
 
 class TestConcavePolygon:
+    # 测试预期基于 geometry_verification.py 的独立手算射线交点结果
+    # 多边形: (0,0), (10,0), (10,10), (7,5), (3,5), (0,10)
     def test_point_in_notch_region_is_outside(self):
         engine = build_engine()
         concave = build_concave_polygon()
@@ -108,6 +110,8 @@ class TestConcavePolygon:
 
 
 class TestButterflyPolygon:
+    # 测试预期基于 geometry_verification.py 的独立手算射线交点结果
+    # 多边形: (0,0), (10,10), (0,10), (10,0) - 奇偶填充规则
     def test_butterfly_upper_wing_inside(self):
         engine = build_engine()
         butterfly = build_butterfly_polygon()
@@ -134,6 +138,8 @@ class TestButterflyPolygon:
 
 
 class TestPolygonWithHole:
+    # 测试预期基于 geometry_verification.py 的独立手算射线交点结果
+    # 判定逻辑: 在外环内 且 不在任何内环内 = INSIDE
     def test_point_inside_outer_outside_inner_is_inside(self):
         engine = build_engine()
         holed = build_holed_polygon()
@@ -182,7 +188,30 @@ class TestPolygonWithHole:
     def test_winding_order_detection(self):
         holed = build_holed_polygon()
         assert holed.outer_ring.is_counterclockwise()
+        assert holed.outer_ring.winding_order > 0
+        for inner_ring in holed.inner_rings:
+            assert inner_ring.is_clockwise()
+            assert inner_ring.winding_order < 0
         assert holed.hole_count == 1
+
+    def test_reverse_winding_order(self):
+        polygon = Polygon.from_tuples([(0, 0), (10, 0), (10, 10), (0, 10)])
+        assert polygon.is_counterclockwise()
+        polygon.reverse()
+        assert polygon.is_clockwise()
+        polygon.reverse()
+        assert polygon.is_counterclockwise()
+
+    def test_holed_polygon_auto_normalize(self):
+        holed = PolygonWithHoles.from_tuples(
+            outer_ring=[(0, 0), (0, 10), (10, 10), (10, 0)],
+            inner_rings=[
+                [(2, 2), (8, 2), (8, 8), (2, 8)],
+            ],
+        )
+        assert holed.outer_ring.is_counterclockwise()
+        for inner_ring in holed.inner_rings:
+            assert inner_ring.is_clockwise()
 
     def test_polygon_with_holes_from_tuples(self):
         holed = PolygonWithHoles.from_tuples(

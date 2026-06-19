@@ -62,7 +62,7 @@
 |------|--------|------|
 | `read_bits(n: int)` | `int` | 读取 `n` 比特并解码为无符号整数，推进读指针 |
 | `peek_bits(n: int)` | `int` | 前窥 `n` 比特，**不推进**读指针 |
-| `align_to_byte()` | `int` | 跳过比特对齐到字节边界，返回跳过的比特数 |
+| `align_to_byte()` | `int` | 跳过比特对齐到字节边界，返回跳过的比特数。**注意**：仅当 `total_bits` 参数为非 8 倍数时才可能抛出 `InsufficientBitsError`，默认构造下该异常不可达 |
 | `read_remaining()` | `bytes` | 读取剩余所有数据（按字节对齐） |
 | `reset()` | `None` | 重置读取器状态到起始位置 |
 
@@ -342,6 +342,6 @@ BitStreamError
 │   ├── BitCapacityExceededError  # 写入超出容量限制
 │   └── ValueOutOfRangeError       # 写入值超出比特范围或为负数
 ├── BitReaderError
-│   └── InsufficientBitsError      # 剩余比特不足
+│   └── InsufficientBitsError      # 剩余比特不足（align_to_byte 中的此异常仅在 total_bits 非 8 倍数时可达）
 └── InvalidBitCountError           # 操作比特数不在 [1, 64] 范围内（n=0 为合法空操作）
 ```

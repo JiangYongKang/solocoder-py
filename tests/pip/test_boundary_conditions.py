@@ -2,7 +2,7 @@ import pytest
 
 from solocoder_py.pip import Point, PointLocation, Polygon, RayCastingEngine
 
-from .conftest import build_engine, build_square_polygon
+from .conftest import build_butterfly_polygon, build_engine, build_square_polygon
 
 
 class TestPointOnVertex:
@@ -187,36 +187,21 @@ class TestDegeneratePolygon:
 class TestSelfIntersectingPolygon:
     def test_butterfly_upper_wing_inside(self):
         engine = build_engine()
-        butterfly = Polygon.from_tuples([
-            (0, 0),
-            (10, 10),
-            (0, 10),
-            (10, 0),
-        ])
+        butterfly = build_butterfly_polygon()
         point = Point(5, 8)
         result = engine.contains(butterfly, point)
         assert result == PointLocation.INSIDE
 
     def test_butterfly_lower_wing_inside(self):
         engine = build_engine()
-        butterfly = Polygon.from_tuples([
-            (0, 0),
-            (10, 10),
-            (0, 10),
-            (10, 0),
-        ])
+        butterfly = build_butterfly_polygon()
         point = Point(5, 2)
         result = engine.contains(butterfly, point)
         assert result == PointLocation.INSIDE
 
     def test_butterfly_center_on_edge(self):
         engine = build_engine()
-        butterfly = Polygon.from_tuples([
-            (0, 0),
-            (10, 10),
-            (0, 10),
-            (10, 0),
-        ])
+        butterfly = build_butterfly_polygon()
         point = Point(5, 5)
         result = engine.contains(butterfly, point)
         assert result == PointLocation.ON_BOUNDARY

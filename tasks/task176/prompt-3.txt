@@ -1,0 +1,4 @@
+在当前项目地理位置邻近搜索的实现中，仍存在以下问题需要修复：
+
+1. models.py 的 GeoPoint 添加 __post_init__ 经纬度校验后，test_error_branches.py 中 test_center_latitude_invalid_raises_on_search 等六个测试用例的异常来源发生了无声变化。这些测试在 pytest.raises 块内构造非法 GeoPoint（如 GeoPoint(91.0, 0.0)），由于 __post_init__ 在构造时就会抛出异常，异常实际来自 GeoPoint 自身构造而非后续的 engine.search 或 engine.add_candidate 调用。测试虽然通过但覆盖的逻辑层已从引擎层下移到值对象层，测试名称和代码结构与运行时实际行为不再一致。
+2. test_error_branches.py 的 test_geopoint_construction_rejects_entire_list_if_any_invalid 测试用例的名称与实际语义不符。测试逐元素构造有效和无效 GeoPoint 的列表，由于 Python 列表字面量按元素顺序求值，中途异常导致列表未被赋值——这本质上是构造中断而非"整个列表被拒绝"。测试名称暗示了批量拒绝的语义，而实际只是逐元素构造中的异常中断，名称与行为之间的差异会误导维护者。

@@ -1,0 +1,5 @@
+在当前项目点在多边形内判定引擎的实现中，仍存在以下问题需要修复：
+
+1. 上次提示词要求修正测试中"将多边形顶点定义和预期值修改为匹配引擎输出"的问题，但修复过程仍是先重写了凹多边形定义再修改测试断言，最后以 pytest 全部通过作为几何正确性的唯一证据。思考过程中没有对多边形形状做手算射线交点或画图验算的操作，测试预期仍然以引擎输出为参照而非以几何真值独立设定。
+2. Polygon 类中新增了 winding_order 属性以及 is_counterclockwise、is_clockwise、reverse 三个方法，对应测试也被添加到了 test_normal_flows.py。但在 engine.py 中，带孔判定的核心逻辑始终只调用 _ray_casting 使用奇偶规则计数，完全没有使用顶点绕序信息来驱动位置判定。这三个绕序方法和对应测试是引擎判定逻辑中未被消费的死代码。
+3. test_boundary_conditions.py 的 TestSelfIntersectingPolygon 类中三个测试的蝴蝶形多边形顶点数组在方法内部直接内联构造，而 conftest.py 已提供了 build_butterfly_polygon 夹具，test_normal_flows.py 的 TestButterflyPolygon 类也使用了该夹具。同一多边形定义出现在三处不同位置，若后续需要调整顶点序列三处都需要同步修改，容易遗漏造成不同测试文件中相同形状产生不同行为。

@@ -107,7 +107,23 @@ class BitReader:
     def peek_bits(self, n: int) -> int:
         return self._read_bits_internal(n, advance=False)
 
+
     def align_to_byte(self) -> int:
+        """Skip to the next byte boundary.
+
+        When the reader is at a non-zero bit offset within a byte, advance
+        to the start of the next byte, discarding the remaining bits in the
+        current byte.
+
+        Raises InsufficientBitsError if there are not enough bits remaining
+        to reach the next byte boundary.  This can only happen when the
+        reader was constructed with an explicit ``total_bits`` value that is
+        not a multiple of 8 — for example ``BitReader(data, total_bits=3)``.
+        When ``total_bits`` is omitted (the default), the available bit
+        count is always ``len(data) * 8`` (a multiple of 8) and this
+        exception is unreachable because ``_total_bits_read + skip_bits``
+        will always equal a multiple of 8.
+        """
         if self._bit_offset == 0:
             return 0
 

@@ -1,0 +1,6 @@
+在当前项目霍夫曼编码树构建器的实现中，仍存在以下问题需要修复：
+
+1. tree.py 的 build_code_lengths 函数中，build_huffman_tree 和 extract_code_lengths 各自独立调用了 prepare_frequency_table 对同一份频率数据执行完整校验和过滤。消除重复校验的任务尚未完成，每次生成码表时同一份频率数据被重复清洗两次。
+2. frequency.py 的 prepare_frequency_table 在 validate_frequency_table 以 min_frequency=1 拒绝所有频率小于 1 的符号之后，紧接着又用 `f > 0` 过滤掉频率为零的条目。由于 validate 已确保通过的频率全部 ≥1，后面的正频率过滤逻辑成为永不触发的死代码，存在逻辑矛盾。
+3. tree.py 中 build_huffman_tree 和 extract_code_lengths 对单符号场景各自做了硬编码的分支处理，但两处对单符号码长的处理语义不一致：build_huffman_tree 返回叶子节点不设码长，extract_code_lengths 直接硬编码码长为 1 且忽略传入的 max_code_length 参数。
+4. test_edge_cases.py 的 test_reset_decoder 测试在验证完 decoder.reset() 后复用原 decoder 完成了第二次解码，紧接着又对原 decoder 调用了第二次 reset，然后创建一个全新的 decoder2 来解码另一个码表。这第二次 reset 后的原始 decoder 实例再也没有被使用过，reset 后状态的完整性重新落入未被验证的境地。

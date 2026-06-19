@@ -343,7 +343,6 @@ class TestBugFixRegression:
 
     def test_decoder_reset_reuses_same_instance(self):
         encoded1 = encode("AAAAA")
-        encoded2 = encode("BBBBB")
 
         decoder = HuffmanDecoder(encoded1.code_table)
         decoder.write(encoded1.bit_string)
@@ -360,6 +359,10 @@ class TestBugFixRegression:
         assert "".join(result2) == "AAAAA"
 
         decoder.reset()
+        assert decoder._buffer == ""
+        assert decoder._output == []
+        assert decoder._finished is False
+
         decoder.write(encoded1.bit_string)
         result3 = decoder.finish(expected_length=5)
         assert "".join(result3) == "AAAAA"

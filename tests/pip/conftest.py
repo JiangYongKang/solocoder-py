@@ -49,9 +49,9 @@ def build_holed_polygon():
         inner_rings=[
             [
                 (3, 3),
-                (7, 3),
-                (7, 7),
                 (3, 7),
+                (7, 7),
+                (7, 3),
             ],
         ],
     )

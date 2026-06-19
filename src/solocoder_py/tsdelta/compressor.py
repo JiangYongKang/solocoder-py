@@ -106,6 +106,11 @@ class TsDeltaCompressor:
         assert self._stats is not None
         return self._stats
 
+    def get_delta_result(self) -> Optional[DeltaResult]:
+        if self._last_delta_result is None and self._timestamps:
+            self.compress()
+        return self._last_delta_result
+
     def reset(self) -> None:
         self._timestamps = []
         self._stats = None
@@ -130,13 +135,13 @@ def compress_timestamps(
     compressor.write_all(timestamps)
     data = compressor.get_compressed_data()
     stats = compressor.get_stats()
+    delta_result = compressor.get_delta_result()
 
     if len(timestamps) == 0:
         return CompressedBlock(data=data, value_count=0, base_timestamp=0, first_delta=None)
     if len(timestamps) == 1:
         return CompressedBlock(data=data, value_count=1, base_timestamp=timestamps[0], first_delta=None)
 
-    delta_result = compressor._last_delta_result
     assert delta_result is not None
     return CompressedBlock(
         data=data,

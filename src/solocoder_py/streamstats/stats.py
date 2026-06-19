@@ -57,36 +57,40 @@ class StreamStats:
             return self
         if other._n == 0:
             return self
-        na = self._n
-        nb = other._n
+
+        if other._n > self._n:
+            na, nb = other._n, self._n
+            mean_a, mean_b = other._mean, self._mean
+            m2_a, m2_b = other._m2, self._m2
+            m3_a, m3_b = other._m3, self._m3
+            m4_a, m4_b = other._m4, self._m4
+        else:
+            na, nb = self._n, other._n
+            mean_a, mean_b = self._mean, other._mean
+            m2_a, m2_b = self._m2, other._m2
+            m3_a, m3_b = self._m3, other._m3
+            m4_a, m4_b = self._m4, other._m4
+
         nc = na + nb
-        delta = other._mean - self._mean
+        delta = mean_b - mean_a
         delta2 = delta * delta
-        delta3 = delta2 * delta
-        delta4 = delta3 * delta
 
-        m2_a = self._m2
-        m3_a = self._m3
-        m4_a = self._m4
-        m2_b = other._m2
-        m3_b = other._m3
-        m4_b = other._m4
+        new_mean = mean_a + delta * nb / nc
 
-        new_mean = (na * self._mean + nb * other._mean) / nc
-
-        new_m2 = m2_a + m2_b + delta2 * na * nb / nc
+        m2_correction = delta2 * na * nb / nc
+        new_m2 = m2_a + m2_b + m2_correction
 
         new_m3 = (
             m3_a
             + m3_b
-            + delta3 * na * nb * (na - nb) / (nc * nc)
+            + delta * m2_correction * (na - nb) / nc
             + 3 * delta * (na * m2_b - nb * m2_a) / nc
         )
 
         new_m4 = (
             m4_a
             + m4_b
-            + delta4 * na * nb * (na * na - na * nb + nb * nb) / (nc * nc * nc)
+            + delta2 * m2_correction * (na * na - na * nb + nb * nb) / (nc * nc)
             + 6 * delta2 * (na * na * m2_b + nb * nb * m2_a) / (nc * nc)
             + 4 * delta * (na * m3_b - nb * m3_a) / nc
         )

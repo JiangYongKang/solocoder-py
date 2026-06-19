@@ -331,7 +331,9 @@ class TestValidateWithPolarAwareness:
         coords = [make_coordinate(90.001, 0.0)]
         result = v.validate_with_polar_awareness(coords)
         assert result.valid is False
-        assert any("exceeds" in inv.reason for inv in result.invalid_coordinates)
+        assert len(result.invalid_coordinates) == 1
+        assert "exceeds" in result.invalid_coordinates[0].reason
+        assert "out of range" in result.invalid_coordinates[0].reason
 
     def test_near_polar_coords_not_flagged_as_invalid(self):
         v = make_validator()
@@ -349,7 +351,18 @@ class TestValidateWithPolarAwareness:
         ]
         result = v.validate_with_polar_awareness(coords)
         assert result.valid is False
+        assert len(result.invalid_coordinates) == 1
         indices = [inv.index for inv in result.invalid_coordinates]
         assert 1 in indices
         assert 0 not in indices
         assert 2 not in indices
+
+    def test_exceeds_pole_no_duplicate_entries(self):
+        v = make_validator()
+        coords = [make_coordinate(90.001, 0.0)]
+        result = v.validate_with_polar_awareness(coords)
+        assert len(result.invalid_coordinates) == 1
+        assert result.invalid_coordinates[0].index == 0
+        reasons = result.invalid_coordinates[0].reason
+        assert "out of range" in reasons
+        assert "exceeds" in reasons

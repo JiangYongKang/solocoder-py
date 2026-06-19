@@ -1,0 +1,4 @@
+在当前项目坐标参考系边界校验器的实现中，仍存在以下问题需要修复：
+
+1. validator.py 的 validate_with_polar_awareness 方法在过滤极近点提醒时，只加入了 exceeds 关键词过滤来区分极近点和超出极点最大值的坐标，但没有处理同一个坐标被重复添加到 invalid_coordinates 的问题。当纬度如 90.001 既超出正常校验范围又超出极点最大值时，validate_coordinates 方法已将该坐标作为一条 InvalidCoordinate 加入列表，然后 exceeds 循环又会把它再追加一次，导致同一个索引在 invalid_coordinates 中出现两条条目。下游如果按条目数量做错误统计就会被重复计数。
+2. 为验证问题修复而新增的 test_mixed_coords_only_exceeds_flagged 测试断言不完整。该测试使用坐标列表 [89.999, 90.001, 45.0]，仅验证了 index=1 被标记、index=0 和 index=2 未被错判，但没有对 invalid_coordinates 的条目总数做断言。由于上述双重添加缺陷的存在，invalid_coordinates 实际长度为 2 而非预期的 1，测试却依然显示通过，漏检了重复条目的问题。

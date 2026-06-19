@@ -282,10 +282,23 @@ class Quadtree:
             )
 
     def insert_point(self, point: Point) -> None:
+        if not self._boundary.contains_point(point):
+            raise OutOfBoundsError(
+                f"Point ({point.x}, {point.y}) is outside quadtree boundary "
+                f"({self._boundary.min_x}, {self._boundary.min_y}) to "
+                f"({self._boundary.max_x}, {self._boundary.max_y})"
+            )
         self._root.insert_point(point)
         self._point_count += 1
 
     def insert_rectangle(self, rect: Rectangle) -> None:
+        if not self._boundary.contains(rect):
+            raise OutOfBoundsError(
+                f"Rectangle at ({rect.x}, {rect.y}) with size {rect.width}x{rect.height} "
+                f"is outside quadtree boundary "
+                f"({self._boundary.min_x}, {self._boundary.min_y}) to "
+                f"({self._boundary.max_x}, {self._boundary.max_y})"
+            )
         self._root.insert_rectangle(rect)
         self._rectangle_count += 1
 

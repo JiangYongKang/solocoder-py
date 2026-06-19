@@ -110,6 +110,7 @@ class Polygon:
 class PolygonWithHoles:
     outer_ring: Polygon
     inner_rings: List[Polygon]
+    validate_winding: bool = True
 
     def __post_init__(self) -> None:
         if self.outer_ring is None:
@@ -128,6 +129,28 @@ class PolygonWithHoles:
                     f"Inner ring {i} is not a Polygon instance: {type(ring)}"
                 )
 
+        if self.validate_winding:
+            self._validate_winding_order()
+
+    def _validate_winding_order(self) -> None:
+        if not self.outer_ring.is_counterclockwise():
+            raise InvalidPolygonError(
+                "Outer ring must be counterclockwise (positive winding order)"
+            )
+
+        for i, ring in enumerate(self.inner_rings):
+            if not ring.is_clockwise():
+                raise InvalidPolygonError(
+                    f"Inner ring {i} must be clockwise (negative winding order)"
+                )
+
+    def normalize(self) -> None:
+        if not self.outer_ring.is_counterclockwise():
+            self.outer_ring.reverse()
+        for ring in self.inner_rings:
+            if not ring.is_clockwise():
+                ring.reverse()
+
     @classmethod
     def from_tuples(
         cls,
@@ -136,7 +159,12 @@ class PolygonWithHoles:
     ) -> "PolygonWithHoles":
         outer = Polygon.from_tuples(outer_ring)
         inners = [Polygon.from_tuples(ring) for ring in inner_rings]
-        return cls(outer_ring=outer, inner_rings=inners)
+        instance = cls(
+            outer_ring=outer, inner_rings=inners, validate_winding=False
+        )
+        instance.normalize()
+        instance._validate_winding_order()
+        return instance
 
     @property
     def hole_count(self) -> int:

@@ -86,11 +86,7 @@ def prepare_frequency_table(
 
     validate_frequency_table(freq_dict)
 
-    valid_freqs = {s: f for s, f in freq_dict.items() if f > 0}
-    if not valid_freqs:
-        raise HuffmanEmptyFrequencyTableError("No symbols with positive frequency")
-
-    return valid_freqs
+    return dict(freq_dict)
 
 
 def filter_frequency_table(

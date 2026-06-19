@@ -198,9 +198,6 @@ class TestEncoderDecoderEdgeCases:
         assert "".join(decoded) == "BBBBB"
 
     def test_reset_decoder(self):
-        freq_table = {"A": 5, "B": 5, "C": 3, "D": 2}
-        code_table = generate_code_table(freq_table)
-
         encoded1 = encode("AAAAA")
         encoded2 = encode("BBBBB")
 
@@ -210,7 +207,6 @@ class TestEncoderDecoderEdgeCases:
         assert "".join(result1) == "AAAAA"
 
         decoder.reset()
-
         assert decoder._buffer == ""
         assert decoder._output == []
         assert decoder._finished is False
@@ -220,7 +216,20 @@ class TestEncoderDecoderEdgeCases:
         assert "".join(result2) == "AAAAA"
 
         decoder.reset()
+        assert decoder._buffer == ""
+        assert decoder._output == []
+        assert decoder._finished is False
+
+        decoder.write(encoded1.bit_string)
+        result3 = decoder.finish(expected_length=5)
+        assert "".join(result3) == "AAAAA"
+
+        decoder.reset()
+        assert decoder._buffer == ""
+        assert decoder._output == []
+        assert decoder._finished is False
+
         decoder2 = HuffmanDecoder(encoded2.code_table)
         decoder2.write(encoded2.bit_string)
-        result3 = decoder2.finish(expected_length=5)
-        assert "".join(result3) == "BBBBB"
+        result4 = decoder2.finish(expected_length=5)
+        assert "".join(result4) == "BBBBB"

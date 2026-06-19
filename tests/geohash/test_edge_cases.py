@@ -140,35 +140,51 @@ class TestPoleCoordinates:
         geohash = encode(89.999, 0.0, precision=4)
         bbox = decode_bbox(geohash)
 
-        neighbors = get_neighbors(geohash)
+        assert abs(bbox.max_lat - 90.0) < 1e-10
 
-        if abs(bbox.max_lat - 90.0) < 1e-10:
-            assert neighbors.north is None
-            assert neighbors.north_east is None
-            assert neighbors.north_west is None
-        else:
-            assert neighbors.north is not None
+        neighbors = get_neighbors(geohash)
+        assert neighbors.north is None
+        assert neighbors.north_east is None
+        assert neighbors.north_west is None
+
+    def test_north_non_pole_has_all_neighbors(self):
+        geohash = encode(80.0, 0.0, precision=6)
+        bbox = decode_bbox(geohash)
+        assert bbox.max_lat < 90.0
+
+        neighbors = get_neighbors(geohash)
+        assert neighbors.north is not None
+        assert neighbors.north_east is not None
+        assert neighbors.north_west is not None
 
     def test_south_pole_neighbors(self):
         geohash = encode(-89.999, 0.0, precision=4)
         bbox = decode_bbox(geohash)
 
-        neighbors = get_neighbors(geohash)
+        assert abs(bbox.min_lat + 90.0) < 1e-10
 
-        if abs(bbox.min_lat + 90.0) < 1e-10:
-            assert neighbors.south is None
-            assert neighbors.south_east is None
-            assert neighbors.south_west is None
-        else:
-            assert neighbors.south is not None
+        neighbors = get_neighbors(geohash)
+        assert neighbors.south is None
+        assert neighbors.south_east is None
+        assert neighbors.south_west is None
+
+    def test_south_non_pole_has_all_neighbors(self):
+        geohash = encode(-80.0, 0.0, precision=6)
+        bbox = decode_bbox(geohash)
+        assert bbox.min_lat > -90.0
+
+        neighbors = get_neighbors(geohash)
+        assert neighbors.south is not None
+        assert neighbors.south_east is not None
+        assert neighbors.south_west is not None
 
     def test_pole_neighbor_nonexistence(self):
         geohash = encode(89.9999, 0.0, precision=2)
-        neighbors = get_neighbors(geohash)
-
         bbox = decode_bbox(geohash)
-        if bbox.max_lat >= 90.0 or abs(bbox.max_lat - 90.0) < 1e-10:
-            assert neighbors.north is None
+        assert abs(bbox.max_lat - 90.0) < 1e-10
+
+        neighbors = get_neighbors(geohash)
+        assert neighbors.north is None
 
 
 class TestAntimeridianCrossing:
@@ -188,24 +204,46 @@ class TestAntimeridianCrossing:
         geohash = encode(0.0, 179.999, precision=6)
         bbox = decode_bbox(geohash)
 
-        neighbors = get_neighbors(geohash)
+        assert abs(bbox.max_lon - 180.0) < 1e-5
 
-        if abs(bbox.max_lon - 180.0) < 1e-5:
-            assert neighbors.east is not None
-            east_bbox = decode_bbox(neighbors.east)
-            assert east_bbox.min_lon < 0
-            assert east_bbox.max_lon < 0 or east_bbox.max_lon > 180
+        neighbors = get_neighbors(geohash)
+        assert neighbors.east is not None
+        east_bbox = decode_bbox(neighbors.east)
+        assert east_bbox.min_lon < 0
+        assert east_bbox.max_lon < 0 or east_bbox.max_lon > 180
+
+    def test_east_neighbor_not_at_antimeridian(self):
+        geohash = encode(0.0, 120.0, precision=6)
+        bbox = decode_bbox(geohash)
+        assert bbox.max_lon < 180.0 - 1e-3
+
+        neighbors = get_neighbors(geohash)
+        assert neighbors.east is not None
+        east_bbox = decode_bbox(neighbors.east)
+        assert east_bbox.min_lon > bbox.min_lon
+        assert east_bbox.max_lon < 180.0 or east_bbox.min_lon < 0
 
     def test_west_neighbor_crosses_antimeridian(self):
         geohash = encode(0.0, -179.999, precision=6)
         bbox = decode_bbox(geohash)
 
-        neighbors = get_neighbors(geohash)
+        assert abs(bbox.min_lon + 180.0) < 1e-5
 
-        if abs(bbox.min_lon + 180.0) < 1e-5:
-            assert neighbors.west is not None
-            west_bbox = decode_bbox(neighbors.west)
-            assert west_bbox.max_lon > 0
+        neighbors = get_neighbors(geohash)
+        assert neighbors.west is not None
+        west_bbox = decode_bbox(neighbors.west)
+        assert west_bbox.max_lon > 0
+
+    def test_west_neighbor_not_at_antimeridian(self):
+        geohash = encode(0.0, -120.0, precision=6)
+        bbox = decode_bbox(geohash)
+        assert bbox.min_lon > -180.0 + 1e-3
+
+        neighbors = get_neighbors(geohash)
+        assert neighbors.west is not None
+        west_bbox = decode_bbox(neighbors.west)
+        assert west_bbox.min_lon < bbox.min_lon
+        assert west_bbox.min_lon > -180.0 or west_bbox.max_lon > 0
 
     def test_antimeridian_adjacency(self):
         geohash_east = encode(0.0, 179.9999, precision=4)
@@ -214,17 +252,24 @@ class TestAntimeridianCrossing:
         neighbors_east = get_neighbors(geohash_east)
         neighbors_west = get_neighbors(geohash_west)
 
-        if neighbors_east.east == geohash_west:
-            assert neighbors_west.west == geohash_east
+        assert neighbors_east.east == geohash_west
+        assert neighbors_west.west == geohash_east
 
     def test_diagonal_crosses_antimeridian(self):
         geohash = encode(1.0, 179.9999, precision=5)
         neighbors = get_neighbors(geohash)
 
-        if neighbors.east is not None:
-            east_bbox = decode_bbox(neighbors.east)
-            if east_bbox.min_lon < 0:
-                assert neighbors.north_east is not None or neighbors.south_east is not None
+        assert neighbors.east is not None
+        east_bbox = decode_bbox(neighbors.east)
+        assert east_bbox.min_lon < 0
+        assert neighbors.north_east is not None or neighbors.south_east is not None
+
+        if neighbors.north_east is not None:
+            ne_bbox = decode_bbox(neighbors.north_east)
+            assert abs(ne_bbox.min_lon - east_bbox.min_lon) < 1e-10
+        if neighbors.south_east is not None:
+            se_bbox = decode_bbox(neighbors.south_east)
+            assert abs(se_bbox.min_lon - east_bbox.min_lon) < 1e-10
 
 
 class TestBoundaryExactValues:

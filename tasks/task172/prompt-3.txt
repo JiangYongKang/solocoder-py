@@ -1,0 +1,5 @@
+在当前项目 LZ77 压缩器的实现中，仍存在以下问题需要修复：
+
+1. compressor.py 的 _find_longest_match 方法第 118 行存在表达式 `dist + remaining if False else remaining`，其中 `if False` 永假分支导致该行表达式恒等于 `remaining`，而紧随其后的第 119 行又用相同计算结果覆盖了这一变量，使第 118 行成为毫无作用的死代码残留。
+2. compressor.py 的 _write_literal_block 方法中同时存在两段冗余的长度溢出校验：先校验 `length > max_len`（max_len 已被构造时限制为不超过 128），随后再校验 `length - 1 > 0x7F`（等价于 length > 128）。由于前一段校验已经拒绝 length > max_len 且 max_len ≤ 128 恒成立，后一段校验永远不可能为真，形成了永不触发的死分支。
+3. test_error_branches.py 的 test_corrupted_control_marker_length_overflow 测试用例在实际运行中永远被跳过。该用例通过条件判断 `min_match_length + 255 > max_match_length` 来决定执行还是跳过，但在默认配置下 `min_match_length=3`、`max_match_length=258`，计算出的 `258 > 258` 为 False 始终进入 pytest.skip。长度溢出的错误检测路径在当前默认配置下完全未被执行。

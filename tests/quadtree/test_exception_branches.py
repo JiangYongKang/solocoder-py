@@ -186,6 +186,115 @@ class TestExceptionHierarchy:
         assert issubclass(InvalidRectangleError, QuadtreeError)
 
 
+class TestOutOfBoundsErrorMessage:
+    def test_point_out_of_bounds_error_mentions_global_boundary(self):
+        boundary = Rectangle(x=0, y=0, width=200, height=200)
+        qt = Quadtree(boundary, max_capacity=1, max_depth=5)
+
+        qt.insert(Point(x=25, y=25))
+        qt.insert(Point(x=175, y=175))
+
+        with pytest.raises(OutOfBoundsError) as exc_info:
+            qt.insert(Point(x=300, y=300))
+
+        error_msg = str(exc_info.value)
+        assert "quadtree boundary" in error_msg
+        assert "300" in error_msg
+        assert "200" in error_msg
+
+    def test_rectangle_out_of_bounds_error_mentions_global_boundary(self):
+        boundary = Rectangle(x=10, y=10, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=2, max_depth=5)
+
+        qt.insert(Point(x=20, y=20))
+        qt.insert(Point(x=100, y=100))
+        qt.insert(Point(x=60, y=60))
+
+        with pytest.raises(OutOfBoundsError) as exc_info:
+            qt.insert(Rectangle(x=50, y=50, width=100, height=100))
+
+        error_msg = str(exc_info.value)
+        assert "quadtree boundary" in error_msg
+        assert "110" in error_msg
+
+    def test_partial_outside_rectangle_error_shows_global_boundary(self):
+        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=4)
+
+        with pytest.raises(OutOfBoundsError) as exc_info:
+            qt.insert(Rectangle(x=50, y=50, width=100, height=100))
+
+        error_msg = str(exc_info.value)
+        assert "quadtree boundary" in error_msg
+        assert "100" in error_msg
+
+
+class TestBoundaryConsistency:
+    def test_boundary_property_same_instance_as_root_boundary(self):
+        boundary = Rectangle(x=0, y=0, width=200, height=200)
+        qt = Quadtree(boundary, max_capacity=4)
+
+        assert qt.boundary is qt._root.boundary
+
+    def test_boundary_is_copy_of_constructor_argument(self):
+        original = Rectangle(x=0, y=0, width=200, height=200)
+        qt = Quadtree(original, max_capacity=4)
+
+        assert qt.boundary is not original
+        assert qt.boundary.x == original.x
+        assert qt.boundary.y == original.y
+        assert qt.boundary.width == original.width
+        assert qt.boundary.height == original.height
+
+    def test_clear_preserves_boundary_instance(self):
+        boundary = Rectangle(x=10, y=20, width=300, height=400)
+        qt = Quadtree(boundary, max_capacity=4)
+        qt.insert(Point(x=50, y=50))
+        qt.insert(Rectangle(x=20, y=30, width=50, height=60))
+
+        boundary_before = qt.boundary
+
+        qt.clear()
+
+        assert qt.boundary is boundary_before
+        assert qt._root.boundary is boundary_before
+
+    def test_clear_rebuilds_root_with_same_boundary_values(self):
+        boundary = Rectangle(x=5, y=5, width=150, height=150)
+        qt = Quadtree(boundary, max_capacity=1, max_depth=3)
+
+        qt.insert(Point(x=10, y=10))
+        qt.insert(Point(x=140, y=140))
+        qt.insert(Point(x=10, y=140))
+
+        boundary_before = qt.boundary
+        width_before = boundary_before.width
+        height_before = boundary_before.height
+        min_x_before = boundary_before.min_x
+        min_y_before = boundary_before.min_y
+
+        qt.clear()
+
+        assert qt.boundary.width == width_before
+        assert qt.boundary.height == height_before
+        assert qt.boundary.min_x == min_x_before
+        assert qt.boundary.min_y == min_y_before
+        assert qt._root.boundary.width == width_before
+        assert qt._root.boundary.height == height_before
+
+    def test_modifying_original_boundary_does_not_affect_quadtree(self):
+        original = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(original, max_capacity=4)
+
+        original.x = 999
+        original.width = 999
+
+        assert qt.boundary.x == 0
+        assert qt.boundary.width == 100
+        assert qt._root.boundary.x == 0
+        assert qt._root.boundary.width == 100
+
+
 class TestMaxDepthInRecursiveInsert:
     def test_deep_recursion_stops_at_max_depth(self):
         boundary = Rectangle(x=0, y=0, width=1024, height=1024)

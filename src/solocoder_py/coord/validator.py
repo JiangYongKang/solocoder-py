@@ -182,18 +182,39 @@ class CoordValidator:
         self, coords: List[Coordinate]
     ) -> ValidationResult:
         base_result = self.validate_coordinates(coords)
-        all_invalid = list(base_result.invalid_coordinates)
         polar_results = self.check_polar_singularities(coords)
+
+        merged: dict[int, dict] = {}
+        for inv in base_result.invalid_coordinates:
+            if inv.index is not None:
+                merged[inv.index] = {
+                    "latitude": inv.latitude,
+                    "longitude": inv.longitude,
+                    "reasons": [inv.reason],
+                }
+
         for i, (coord, polar) in enumerate(zip(coords, polar_results)):
             if polar.latitude_warning is not None and "exceeds" in polar.latitude_warning:
-                all_invalid.append(
-                    InvalidCoordinate(
-                        index=i,
-                        latitude=coord.latitude,
-                        longitude=coord.longitude,
-                        reason=polar.latitude_warning,
-                    )
+                if i in merged:
+                    merged[i]["reasons"].append(polar.latitude_warning)
+                else:
+                    merged[i] = {
+                        "latitude": coord.latitude,
+                        "longitude": coord.longitude,
+                        "reasons": [polar.latitude_warning],
+                    }
+
+        all_invalid: list[InvalidCoordinate] = []
+        for idx in sorted(merged.keys()):
+            entry = merged[idx]
+            all_invalid.append(
+                InvalidCoordinate(
+                    index=idx,
+                    latitude=entry["latitude"],
+                    longitude=entry["longitude"],
+                    reason="; ".join(entry["reasons"]),
                 )
+            )
         return ValidationResult(
             valid=len(all_invalid) == 0, invalid_coordinates=all_invalid
         )

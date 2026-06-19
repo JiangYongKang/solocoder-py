@@ -1,0 +1,4 @@
+在当前项目时间戳二阶差分压缩器的实现中，仍存在以下问题需要修复：
+
+1. decompressor.py 的 _decode_simple8b 方法在 value_count ≤ 2 且 simple8b_length > 0 时直接返回空列表，不对 _simple8b_data 中的字节做任何消费或校验。合法压缩数据中 value_count 为 0、1、2 时 simple8b_length 始终为 0，因为压缩器在时间戳数不超过 2 时不产生二阶差分也不生成 Simple-8b 数据。因此 value_count=2 且 simple8b_length=8 这种组合只可能来自头字段损坏，当前实现对此既不抛出 CorruptedDataError 也不消费垃圾字节，损坏数据被静默吞掉。
+2. compressor.py 的 compress_timestamps 函数通过 `compressor._last_delta_result` 直接访问 TsDeltaCompressor 实例的私有属性来获取 DeltaResult 元数据。该属性的赋值依赖 get_compressed_data 调用 compress 方法这一隐式约定，外部便利函数与对象私有状态之间形成了紧耦合。

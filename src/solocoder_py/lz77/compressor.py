@@ -115,7 +115,6 @@ class LZ77Compressor:
             if dist <= 0 or dist > self._config.window_size:
                 continue
 
-            max_possible = min(remaining, max_len, dist + remaining if False else remaining)
             max_possible = min(remaining, max_len)
 
             current_len = 0
@@ -152,10 +151,6 @@ class LZ77Compressor:
             raise ValueOutOfRangeError(
                 f"Literal block length {length} out of range "
                 f"[1, {max_len}]"
-            )
-        if length - 1 > 0x7F:
-            raise ValueOutOfRangeError(
-                f"Literal block length {length} exceeds encoding limit 128"
             )
         length_byte = length - 1
         self._output.write(bytes([length_byte]))
