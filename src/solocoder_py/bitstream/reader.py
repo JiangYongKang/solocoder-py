@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+from typing import Union
+
+from .exceptions import (
+    InsufficientBitsError,
+    InvalidBitCountError,
+)
+
+MIN_BITS = 1
+MAX_BITS = 64
+
+
+class BitReader:
+    def __init__(self, data: Union[bytes, bytearray]) -> None:
+        self._data: bytes = bytes(data)
+        self._byte_pos: int = 0
+        self._bit_offset: int = 0
+        self._total_bits_read: int = 0
+
+    @property
+    def total_bits_available(self) -> int:
+        return len(self._data) * 8
+
+    @property
+    def total_bits_read(self) -> int:
+        return self._total_bits_read
+
+    @property
+    def remaining_bits(self) -> int:
+        return self.total_bits_available - self._total_bits_read
+
+    @property
+    def byte_position(self) -> int:
+        return self._byte_pos
+
+    @property
+    def bit_offset(self) -> int:
+        return self._bit_offset
+
+    @property
+    def is_aligned(self) -> bool:
+        return self._bit_offset == 0
+
+    def _read_bits_internal(self, n: int, advance: bool = True) -> int:
+        if n == 0:
+            return 0
+        if n < MIN_BITS or n > MAX_BITS:
+            raise InvalidBitCountError(
+                f"Bit count must be between {MIN_BITS} and {MAX_BITS}, got {n}"
+            )
+        if self._total_bits_read + n > self.total_bits_available:
+            raise InsufficientBitsError(
+                f"Cannot read {n} bits: only {self.remaining_bits} bits remaining "
+                f"(total available: {self.total_bits_available}, read so far: {self._total_bits_read})"
+            )
+
+        result = 0
+        remaining = n
+        byte_pos = self._byte_pos
+        bit_offset = self._bit_offset
+
+        while remaining > 0:
+            bits_in_current_byte = 8 - bit_offset
+            bits_to_read = min(remaining, bits_in_current_byte)
+
+            right_shift = bits_in_current_byte - bits_to_read
+            mask = ((1 << bits_to_read) - 1) << right_shift
+            byte_val = self._data[byte_pos]
+            bits_val = (byte_val & mask) >> right_shift
+
+            result = (result << bits_to_read) | bits_val
+
+            remaining -= bits_to_read
+            bit_offset += bits_to_read
+
+            if bit_offset == 8:
+                bit_offset = 0
+                byte_pos += 1
+
+        if advance:
+            self._byte_pos = byte_pos
+            self._bit_offset = bit_offset
+            self._total_bits_read += n
+
+        return result
+
+    def read_bits(self, n: int) -> int:
+        return self._read_bits_internal(n, advance=True)
+
+    def peek_bits(self, n: int) -> int:
+        return self._read_bits_internal(n, advance=False)
+
+    def align_to_byte(self) -> int:
+        if self._bit_offset == 0:
+            return 0
+
+        skip_bits = 8 - self._bit_offset
+        if self._total_bits_read + skip_bits > self.total_bits_available:
+            raise InsufficientBitsError(
+                f"Cannot align: need {skip_bits} bits but only "
+                f"{self.remaining_bits} remaining"
+            )
+
+        self._bit_offset = 0
+        self._byte_pos += 1
+        self._total_bits_read += skip_bits
+        return skip_bits
+
+    def read_remaining(self) -> bytes:
+        if self._bit_offset != 0:
+            remaining_in_byte = 8 - self._bit_offset
+            result = bytearray()
+            if self._byte_pos < len(self._data):
+                mask = (1 << remaining_in_byte) - 1
+                last_bits = (self._data[self._byte_pos] & mask) << self._bit_offset
+                if last_bits != 0:
+                    result.append(last_bits)
+                self._byte_pos += 1
+                self._bit_offset = 0
+            result.extend(self._data[self._byte_pos:])
+            self._byte_pos = len(self._data)
+            self._total_bits_read = self.total_bits_available
+            return bytes(result)
+
+        result = self._data[self._byte_pos:]
+        self._byte_pos = len(self._data)
+        self._total_bits_read = self.total_bits_available
+        return bytes(result)
+
+    def reset(self) -> None:
+        self._byte_pos = 0
+        self._bit_offset = 0
+        self._total_bits_read = 0
