@@ -1,0 +1,6 @@
+在当前 Python 项目中实现指标采集器域，使用内存数据结构存储指标数据。
+1. 实现三种指标类型：Counter（单调递增计数器，支持 inc 操作）、Gauge（可增可减的瞬时值，支持 set/inc/dec 操作）、Histogram（观察值分布统计，支持 observe 操作，记录样本并计算分位数）。每种类型需提供各自语义正确的方法接口，Counter 不允许减少，Gauge 不允许 observe。
+2. 实现标签分组：每个指标实例可以绑定一组键值对标签（labels），相同指标名称但不同标签值组合视为独立的指标线。查询指标时支持按标签精确匹配和按标签名过滤返回匹配的指标线列表。标签键值对应在指标创建时指定，创建后不可变。
+3. 实现 Prometheus 文本格式导出：提供一个方法将当前内存中所有指标及其实时值导出为符合 Prometheus exposition format 的文本格式。Counter 导出当前累计值，Gauge 导出当前值，Histogram 需导出样本总数、总和以及各桶的累计计数（桶边界在创建 Histogram 时指定）。格式需包含 HELP 和 TYPE 元数据行。
+4. 代码实现需要放在 src/solocoder_py/metrics/ 包下，然后为该模块编写完整的单元测试，覆盖正常流程（Counter 递增正确、Gauge 设置与增减正确、Histogram 分桶统计正确、带标签的不同指标线独立计数、Prometheus 文本格式导出语法正确）、边界条件（零标签指标、大量标签组合的指标线、空 Histogram 桶边界、Gauge 设为负值）和异常分支（Counter 执行 dec 操作被拒绝、重复创建同指标名同标签组的指标处理、Histogram 传入非正桶边界被拒绝）。测试代码放在 tests/metrics/ 下。
+5. 在该模块包内编写 README.md，说明模块功能、核心类的职责、三种指标类型的语义与 Prometheus 导出格式（可用文本描述）以及使用示例。

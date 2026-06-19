@@ -1,0 +1,6 @@
+产物不满意：
+1. aggregator.py 的 _check_component_with_cache 只将直接依赖ID记入 cascaded_from，error 写为 `Dependency 'xx' is not ready`。_check_all_internal 汇总时再以级联原因覆盖 error，顶层组件降级信息无法追溯根因。根因是未沿链传导，修复方案为判断依赖组件 cascaded_from 非空时向上传递根因ID与原始错误。
+
+过程不满意：
+1. 模型在编写 test_normal_flows.py 时一次性生成了包含多处语法错误的代码，包括括号不匹配和 f-string 格式错误，后续通过五次以上的 edit_file_search_replace 反复修补。模型写完文件后未做基本代码质量检查就直接运行测试，属于"先写后修"的低效模式。语法错误属于生成阶段即可通过校验规避的基础问题，正确做法是生成代码后先自检语法完整性再提交 pytest。
+2. 模型在读完 watchdog 样例代码后未做深入设计分析就直接创建了 11 项 TodoList，后续多次调用 todo_write 更新计划。实际编码按文件粒度的线性顺序逐步创建各模块，与 TodoList 的任务分解不匹配，TodoList 更像是事后标注进度而非事前规划路径。正确做法是先梳理健康检查聚合器的核心概念模型，包括探针类型与结果结构、组件注册与依赖图、级联传播规则、降级判定优先级，理清数据流后再按职责边界制定执行计划。

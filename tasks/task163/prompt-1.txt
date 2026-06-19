@@ -1,0 +1,6 @@
+在当前 Python 项目中实现分布式追踪 Span 上下文域，使用内存数据结构管理追踪数据。
+1. 实现 Trace ID 生成：为每条追踪链路生成全局唯一的 Trace ID，格式为 32 位十六进制字符串。需要保证在并发场景下生成的 Trace ID 不发生碰撞，可结合时间戳、随机数和计数器等要素组合生成。
+2. 实现父子 Span 链接：每个 Span 有唯一的 Span ID（16 位十六进制字符串），记录当前 Span 的操作名称、开始时间戳和结束时间戳。创建子 Span 时自动继承父 Span 的 Trace ID，并将自身的 Parent Span ID 指向父 Span。支持跨层级的 Span 嵌套关系（一个 Span 可以有多个子 Span，也可以有零个子 Span）。Span 结束时记录结束时间，未结束的 Span 不允许作为已完成引用。
+3. 实现采样决策传播：支持头部采样（head-based sampling）策略——在根 Span 创建时做出采样决策，该决策沿 Span 链向下传播到所有子孙 Span。采样比例为可配置的浮点数（0.0～1.0），采样决策一旦做出，该 Trace 下所有 Span 必须保持一致（全采样或全不采样）。采样状态需要作为 Span 的属性被查询，被采样的 Span 在导出时应携带 sampled 标记，未采样的 Span 则不导出。
+4. 代码实现需要放在 src/solocoder_py/tracing/ 包下，然后为该模块编写完整的单元测试，覆盖正常流程（Trace ID 全局唯一、父子 Span 链接正确、采样决策沿链传播一致、并发创建 Span 的 ID 无碰撞）、边界条件（单 Span 的 Trace 无父 Span、多子 Span 的正确链接、采样比例为 0 和 1 的边界行为）和异常分支（尝试为已结束的 Span 创建子 Span 被拒绝、采样比例越界被拒绝、重复结束同一 Span 的处理、未开始 Span 被查询）。测试代码放在 tests/tracing/ 下。
+5. 在该模块包内编写 README.md，说明模块功能、核心类的职责、Trace/Span 的 ID 生成策略、采样传播机制（可用文本描述）以及使用示例。

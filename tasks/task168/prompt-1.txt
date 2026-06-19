@@ -1,0 +1,6 @@
+在当前 Python 项目中实现 OAuth2 授权码状态管理器域，使用内存数据结构管理授权流程中的状态与验证。
+1. 实现 PKCE 挑战校验：支持 S256 和 plain 两种 code_challenge_method。授权请求发起时存储 code_challenge 和 code_challenge_method 与会话绑定。在令牌交换时，客户端提交 code_verifier，服务器根据存储的 method 对 verifier 进行变换（plain 模式直接比较，S256 模式先对 verifier 做 SHA-256 哈希再 Base64URL 编码后比较），验证 computed_challenge 与存储的 code_challenge 是否匹配。不匹配时拒绝令牌请求。
+2. 实现 state 参数防 CSRF：授权请求发起时生成或存储客户端提供的 state 参数值。在回调重定向时需要验证回调中携带的 state 参数与存储的值一致，不允许出现 state 为空或缺失的情况。每个授权会话的 state 只能被成功验证一次，防止重放攻击。
+3. 实现授权码一次性消费：授权码生成后分配给一次授权会话，该授权码具有有限的过期时间。在令牌端点接收到授权码后，验证该授权码存在且未过期且未被使用过。验证通过后立即将授权码标记为已消费，同一授权码的后续令牌请求应被拒绝。需防止并发场景下同一授权码被两次消费。
+4. 代码实现需要放在 src/solocoder_py/oauth2/ 包下，然后为该模块编写完整的单元测试，覆盖正常流程（PKCE S256 校验成功、state 验证一致、授权码一次消费后不可重用）、边界条件（PKCE plain 模式校验、state 参数为空被拒绝、授权码刚到期时被拒绝）和异常分支（code_verifier 与 challenge 不匹配被拒绝、state 不一致被拒绝、已消费授权码再次使用被拒绝、过期授权码被拒绝、未知的授权码被拒绝、并发消费同一授权码的竞态保护、不支持的 code_challenge_method 被拒绝）。测试代码放在 tests/oauth2/ 下。
+5. 在该模块包内编写 README.md，说明模块功能、核心类的职责、PKCE 校验流程、state 防 CSRF 机制与授权码一次性消费策略（可用文本描述）以及使用示例。

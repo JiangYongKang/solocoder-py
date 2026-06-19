@@ -1,0 +1,8 @@
+产物不满意：
+1. set_level 方法的 level 参数类型声明为 str，只能接受字符串如 "DEBUG"，不支持直接传入 LogLevel 枚举值。模块在 __init__.py 中对外导出了 LogLevel 枚举，但用户调用 `mgr.set_level("app", LogLevel.DEBUG)` 时会抛出 `AttributeError: 'LogLevel' object has no attribute 'upper'`，因为代码在未做类型判断的情况下直接对 level 参数调用了 `.upper()` 方法。is_enabled 方法存在完全相同的问题。这是 API 设计不一致：导出枚举却不允许在核心方法中使用枚举值，用户从类型提示也无法得知可以传什么参数。根因是方法入口缺少对 LogLevel 类型的兼容处理，应在 set_level 和 is_enabled 开头将 level 参数统一转换为字符串后再执行后续校验和逻辑。
+2. __init__.py 中 CLEAR_ALL 和 CLEAR_LEVEL 等辅助方法的实现虽然功能正确，但 set_level、get_effective_level、is_enabled 三个核心方法之间缺少对 Logger 名称的输入校验，对 None、空字符串、含特殊字符的名称无防御性处理，调用 `get_effective_level(None)` 会直接抛 `AttributeError: 'NoneType' object has no attribute 'rfind'`，而非抛出语义更清晰的 TypeError。根因是没有在公共方法入口对 name 参数做类型和合法性检查。
+
+过程不满意：
+1. 模型在收到提示词后，第一个工具调用就是 todo_write 创建了 5 项子任务计划，之后才开始通过 view_folder 和 view_files 查看项目目录结构和参考模块。正确的做法是先分析提示词需求，理解项目骨架和包导入约定，理清模块边界后再规划执行步骤。由于计划仓促制定，后续在编写测试时暴露了对 pytest 测试文件命名约定的不熟悉，导致所有测试代码被误写入 conftest.py 而非 test_log_level.py。
+2. 模型将全部测试代码写入 conftest.py 后运行 pytest 发现没有测试用例被识别，经过 file_search 和 search_by_regex 搜索 pytest 配置后才意识到测试文件命名不符规范，随后将 conftest.py 清空、把测试内容重新写入 test_log_level.py。这一轮纠错完全是可避免的，如果模型在编写测试前先查看现有测试目录（如 tests/cache/）的文件命名和组织方式，就能直接定位到正确的 test_*.py 命名约定，无需走这一轮试错。
+3. 模型在测试执行阶段使用了 `python -m pytest tests/log_level/ -v` 而非项目约定的 `poetry run pytest`。虽然两者在当前环境下均可运行，但项目通过 Poetry 管理虚拟环境和依赖，跳过 poetry run 有可能在依赖安装不完整的环境下使用错误的 Python 解释器。根因是模型没有仔细阅读 pyproject.toml 中的工具链配置，直接用了通用命令而非项目特定命令。

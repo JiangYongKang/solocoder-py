@@ -1,0 +1,10 @@
+产物不满意：
+1. tracer.py的 `_generate_new_span_id` 和 `_make_sampling_decision` 在锁外调用 `random.getrandbits` 和 `random.random`。Python的random模块使用全局Mersenne Twister实例，内部状态在并发写入时会被破坏。多线程并发创建Span时，随机数状态损坏可能导致Span ID碰撞或采样比例偏离配置值。虽然并发ID无碰撞测试通过了，但这是概率性的，损坏的随机状态可能间歇产生重复值。根因是模型未意识到random模块的非线程安全特性，应将所有random调用纳入锁保护或使用 `threading.local` 隔离Random实例。
+2. tracer.py的 `start_span_from_context` 方法通过TraceContext创建子Span时完全不检查原父Span是否已结束，而 `start_span` 正确检查了 `parent.is_ended` 并抛出 `CannotCreateChildSpanError`。若调用方持有一个已结束Span的context去创建子Span，会成功创建指向已结束Span的孤立Span，违反提示词中"为已结束Span创建子Span被拒绝"的要求。根因是模型只检查了直接parent参数路径而遗漏了context传播路径的结束状态校验，应在方法开头增加对原Span状态的检查。
+3. exceptions.py中定义了 `SpanNotFoundError` 异常类并在 `__init__.py` 中导出为公共API，但tracer.py的 `get_span` 和 `get_active_span` 在找不到Span时都返回None而非抛出该异常。这导致异常定义与使用行为不一致，调用方导入 `SpanNotFoundError` 期望通过异常捕获未找到Span的场景，实际只能检查None返回值。根因是模型在设计阶段定义了异常体系但实现时偏离了设计意图，应统一为抛出 `SpanNotFoundError` 或从公共API中移除未使用的异常定义。
+4. tracer.py的 `get_trace_root` 方法先调用 `get_trace_spans`（内部加锁查询已完成Span），释放锁后又单独加锁扫描 `_active_spans`。两次加锁之间Span可能从活跃变为已完成，导致根Span在两段查询中均被遗漏而返回None。根因是模型把单次查询拆成了两个独立的临界区而未保持查询的原子性，应在一次锁持有内同时遍历已完成Span和活跃Span。
+
+过程不满意：
+1. 模型运行测试时使用了 `python -m pytest` 而非项目约定的 `poetry run pytest`。项目使用Poetry作为构建和依赖管理工具，`poetry run pytest` 能确保在正确的虚拟环境和pythonpath配置下运行测试。虽然本次命令恰好使用了正确解释器，但绕过构建工具的测试执行在复杂依赖场景下可能导致测试在错误环境中运行，也不符合项目的操作规范。
+2. 模型在编写并发测试时只验证了Trace ID和Span ID在多线程下的无碰撞性，未验证 `_make_sampling_decision` 中 `random.random()` 的并发安全性以及 `_generate_new_span_id` 中 `random.getrandbits(64)` 在锁外调用的正确性。测试虽覆盖了50线程乘200次Span创建的ID唯一性且全部通过，但random模块非线程安全缺陷未被测试发现。根因是模型对并发安全性测试的覆盖面不完整，应补充对采样决策在多线程下统计分布准确性的验证以及Span ID在极端并发压力下的碰撞检测。
+3. 模型在conftest.py的 `tracer` fixture中每次teardown都调用 `Tracer.reset_instance()`，但该fixture创建的是普通Tracer实例而非通过 `get_instance()` 获取的单例对象。`reset_instance()` 操作的是类级别的单例状态，与fixture内的实例无关，属于无效清理代码。根因是模型对单例模式与普通实例的生命周期理解混淆，应移除无效的 `reset_instance()` 调用或仅在使用单例的fixture中保留。
