@@ -296,6 +296,28 @@ class TestPolarSingularity:
         assert results[1].is_polar is False
         assert results[2].is_near_polar is True
 
+    def test_polar_check_index_set_in_list(self):
+        v = make_validator()
+        coords = [
+            make_coordinate(90.0, 0.0),
+            make_coordinate(45.0, 0.0),
+        ]
+        results = v.check_polar_singularities(coords)
+        assert results[0].index == 0
+        assert results[1].index == 1
+
+    def test_polar_check_single_with_index(self):
+        v = make_validator()
+        c = make_coordinate(90.0, 0.0)
+        result = v.check_polar_singularity(c, index=7)
+        assert result.index == 7
+
+    def test_polar_check_single_default_index_none(self):
+        v = make_validator()
+        c = make_coordinate(90.0, 0.0)
+        result = v.check_polar_singularity(c)
+        assert result.index is None
+
 
 class TestValidateWithPolarAwareness:
     def test_polar_coords_valid(self):
@@ -310,3 +332,24 @@ class TestValidateWithPolarAwareness:
         result = v.validate_with_polar_awareness(coords)
         assert result.valid is False
         assert any("exceeds" in inv.reason for inv in result.invalid_coordinates)
+
+    def test_near_polar_coords_not_flagged_as_invalid(self):
+        v = make_validator()
+        coords = [make_coordinate(89.999, 45.0), make_coordinate(-89.999, 120.0)]
+        result = v.validate_with_polar_awareness(coords)
+        assert result.valid is True
+        assert len(result.invalid_coordinates) == 0
+
+    def test_mixed_coords_only_exceeds_flagged(self):
+        v = make_validator()
+        coords = [
+            make_coordinate(89.999, 0.0),
+            make_coordinate(90.001, 0.0),
+            make_coordinate(45.0, 0.0),
+        ]
+        result = v.validate_with_polar_awareness(coords)
+        assert result.valid is False
+        indices = [inv.index for inv in result.invalid_coordinates]
+        assert 1 in indices
+        assert 0 not in indices
+        assert 2 not in indices

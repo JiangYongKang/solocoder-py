@@ -41,6 +41,10 @@ class LZ77Config:
     DEFAULT_HASH_CHAIN_LIMIT = 256
     DEFAULT_LITERAL_BLOCK_MAX = 128
 
+    MAX_LENGTH_OFFSET = 255
+    MAX_LITERAL_BLOCK_LENGTH = 128
+    MAX_DISTANCE = 65535
+
     def __init__(
         self,
         window_size: int = DEFAULT_WINDOW_SIZE,
@@ -51,6 +55,10 @@ class LZ77Config:
     ) -> None:
         if window_size < 1:
             raise InvalidConfigError(f"window_size must be >= 1, got {window_size}")
+        if window_size > self.MAX_DISTANCE:
+            raise InvalidConfigError(
+                f"window_size must be <= {self.MAX_DISTANCE}, got {window_size}"
+            )
         if min_match_length < 2:
             raise InvalidConfigError(
                 f"min_match_length must be >= 2, got {min_match_length}"
@@ -60,6 +68,12 @@ class LZ77Config:
                 f"max_match_length must be >= min_match_length, "
                 f"got {max_match_length} < {min_match_length}"
             )
+        max_allowed_length = min_match_length + self.MAX_LENGTH_OFFSET
+        if max_match_length > max_allowed_length:
+            raise InvalidConfigError(
+                f"max_match_length must be <= min_match_length + {self.MAX_LENGTH_OFFSET} "
+                f"(= {max_allowed_length}), got {max_match_length}"
+            )
         if hash_chain_limit < 1:
             raise InvalidConfigError(
                 f"hash_chain_limit must be >= 1, got {hash_chain_limit}"
@@ -67,6 +81,11 @@ class LZ77Config:
         if literal_block_max < 1:
             raise InvalidConfigError(
                 f"literal_block_max must be >= 1, got {literal_block_max}"
+            )
+        if literal_block_max > self.MAX_LITERAL_BLOCK_LENGTH:
+            raise InvalidConfigError(
+                f"literal_block_max must be <= {self.MAX_LITERAL_BLOCK_LENGTH}, "
+                f"got {literal_block_max}"
             )
 
         self._window_size = window_size

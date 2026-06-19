@@ -1,0 +1,6 @@
+在当前项目中你已经完成了地理位置邻近搜索的实现，但存在以下问题需要修复：
+
+1. engine.py 的 _build_bounding_box 方法中，判断是否需要覆盖全球经度时使用了 `lat_offset >= 180.0` 这个条件。lat_offset 是纬度方向的偏移量（搜索半径除以每度纬度对应的公里数），与经度覆盖范围的判断没有物理因果关系。虽然当前地球半径参数下这个条件碰巧在地球半周长级大半径时成立，但逻辑本身是基于错误变量做出的判断。
+2. engine.py 的 search 方法中，GeoSearchResponse 的 total_count 字段被赋值为经过 limit 截断后的返回结果数 `len(results)`，而非全量通过距离校验的匹配点总数。当搜索半径内实际有 10 个匹配点但 limit 设为 3 时，total_count 返回的是 3 而非 10，字段名与实际语义不符。
+3. engine.py 的 search 方法中，对负 limit 值的校验抛出的是 InvalidRadiusError 异常。limit 是结果数量限制参数，与搜索半径无关，使用半径类异常来描述数量参数的非法属于异常类型误用。
+4. models.py 的 GeoPoint 使用 `@dataclass(frozen=True)` 声明为不可变值对象，但没有实现 `__post_init__` 对经纬度做合法性校验。可以无阻碍地构造经纬度为 (200.0, 500.0) 的 GeoPoint 对象，合法性完全依赖 engine 内部方法拦截。作为值对象，GeoPoint 自身不保证数据完整性。

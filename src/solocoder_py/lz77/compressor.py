@@ -14,12 +14,16 @@ class LZ77Compressor:
         output_stream: Optional[io.BytesIO] = None,
     ) -> None:
         self._config = config or LZ77Config()
-        self._output = output_stream or io.BytesIO()
-        self._window: bytearray = bytearray()
+        self._output = output_stream
+        self._output_owned = output_stream is None
+        if self._output_owned:
+            self._output = io.BytesIO()
         self._hash_table: Dict[int, List[int]] = {}
         self._literal_buffer: bytearray = bytearray()
         self._input_data: bytes = b""
         self._input_pos: int = 0
+        self._window_start: int = 0
+        self._next_cleanup_pos: int = 0
         self._total_input: int = 0
         self._match_count: int = 0
         self._literal_count: int = 0
@@ -51,9 +55,9 @@ class LZ77Compressor:
         return h
 
     def _update_hash_chain(self, pos: int) -> None:
-        if self._input_pos + self._config.min_match_length > len(self._input_data):
+        if pos + self._config.min_match_length > len(self._input_data):
             return
-        h = self._hash_bytes(self._input_data, self._input_pos)
+        h = self._hash_bytes(self._input_data, pos)
         if h not in self._hash_table:
             self._hash_table[h] = []
         chain = self._hash_table[h]
@@ -62,18 +66,13 @@ class LZ77Compressor:
             chain.pop()
             self._hash_chain_truncations += 1
 
-    def _slide_window(self, bytes_to_add: int) -> None:
+    def _slide_window(self, new_pos: int) -> None:
         window_size = self._config.window_size
-        start = max(0, self._input_pos - window_size)
-        end = self._input_pos + bytes_to_add
-        new_window_start = max(0, end - window_size)
+        new_window_start = max(0, new_pos - window_size)
 
-        if new_window_start > start:
+        if new_window_start > self._window_start:
             self._clean_hash_table(new_window_start)
-
-        self._window = bytearray(
-            self._input_data[new_window_start:end]
-        )
+            self._window_start = new_window_start
 
     def _clean_hash_table(self, window_start: int) -> None:
         to_delete = []
@@ -148,12 +147,17 @@ class LZ77Compressor:
 
     def _write_literal_block(self, data: bytes) -> None:
         length = len(data)
-        if length < 1 or length > self._config.literal_block_max:
+        max_len = self._config.literal_block_max
+        if length < 1 or length > max_len:
             raise ValueOutOfRangeError(
                 f"Literal block length {length} out of range "
-                f"[1, {self._config.literal_block_max}]"
+                f"[1, {max_len}]"
             )
-        length_byte = (length - 1) & 0x7F
+        if length - 1 > 0x7F:
+            raise ValueOutOfRangeError(
+                f"Literal block length {length} exceeds encoding limit 128"
+            )
+        length_byte = length - 1
         self._output.write(bytes([length_byte]))
         self._output.write(data)
         self._literal_count += length
@@ -161,7 +165,8 @@ class LZ77Compressor:
     def _write_match_pair(self, distance: int, length: int) -> None:
         min_len = self._config.min_match_length
         max_len = self._config.max_match_length
-        max_dist = 65535
+        max_dist = LZ77Config.MAX_DISTANCE
+        max_length_offset = LZ77Config.MAX_LENGTH_OFFSET
 
         if distance < 1 or distance > self._config.window_size:
             raise ValueOutOfRangeError(
@@ -177,8 +182,10 @@ class LZ77Compressor:
             )
 
         length_offset = length - min_len
-        if length_offset > 255:
-            length_offset = 255
+        if length_offset > max_length_offset:
+            raise ValueOutOfRangeError(
+                f"Length offset {length_offset} exceeds encoding limit {max_length_offset}"
+            )
 
         flag_byte = 0x80
         dist_high = (distance >> 8) & 0xFF
@@ -190,11 +197,13 @@ class LZ77Compressor:
     def compress(self, data: bytes) -> bytes:
         self._input_data = data
         self._input_pos = 0
+        self._window_start = 0
+        self._next_cleanup_pos = 0
         self._total_input = len(data)
-        self._window = bytearray()
         self._hash_table = {}
         self._literal_buffer = bytearray()
-        self._output = io.BytesIO()
+        if self._output_owned:
+            self._output = io.BytesIO()
         self._match_count = 0
         self._literal_count = 0
         self._hash_chain_truncations = 0
@@ -208,10 +217,15 @@ class LZ77Compressor:
         data = self._input_data
         total_len = len(data)
         min_len = self._config.min_match_length
+        cleanup_interval = max(self._config.window_size // 8, 256)
 
         while self._input_pos < total_len:
             if self._input_pos + min_len <= total_len:
                 self._update_hash_chain(self._input_pos)
+
+            if self._input_pos >= self._next_cleanup_pos:
+                self._slide_window(self._input_pos)
+                self._next_cleanup_pos = self._input_pos + cleanup_interval
 
             match = self._find_longest_match()
 
@@ -245,16 +259,18 @@ class LZ77Compressor:
         )
 
     def reset(self) -> None:
-        self._window = bytearray()
         self._hash_table = {}
         self._literal_buffer = bytearray()
         self._input_data = b""
         self._input_pos = 0
+        self._window_start = 0
+        self._next_cleanup_pos = 0
         self._total_input = 0
         self._match_count = 0
         self._literal_count = 0
         self._hash_chain_truncations = 0
-        self._output = io.BytesIO()
+        if self._output_owned:
+            self._output = io.BytesIO()
 
     def close(self) -> None:
         if hasattr(self._output, "close"):

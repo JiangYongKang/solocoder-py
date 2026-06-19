@@ -166,3 +166,26 @@ class TestNormalFlows:
         data = b"".join(parts)
         result, compressed, c_stats, d_stats = roundtrip(data)
         assert result == data
+
+    def test_compressor_output_stream(self):
+        import io
+        data = b"hello world hello"
+        output = io.BytesIO()
+        compressor = LZ77Compressor(output_stream=output)
+        compressed = compressor.compress(data)
+        output_value = output.getvalue()
+        assert output_value == compressed
+        assert len(output_value) > 0
+
+    def test_decompressor_output_stream(self):
+        import io
+        data = b"hello world hello test data"
+        compressor = LZ77Compressor()
+        compressed = compressor.compress(data)
+
+        output = io.BytesIO()
+        decompressor = LZ77Decompressor(output_stream=output)
+        result = decompressor.decompress(compressed)
+        output_value = output.getvalue()
+        assert output_value == data
+        assert result == data

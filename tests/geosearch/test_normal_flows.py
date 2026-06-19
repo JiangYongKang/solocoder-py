@@ -130,23 +130,28 @@ class TestResultLimiting:
         limit = 3
         response = engine.search(beijing_center, radius_km=50.0, limit=limit)
 
-        assert response.total_count == limit
+        assert response.returned_count == limit
         assert len(response.results) == limit
+        assert response.total_count >= limit
+        assert response.total_count >= response.returned_count
 
     def test_limit_larger_than_available(self, beijing_center, candidates_around_beijing):
         engine = GeoSearchEngine(candidates=candidates_around_beijing)
         limit = 100
         response = engine.search(beijing_center, radius_km=10.0, limit=limit)
 
-        assert response.total_count < limit
-        assert len(response.results) == response.total_count
+        assert response.returned_count < limit
+        assert response.total_count == response.returned_count
+        assert len(response.results) == response.returned_count
 
     def test_limit_zero_returns_empty(self, beijing_center, candidates_around_beijing):
         engine = GeoSearchEngine(candidates=candidates_around_beijing)
         response = engine.search(beijing_center, radius_km=50.0, limit=0)
 
-        assert response.total_count == 0
+        assert response.returned_count == 0
         assert len(response.results) == 0
+        assert response.total_count >= 0
+        assert response.total_count >= response.returned_count
 
     def test_limit_none_returns_all(self, beijing_center, candidates_around_beijing):
         engine = GeoSearchEngine(candidates=candidates_around_beijing)

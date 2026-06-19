@@ -1,0 +1,5 @@
+在当前项目中你已经完成了四叉树空间索引的实现，但存在以下问题需要修复：
+
+1. quadtree.py 中 _QuadNode.insert_rectangle 方法的越界校验逻辑存在漏洞。方法先用 contains 检查矩形是否完全包含在边界内，若未完全包含则改用 intersects 兜底，只要与边界有交集就允许插入。这导致部分超出四叉树边界的矩形仍能被成功插入，例如边界为 (0,0,100,100) 时 Rectangle(50,50,100,100) 的右侧超出边界 50 个单位仍能插入成功。提示词要求拒绝插入超出四叉树边界范围的矩形或点。
+2. quadtree.py 中 Quadtree.__init__ 构造函数对边界对象的处理不一致：self._boundary 创建了原始边界的副本，但根节点 self._root 却使用未复制的 boundary 参数创建。同时 boundary 属性的读接口返回 self._boundary。这导致初始化后 qt.boundary 和 qt._root.boundary 指向不同的 Rectangle 实例。当 clear 方法用 self._boundary 重建根节点后，新根节点的边界来源与初始构造时不一致。
+3. 测试套件缺少对矩形部分超出四叉树边界（而非完全在边界外）的场景覆盖，现有越界测试只覆盖了完全在边界外的矩形，未能发现 insert_rectangle 的 intersects 兜底漏洞。

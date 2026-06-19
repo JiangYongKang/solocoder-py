@@ -25,7 +25,7 @@ class TestErrorBranches:
             decompressor.decompress(truncated)
 
     def test_truncated_match_pair(self, make_decompressor):
-        truncated = b"\x80\x00"
+        truncated = b"\x80\x00\x00"
         decompressor = make_decompressor()
         with pytest.raises(TruncatedDataError, match="Truncated match pair"):
             decompressor.decompress(truncated)
@@ -33,17 +33,18 @@ class TestErrorBranches:
     def test_distance_zero(self, make_decompressor):
         decompressor = make_decompressor()
         decompressor._output_buffer = bytearray(b"hello world")
-        decompressor._input_data = b"\x80\x00\x00"
-        decompressor._input_pos = 0
+        flag_byte = 0x80
+        decompressor._input_data = bytes([flag_byte, 0x05, 0x00, 0x00])
+        decompressor._input_pos = 1
         with pytest.raises(DistanceOutOfRangeError, match="Invalid distance"):
-            decompressor._process_match_pair(0x80)
+            decompressor._process_match_pair(flag_byte)
 
     def test_distance_exceeds_output(self, make_decompressor):
         decompressor = make_decompressor()
         decompressor._output_buffer = bytearray(b"abc")
         flag_byte = 0x80
-        decompressor._input_data = bytes([flag_byte, 0x00, 0x10])
-        decompressor._input_pos = 0
+        decompressor._input_data = bytes([flag_byte, 0x05, 0x00, 0x10])
+        decompressor._input_pos = 1
         with pytest.raises(DistanceOutOfRangeError, match="exceeds current output size"):
             decompressor._process_match_pair(flag_byte)
 
@@ -53,32 +54,45 @@ class TestErrorBranches:
         decompressor._output_buffer = bytearray(large_data)
         distance = default_config.window_size + 5
         flag_byte = 0x80
-        decompressor._input_data = bytes([flag_byte, (distance >> 8) & 0xFF, distance & 0xFF])
-        decompressor._input_pos = 0
+        decompressor._input_data = bytes([flag_byte, 0x05, (distance >> 8) & 0xFF, distance & 0xFF])
+        decompressor._input_pos = 1
         with pytest.raises(DistanceOutOfRangeError, match="exceeds window size"):
             decompressor._process_match_pair(flag_byte)
 
     def test_length_exceeds_max(self, make_decompressor, default_config):
         decompressor = make_decompressor()
         decompressor._output_buffer = bytearray(b"hello world test data more bytes here")
-        length_offset = 200
-        flag_byte = 0x80 | length_offset
-        decompressor._input_data = bytes([flag_byte, 0x00, 0x05])
-        decompressor._input_pos = 0
+        length_offset = 255
+        flag_byte = 0x80
+        decompressor._input_data = bytes([flag_byte, length_offset, 0x00, 0x05])
+        decompressor._input_pos = 1
         if default_config.min_match_length + length_offset > default_config.max_match_length:
             with pytest.raises(LengthOutOfRangeError):
                 decompressor._process_match_pair(flag_byte)
+        else:
+            pytest.skip("Default config allows max length offset")
 
-    def test_corrupted_control_marker(self, make_decompressor):
+    def test_corrupted_control_marker_zero_distance(self, make_decompressor):
         decompressor = make_decompressor()
         decompressor._output_buffer = bytearray(b"test data")
-        bad_flag = 0x80
-        decompressor._input_data = bytes([bad_flag, 0x00, 0x02])
-        decompressor._input_pos = 0
-        try:
-            decompressor._process_match_pair(bad_flag)
-        except (DistanceOutOfRangeError, LengthOutOfRangeError):
-            pass
+        flag_byte = 0x80
+        decompressor._input_data = bytes([flag_byte, 0x05, 0x00, 0x00])
+        decompressor._input_pos = 1
+        with pytest.raises(DistanceOutOfRangeError, match="Invalid distance"):
+            decompressor._process_match_pair(flag_byte)
+
+    def test_corrupted_control_marker_length_overflow(self, make_decompressor, default_config):
+        decompressor = make_decompressor()
+        decompressor._output_buffer = bytearray(b"test data more content here to make it long enough")
+        flag_byte = 0x80
+        bad_length_offset = 255
+        decompressor._input_data = bytes([flag_byte, bad_length_offset, 0x00, 0x05])
+        decompressor._input_pos = 1
+        if default_config.min_match_length + bad_length_offset > default_config.max_match_length:
+            with pytest.raises(LengthOutOfRangeError):
+                decompressor._process_match_pair(flag_byte)
+        else:
+            pytest.skip("Default config allows length offset 255")
 
     def test_value_out_of_range_distance_compression(self, make_compressor):
         compressor = make_compressor()

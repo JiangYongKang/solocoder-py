@@ -22,6 +22,7 @@ class TsDeltaCompressor:
         self._config = config or TsDeltaConfig()
         self._timestamps: List[int] = []
         self._stats: Optional[CompressionStats] = None
+        self._last_delta_result: Optional[DeltaResult] = None
 
     def write(self, timestamp: int) -> None:
         if not isinstance(timestamp, int):
@@ -38,12 +39,12 @@ class TsDeltaCompressor:
         if not self._timestamps:
             return self._compress_empty()
 
-        delta_result = compute_deltas(
+        self._last_delta_result = compute_deltas(
             self._timestamps,
             validate=self._config.validate_strictly_increasing,
         )
 
-        return self._compress_from_deltas(delta_result)
+        return self._compress_from_deltas(self._last_delta_result)
 
     def _compress_empty(self) -> bytes:
         self._stats = CompressionStats(
@@ -69,8 +70,7 @@ class TsDeltaCompressor:
         simple8b_length = len(simple8b_data)
 
         for val in second_order:
-            max_abs = max(abs(val), 1)
-            if max_abs > self._config.max_second_order_delta:
+            if abs(val) > self._config.max_second_order_delta:
                 raise ValueOutOfRangeError(
                     f"Second order delta {val} exceeds max allowed "
                     f"{self._config.max_second_order_delta}"
@@ -109,6 +109,7 @@ class TsDeltaCompressor:
     def reset(self) -> None:
         self._timestamps = []
         self._stats = None
+        self._last_delta_result = None
 
     @property
     def total_timestamps(self) -> int:
@@ -135,7 +136,8 @@ def compress_timestamps(
     if len(timestamps) == 1:
         return CompressedBlock(data=data, value_count=1, base_timestamp=timestamps[0], first_delta=None)
 
-    delta_result = compute_deltas(timestamps, validate=config.validate_strictly_increasing if config else True)
+    delta_result = compressor._last_delta_result
+    assert delta_result is not None
     return CompressedBlock(
         data=data,
         value_count=stats.original_count,

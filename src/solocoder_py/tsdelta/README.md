@@ -199,6 +199,10 @@ from solocoder_py.tsdelta import TsDeltaCompressor, TsDeltaConfig
 # 关闭严格递增验证
 config = TsDeltaConfig(validate_strictly_increasing=False)
 compressor = TsDeltaCompressor(config=config)
+
+# 仅允许零值二阶差分（等间隔时间戳校验）
+config = TsDeltaConfig(max_second_order_delta=0)
+compressor = TsDeltaCompressor(config=config)
 ```
 
 ### 单独使用组件
@@ -210,6 +214,9 @@ from solocoder_py.tsdelta import (
     zigzag_decode_list,
     simple8b_pack,
     simple8b_unpack,
+    pack_block,
+    unpack_block,
+    SIMPLE8B_MODES,
 )
 
 # 计算差分
@@ -225,6 +232,12 @@ packed = simple8b_pack(encoded)
 # 解包和解码
 unpacked = simple8b_unpack(packed, expected_count=len(encoded))
 decoded = zigzag_decode_list(unpacked)
+
+# 单块级别打包/解包（往返对称）
+mode = SIMPLE8B_MODES[14]
+block, actual_count = pack_block([0] * 10, mode)
+values, _ = unpack_block(block, count=actual_count)
+assert values == [0] * 10
 ```
 
 ## 性能特点
@@ -239,8 +252,9 @@ decoded = zigzag_decode_list(unpacked)
 | 异常类 | 说明 |
 |--------|------|
 | `NonMonotonicTimestampError` | 时间戳非严格递增 |
+| `ValueOutOfRangeError` | 二阶差分值超出配置的 `max_second_order_delta` 范围 |
 | `ZigZagOverflowError` | ZigZag 编码/解码值溢出 |
 | `Simple8bOverflowError` | Simple-8b 打包值溢出 |
 | `InvalidSimple8bSelectorError` | Simple-8b 选择器非法 |
 | `TruncatedDataError` | 压缩数据被截断 |
-| `CorruptedDataError` | 压缩数据损坏 |
+| `CorruptedDataError` | 压缩数据损坏（如 Simple-8b 长度不是 8 的倍数） |

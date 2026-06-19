@@ -62,6 +62,12 @@ class BoundingBox:
             raise InvalidBoundsError(
                 f"min_lat ({self.min_lat}) must be <= max_lat ({self.max_lat})"
             )
+        if self.min_lon > self.max_lon:
+            from .exceptions import InvalidBoundsError
+
+            raise InvalidBoundsError(
+                f"min_lon ({self.min_lon}) must be <= max_lon ({self.max_lon})"
+            )
 
     def contains(self, coord: Coordinate) -> bool:
         return (
@@ -102,6 +108,7 @@ class AntimeridianCrossing:
 
 @dataclass(frozen=True)
 class PolarCheckResult:
+    index: Optional[int]
     is_polar: bool
     is_near_polar: bool
     latitude_warning: Optional[str] = None

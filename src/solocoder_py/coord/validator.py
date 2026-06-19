@@ -167,6 +167,7 @@ class CoordValidator:
                 f"longitude values may be ambiguous"
             )
         return PolarCheckResult(
+            index=index,
             is_polar=is_polar,
             is_near_polar=is_near_polar,
             latitude_warning=latitude_warning,
@@ -184,7 +185,7 @@ class CoordValidator:
         all_invalid = list(base_result.invalid_coordinates)
         polar_results = self.check_polar_singularities(coords)
         for i, (coord, polar) in enumerate(zip(coords, polar_results)):
-            if polar.latitude_warning is not None:
+            if polar.latitude_warning is not None and "exceeds" in polar.latitude_warning:
                 all_invalid.append(
                     InvalidCoordinate(
                         index=i,

@@ -170,16 +170,17 @@ class TestReaderInsufficientBits:
             reader.read_bits(1)
 
     def test_align_reader_insufficient_bits(self):
-        data = bytes([0b10100000, 0b11000000])
-        reader = BitReader(data)
-        reader.read_bits(13)
+        data = bytes([0b10100000])
+        reader = BitReader(data, total_bits=3)
+        assert reader.total_bits_available == 3
         assert reader.remaining_bits == 3
-        assert reader.bit_offset == 5
-        skip = reader.align_to_byte()
-        assert skip == 3
+        reader.read_bits(3)
+        assert reader.bit_offset == 3
         assert reader.remaining_bits == 0
-        with pytest.raises(InsufficientBitsError):
-            reader.read_bits(1)
+        with pytest.raises(InsufficientBitsError) as excinfo:
+            reader.align_to_byte()
+        assert "Cannot align" in str(excinfo.value)
+        assert "need 5 bits but only 0 remaining" in str(excinfo.value)
 
 
 class TestWriterAlignValidation:
@@ -194,6 +195,37 @@ class TestWriterAlignValidation:
         writer.write_bits(0b101, 3)
         with pytest.raises(ValueError):
             writer.align_to_byte(fill_bit=-1)
+
+
+class TestBitReaderTotalBitsValidation:
+    def test_total_bits_negative_raises(self):
+        with pytest.raises(ValueError) as excinfo:
+            BitReader(bytes([0x00]), total_bits=-1)
+        assert "non-negative" in str(excinfo.value)
+
+    def test_total_bits_exceeds_data_length_raises(self):
+        with pytest.raises(ValueError) as excinfo:
+            BitReader(bytes([0x00, 0x00]), total_bits=17)
+        assert "exceeds maximum possible" in str(excinfo.value)
+        assert "16" in str(excinfo.value)
+
+    def test_total_bits_at_max_boundary_ok(self):
+        reader = BitReader(bytes([0xA5]), total_bits=8)
+        assert reader.total_bits_available == 8
+        assert reader.read_bits(8) == 0xA5
+
+    def test_total_bits_peek_respects_limit(self):
+        reader = BitReader(bytes([0b10110000, 0xFF]), total_bits=4)
+        assert reader.peek_bits(4) == 0b1011
+        with pytest.raises(InsufficientBitsError):
+            reader.peek_bits(5)
+
+    def test_total_bits_read_exceeding_limit_raises(self):
+        reader = BitReader(bytes([0xA5, 0x3C]), total_bits=12)
+        reader.read_bits(10)
+        assert reader.remaining_bits == 2
+        with pytest.raises(InsufficientBitsError):
+            reader.read_bits(3)
 
 
 class TestReaderPositionProtection:

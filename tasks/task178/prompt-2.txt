@@ -1,0 +1,6 @@
+在当前项目中你已经完成了坐标参考系边界校验器的实现，但存在以下问题需要修复：
+
+1. exceptions.py 中定义了 InvalidCoordinateError 异常类，但整个 coord 包中没有任何地方导入或抛出该异常。模块实际使用 ValidationResult 和 InvalidCoordinate 数据类返回校验失败信息，异常机制完全未被使用，该类成为死代码残留。
+2. validator.py 的 check_polar_singularity 方法签名中声明了 index 参数，但方法体内完全没有引用该参数。PolarCheckResult 数据类中也没有对应的 index 字段来承接传入值，调用方传入的索引信息被静默丢弃。
+3. validator.py 的 validate_with_polar_awareness 方法在遇到纬度 89.999 这样完全合法的极近点坐标时，会将 check_polar_singularities 产生的极近点提醒信息不加区分地作为 InvalidCoordinate 添加到校验失败列表中，导致 valid 被置为 False。合法坐标被误报为校验失败，与提示词要求"不将极点附近的经度变化视为异常"的意图相悖。
+4. models.py 的 BoundingBox.__post_init__ 方法只校验了 min_lat > max_lat 的纬度逆序情况并抛出 InvalidBoundsError，但未对经度边界 min_lon > max_lon 做同样的逆序校验。创建 min_lon=100、max_lon=50 的 BoundingBox 不会触发任何异常，但其 contains 方法的经度区间判断将永远为 False，所有坐标都被错误判定为不在边界内。

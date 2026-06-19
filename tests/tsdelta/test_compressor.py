@@ -11,6 +11,7 @@ from solocoder_py.tsdelta import (
     TsDeltaCompressor,
     TsDeltaDecompressor,
     TsDeltaConfig,
+    ValueOutOfRangeError,
     ZigZagOverflowError,
     compress_timestamps,
     decompress_timestamps,
@@ -26,6 +27,7 @@ class TestNormalFlow:
         result, compressed, c_stats, d_stats = roundtrip(equal_interval_timestamps)
         assert result == equal_interval_timestamps
         assert c_stats.second_order_count == len(equal_interval_timestamps) - 2
+        assert c_stats.compression_ratio < 1.0
 
     def test_first_order_deltas_equal_interval(self, equal_interval_timestamps):
         deltas = compute_deltas(equal_interval_timestamps)
@@ -107,6 +109,7 @@ class TestNormalFlow:
         assert c_stats.compressed_bytes == len(compressed)
         assert c_stats.first_order_count == len(equal_interval_timestamps) - 1
         assert c_stats.second_order_count == len(equal_interval_timestamps) - 2
+        assert c_stats.bits_per_value < 64
 
     def test_large_timestamp_values(self, roundtrip):
         base = 1718841600000000
@@ -118,6 +121,25 @@ class TestNormalFlow:
         block = compress_timestamps(equal_interval_timestamps)
         result = decompress_timestamps(block.data)
         assert result == equal_interval_timestamps
+
+    def test_compress_timestamps_no_duplicate_compute_deltas(self, equal_interval_timestamps):
+        call_count = 0
+        original_compute_deltas = compute_deltas
+
+        def counting_compute_deltas(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return original_compute_deltas(*args, **kwargs)
+
+        import solocoder_py.tsdelta.compressor as compressor_mod
+        original = compressor_mod.compute_deltas
+        compressor_mod.compute_deltas = counting_compute_deltas
+
+        try:
+            block = compress_timestamps(equal_interval_timestamps)
+            assert call_count == 1
+        finally:
+            compressor_mod.compute_deltas = original
 
 
 class TestBoundaryConditions:
@@ -148,6 +170,7 @@ class TestBoundaryConditions:
         assert all(d == 0 for d in deltas.second_order_deltas)
         assert result == timestamps
         assert c_stats.simple8b_blocks == 2
+        assert c_stats.compression_ratio < 0.3
 
     def test_three_timestamps_one_second_order(self, roundtrip):
         timestamps = [1000, 2000, 3000]
@@ -193,6 +216,23 @@ class TestBoundaryConditions:
 
         result, compressed, c_stats, d_stats = roundtrip(timestamps)
         assert result == timestamps
+
+    def test_max_second_order_delta_zero_allows_equal_intervals(self):
+        config = TsDeltaConfig(max_second_order_delta=0)
+        base = 1718841600000
+        timestamps = [base + i * 1000 for i in range(50)]
+
+        block = compress_timestamps(timestamps, config=config)
+        result = decompress_timestamps(block.data)
+        assert result == timestamps
+
+    def test_max_second_order_delta_zero_rejects_variable_intervals(self):
+        config = TsDeltaConfig(max_second_order_delta=0)
+        base = 1718841600000
+        timestamps = [base, base + 1000, base + 2001]
+
+        with pytest.raises(ValueOutOfRangeError):
+            compress_timestamps(timestamps, config=config)
 
 
 class TestErrorCases:
@@ -264,8 +304,22 @@ class TestErrorCases:
         with pytest.raises(CorruptedDataError, match="extra data"):
             decompressor.read_all()
 
-    def test_corrupted_negative_simple8b_length(self):
+    def test_corrupted_simple8b_length_not_multiple_of_8(self):
+        header = struct.pack("<q q I I", 1000, 1000, 100, 5)
+        decompressor = TsDeltaDecompressor()
+        decompressor.set_input_data(header + b"\x00" * 5)
+        with pytest.raises(CorruptedDataError, match="not a multiple of 8"):
+            decompressor.read_all()
+
+    def test_corrupted_simple8b_length_very_large(self):
         header = struct.pack("<q q I I", 1000, 1000, 100, 0xFFFFFFFF)
+        decompressor = TsDeltaDecompressor()
+        decompressor.set_input_data(header + b"\x00" * 8)
+        with pytest.raises(CorruptedDataError):
+            decompressor.read_all()
+
+    def test_corrupted_simple8b_length_huge_multiple_of_8(self):
+        header = struct.pack("<q q I I", 1000, 1000, 100, 0xFFFFFFF8)
         decompressor = TsDeltaDecompressor()
         decompressor.set_input_data(header + b"\x00" * 8)
         with pytest.raises(TruncatedDataError):
@@ -323,5 +377,5 @@ class TestErrorCases:
 
         decompressor = TsDeltaDecompressor()
         decompressor.set_input_data(corrupted)
-        with pytest.raises(TruncatedDataError):
+        with pytest.raises(CorruptedDataError, match="not a multiple of 8"):
             decompressor.read_all()

@@ -1,0 +1,6 @@
+在当前项目中你已经完成了位流读写器的实现，但存在以下问题需要修复：
+
+1. reader.py 的 align_to_byte 方法中存在 InsufficientBitsError 异常分支，但由于 BitReader 的输入始终为完整字节数组，内部计算的 skip_bits 加上 _total_bits_read 永远等于 8*(byte_pos+1)，永远不会超出 total_bits_available，导致该异常分支成为死代码。当数据读完后 bit_offset 必定为 0，方法直接返回。对齐操作本身剩余比特不足的异常路径从未被触发。
+2. test_align_reader_insufficient_bits 测试用例原本设计为测试对齐时剩余比特不足的场景，但实际被修改为只测试对齐成功后再读空流报错的情况。提示词要求覆盖的"对齐时剩余比特不足"分支完全未被测试验证。
+3. README.md 异常体系部分将 InvalidBitCountError 描述为"操作比特数不在 0 或 [1, 64] 范围内"，但 writer.py 的 write_bits 和 reader.py 的 _read_bits_internal 都对 n==0 做了提前返回处理，0 比特是合法空操作不会抛异常。文档描述与代码实际行为矛盾。
+4. writer.py 第 66 行的条件表达式 `self._bit_offset == 0 and len(self._buffer) == 0 or self._bit_offset == 8` 完全依赖 Python 运算符的隐式优先级（AND 优先于 OR），缺少显式括号。读者需要记忆运算符优先级才能正确理解这段代码的逻辑意图。

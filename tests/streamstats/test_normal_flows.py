@@ -83,10 +83,10 @@ class TestFluctuatingSequenceOnlineUpdate:
         for v in data:
             s2.add(v)
         assert s1.count == s2.count
-        assert math.isclose(s1.mean, s2.mean)
-        assert math.isclose(s1.variance_sample, s2.variance_sample)
-        assert math.isclose(s1.skewness, s2.skewness, abs_tol=1e-12)
-        assert math.isclose(s1.kurtosis, s2.kurtosis, abs_tol=1e-12)
+        assert s1._mean == s2._mean
+        assert s1._m2 == s2._m2
+        assert s1._m3 == s2._m3
+        assert s1._m4 == s2._m4
 
 
 class TestMergeTwoOperators:

@@ -6,6 +6,7 @@ from typing import Optional
 from .exceptions import (
     InvalidCoordinateError,
     InvalidLatitudeError,
+    InvalidLimitError,
     InvalidLongitudeError,
     InvalidRadiusError,
 )
@@ -60,7 +61,7 @@ class GeoSearchEngine:
             )
 
         if limit is not None and limit < 0:
-            raise InvalidRadiusError(
+            raise InvalidLimitError(
                 f"Result limit must be >= 0, got {limit}"
             )
 
@@ -85,13 +86,16 @@ class GeoSearchEngine:
 
         results.sort(key=lambda r: r.distance_km)
 
+        total_count = len(results)
+
         if limit is not None:
             results = results[:limit]
 
         return GeoSearchResponse(
             results=results,
-            total_count=len(results),
+            total_count=total_count,
             filtered_count=filtered_count,
+            returned_count=len(results),
         )
 
     def _build_bounding_box(self, center: GeoPoint, radius_km: float) -> BoundingBox:
@@ -110,26 +114,22 @@ class GeoSearchEngine:
             max_lat = min(max_lat, 90.0)
             covers_pole = True
 
-        if covers_pole or lat_offset >= 180.0:
+        center_lat_rad = math.radians(center.latitude)
+        cos_lat = math.cos(center_lat_rad)
+        if abs(cos_lat) < 1e-12:
+            lng_offset = 180.0
+        else:
+            lng_offset = radius_km / (KM_PER_DEGREE_LAT * cos_lat)
+
+        if covers_pole or lng_offset >= 180.0:
             min_lng = -180.0
             max_lng = 180.0
         else:
-            center_lat_rad = math.radians(center.latitude)
-            cos_lat = math.cos(center_lat_rad)
-            if abs(cos_lat) < 1e-12:
-                lng_offset = 180.0
-            else:
-                lng_offset = radius_km / (KM_PER_DEGREE_LAT * cos_lat)
+            min_lng_raw = center.longitude - lng_offset
+            max_lng_raw = center.longitude + lng_offset
 
-            if lng_offset >= 180.0:
-                min_lng = -180.0
-                max_lng = 180.0
-            else:
-                min_lng_raw = center.longitude - lng_offset
-                max_lng_raw = center.longitude + lng_offset
-
-                min_lng = ((min_lng_raw + 180.0) % 360.0) - 180.0
-                max_lng = ((max_lng_raw + 180.0) % 360.0) - 180.0
+            min_lng = ((min_lng_raw + 180.0) % 360.0) - 180.0
+            max_lng = ((max_lng_raw + 180.0) % 360.0) - 180.0
 
         return BoundingBox(
             min_lat=min_lat,

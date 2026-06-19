@@ -241,8 +241,8 @@ def _get_neighbor(geohash: str, direction: str) -> Optional[str]:
 
     last_char = geohash[-1]
     prefix = geohash[:-1]
-    precision = len(geohash)
-    is_even = precision % 2 == 0
+    char_len = len(geohash)
+    is_even = char_len % 2 == 0
     type_idx = 0 if is_even else 1
 
     if last_char in _BORDER_CODES[direction][type_idx]:

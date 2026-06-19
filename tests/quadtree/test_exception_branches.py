@@ -46,6 +46,55 @@ class TestOutOfBounds:
         with pytest.raises(OutOfBoundsError):
             qt.insert(Rectangle(x=200, y=200, width=50, height=50))
 
+    def test_insert_rectangle_partially_outside_right(self):
+        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=4)
+        with pytest.raises(OutOfBoundsError):
+            qt.insert(Rectangle(x=50, y=50, width=100, height=100))
+        assert qt.rectangle_count == 0
+
+    def test_insert_rectangle_partially_outside_left(self):
+        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=4)
+        with pytest.raises(OutOfBoundsError):
+            qt.insert(Rectangle(x=-50, y=50, width=100, height=50))
+        assert qt.rectangle_count == 0
+
+    def test_insert_rectangle_partially_outside_top(self):
+        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=4)
+        with pytest.raises(OutOfBoundsError):
+            qt.insert(Rectangle(x=50, y=50, width=50, height=100))
+        assert qt.rectangle_count == 0
+
+    def test_insert_rectangle_partially_outside_bottom(self):
+        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=4)
+        with pytest.raises(OutOfBoundsError):
+            qt.insert(Rectangle(x=50, y=-50, width=50, height=100))
+        assert qt.rectangle_count == 0
+
+    def test_insert_rectangle_partially_outside_multiple_sides(self):
+        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=4)
+        with pytest.raises(OutOfBoundsError):
+            qt.insert(Rectangle(x=-10, y=-10, width=120, height=120))
+        assert qt.rectangle_count == 0
+
+    def test_insert_rectangle_exceeding_right_boundary(self):
+        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=4)
+        with pytest.raises(OutOfBoundsError):
+            qt.insert(Rectangle(x=0, y=0, width=150, height=50))
+        assert qt.rectangle_count == 0
+
+    def test_insert_rectangle_exceeding_top_boundary(self):
+        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        qt = Quadtree(boundary, max_capacity=4)
+        with pytest.raises(OutOfBoundsError):
+            qt.insert(Rectangle(x=0, y=0, width=50, height=150))
+        assert qt.rectangle_count == 0
+
     def test_insert_point_on_boundary_is_valid(self):
         boundary = Rectangle(x=0, y=0, width=100, height=100)
         qt = Quadtree(boundary, max_capacity=4)
@@ -207,10 +256,10 @@ class TestRandomizedCorrectness:
 
         all_rects = []
         for i in range(100):
-            x = random.uniform(0, 900)
-            y = random.uniform(0, 900)
             w = random.uniform(10, 200)
             h = random.uniform(10, 200)
+            x = random.uniform(0, 1000 - w)
+            y = random.uniform(0, 1000 - h)
             rect = Rectangle(x=x, y=y, width=w, height=h, data=f"r{i}")
             all_rects.append(rect)
             qt.insert(rect)
@@ -247,10 +296,10 @@ class TestRandomizedCorrectness:
             qt.insert(p)
 
         for i in range(50):
-            x = random.uniform(0, 900)
-            y = random.uniform(0, 900)
             w = random.uniform(20, 150)
             h = random.uniform(20, 150)
+            x = random.uniform(0, 1000 - w)
+            y = random.uniform(0, 1000 - h)
             rect = Rectangle(x=x, y=y, width=w, height=h, data=f"r{i}")
             all_rects.append(rect)
             qt.insert(rect)

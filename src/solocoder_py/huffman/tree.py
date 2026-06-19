@@ -7,7 +7,10 @@ from .exceptions import (
     HuffmanEmptyFrequencyTableError,
     HuffmanCodeLengthOverflowError,
 )
-from .frequency import validate_frequency_table
+from .frequency import (
+    prepare_frequency_table,
+    validate_frequency_table,
+)
 from .models import (
     CodeLengthTable,
     FrequencyTable,
@@ -20,19 +23,7 @@ MAX_CODE_LENGTH = 64
 def build_huffman_tree(
     freq_table: dict[Any, int] | FrequencyTable,
 ) -> Optional[HuffmanNode]:
-    if isinstance(freq_table, FrequencyTable):
-        freq_dict = freq_table.frequencies
-    else:
-        freq_dict = freq_table
-
-    if not freq_dict:
-        raise HuffmanEmptyFrequencyTableError("Frequency table is empty")
-
-    validate_frequency_table(freq_dict)
-
-    valid_freqs = {s: f for s, f in freq_dict.items() if f > 0}
-    if not valid_freqs:
-        raise HuffmanEmptyFrequencyTableError("No symbols with positive frequency")
+    valid_freqs = prepare_frequency_table(freq_table)
 
     if len(valid_freqs) == 1:
         symbol, freq = next(iter(valid_freqs.items()))
@@ -68,17 +59,7 @@ def extract_code_lengths(
     freq_table: dict[Any, int] | FrequencyTable,
     max_code_length: int = MAX_CODE_LENGTH,
 ) -> CodeLengthTable:
-    if isinstance(freq_table, FrequencyTable):
-        freq_dict = freq_table.frequencies
-    else:
-        freq_dict = freq_table
-
-    if not freq_dict:
-        raise HuffmanEmptyFrequencyTableError("Frequency table is empty")
-
-    valid_freqs = {s: f for s, f in freq_dict.items() if f > 0}
-    if not valid_freqs:
-        raise HuffmanEmptyFrequencyTableError("No symbols with positive frequency")
+    valid_freqs = prepare_frequency_table(freq_table)
 
     lengths: dict[Any, int] = {}
 

@@ -1,0 +1,5 @@
+在当前项目中你已经完成了点在多边形内判定引擎的实现，但存在以下问题需要修复：
+
+1. test_normal_flows.py 中 TestPolygonWithHole 类的 test_point_in_outer_ring 方法将变量命名为 point_outside_both 但实际对该点的断言结果为 PointLocation.INSIDE，变量名与断言语义矛盾。此外该方法只是对两个独立多边形分别调用 contains，没有实现外层边界和内层孔洞的联合布尔判定逻辑。提示词要求测试的"带孔多边形（通过顶点绕序方向）的正确判定"场景未被真正覆盖。
+2. models.py 的 Polygon 类定义了 get_edge 方法，但在 engine.py 和全部测试代码中该方法从未被调用。engine.py 中所有边访问都直接使用 polygon.vertices[i] 和 polygon.vertices[(i+1)%n] 索引，get_edge 接口为无消费者的死代码。
+3. conftest.py、test_normal_flows.py 和 test_boundary_conditions.py 中的部分多边形顶点定义和测试预期值在调试过程中被修改以匹配引擎的实际输出，而非根据提示词要求的算法正确性来设定预期并通过修复引擎来满足预期。

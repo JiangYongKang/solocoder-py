@@ -1,0 +1,8 @@
+产物不满意：
+1. 提示词第3条指出首轮测试中的多边形顶点定义和预期值被修改为匹配引擎实际输出现象，要求根据算法正确性设定预期并修复引擎。但模型在本轮修复中重写了 conftest.py 的 build_concave_polygon 函数将凹多边形从原来的定义换成"顶部向下凹"形状，并重写了 test_boundary_conditions.py 中 TestRayPassingThroughVertex 测试用例的期望断言。模型运行 pytest 看到全部通过即认为几何正确性已验证完成，思考过程中无任何对多边形形状进行手算射线交点或画图验算的证据。这是把"通过测试"等同于"几何正确"的循环自证，与提示词警告的行为模式一致，测试预期仍然是以引擎输出为参照而非以几何真值为标准来设定。
+2. 模型在 Polygon 类中新增了 winding_order 属性以及 is_counterclockwise、is_clockwise、reverse 三个方法，test_normal_flows.py 新增了 test_winding_order_detection 测试验证外环的绕序方向。但在 engine.py 的 contains_holed 方法中，带孔判定的核心逻辑始终只调用 _ray_casting 使用奇偶规则计数，完全没有使用顶点绕序信息来驱动位置判定。这三个绕序方法和对应测试是新增的未消费死代码，它们与引擎判定逻辑之间没有形成闭合的调用链路，而提示词只要求修复三个已列出的缺陷，并未要求扩展 Polygon 类的 API 接口。
+3. test_boundary_conditions.py 的 TestSelfIntersectingPolygon 类中三个测试方法的蝴蝶形多边形顶点数组是直接在方法内部用 Polygon.from_tuples 内联构造，而 conftest.py 中已经提供了 build_butterfly_polygon 夹具，test_normal_flows.py 的 TestButterflyPolygon 类也使用了该夹具。同一多边形形状的定义出现在三个不同位置，若蝴蝶形点序列后续需要按几何正确性调整，需要同步修改三处，容易遗漏导致相同测试名在不同文件中产生不同行为，这违反了测试夹具集中复用的基本原则。
+过程不满意：
+1. 模型在收到提示词后的第一个工具调用就是 todo_write 创建了 4 项子任务计划，之后才开始依次读取 models.py、engine.py、conftest.py 等文件。这违反了标注规范中"不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划"的要求。在未阅读任何代码之前就划分出修复任务列表，导致后续对问题 1"带孔多边形联合判定"的修复被拆成新增 PolygonWithHoles 类、新增绕序方法、重写测试三层，但绕序方法实际未被引擎消费，说明初始计划对代码架构的判断存在偏差。
+2. 模型在处理问题 3"测试预期修正"时，先修改 conftest.py 的凹多边形定义，再修改 test_normal_flows.py 和 test_boundary_conditions.py 的测试断言，期间反复回看 engine.py 至少四次、test_normal_flows.py 至少三次、conftest.py 至少两次。这种零散的一处一改、一改一看的模式说明模型没有在首轮读完所有关联文件后统一规划变更，而是遇到哪个改哪个。合理做法是在首轮通读所有相关源码和测试文件后弄清所有受影响的函数和断言点，再集中修改。
+3. 模型在 session-cot-2.md 末尾声称"验证了奇偶填充规则的正确性""验证了'在外环内且不在内环内 = 内部'等判定逻辑"，但整个思考过程中从未执行绘制草图、手算交点、列举射线穿越次数等几何真值验证操作，唯一证据是运行 pytest 看到 89 项全部通过。这属于幻觉与虚假完成，模型将测试通过当作几何正确性已经验证完毕而跳过了真正的算法逻辑审查环节。正确做法应至少选取几个关键测试点手动验证其数学结果，确认引擎输出与几何真值一致，而非仅以测试通过作为正确性唯一依据。

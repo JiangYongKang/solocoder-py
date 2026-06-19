@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 from .exceptions import (
     HuffmanEmptyInputError,
+    HuffmanEmptyFrequencyTableError,
     HuffmanInvalidFrequencyError,
 )
 from .models import FrequencyTable
@@ -41,7 +42,10 @@ def count_frequencies_bytes(data: bytes) -> FrequencyTable:
     return count_frequencies(data)
 
 
-def validate_frequency_table(freq_table: dict[Any, int] | FrequencyTable) -> None:
+def validate_frequency_table(
+    freq_table: dict[Any, int] | FrequencyTable,
+    min_frequency: int = 1,
+) -> None:
     if isinstance(freq_table, FrequencyTable):
         freq_dict = freq_table.frequencies
     else:
@@ -58,10 +62,35 @@ def validate_frequency_table(freq_table: dict[Any, int] | FrequencyTable) -> Non
             raise HuffmanInvalidFrequencyError(
                 f"Frequency for symbol {symbol!r} must be an integer, got {type(freq).__name__}"
             )
-        if freq <= 0:
-            raise HuffmanInvalidFrequencyError(
-                f"Frequency for symbol {symbol!r} must be positive, got {freq}"
-            )
+        if freq < min_frequency:
+            if min_frequency == 1:
+                raise HuffmanInvalidFrequencyError(
+                    f"Frequency for symbol {symbol!r} must be positive, got {freq}"
+                )
+            else:
+                raise HuffmanInvalidFrequencyError(
+                    f"Frequency for symbol {symbol!r} must be >= {min_frequency}, got {freq}"
+                )
+
+
+def prepare_frequency_table(
+    freq_table: dict[Any, int] | FrequencyTable,
+) -> dict[Any, int]:
+    if isinstance(freq_table, FrequencyTable):
+        freq_dict = freq_table.frequencies
+    else:
+        freq_dict = freq_table
+
+    if not freq_dict:
+        raise HuffmanEmptyFrequencyTableError("Frequency table is empty")
+
+    validate_frequency_table(freq_dict)
+
+    valid_freqs = {s: f for s, f in freq_dict.items() if f > 0}
+    if not valid_freqs:
+        raise HuffmanEmptyFrequencyTableError("No symbols with positive frequency")
+
+    return valid_freqs
 
 
 def filter_frequency_table(

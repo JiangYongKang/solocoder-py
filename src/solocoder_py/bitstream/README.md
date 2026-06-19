@@ -38,6 +38,13 @@
 
 位流读取器，负责从字节数据中按比特粒度读取并解码为无符号整数。
 
+**构造参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `data` | `bytes \| bytearray` | 底层字节数据 |
+| `total_bits` | `Optional[int]` | 可选，指定有效比特数。默认为 `None`，表示有效位数等于 `len(data) * 8`。当位流不是完整字节对齐（有效位数非8倍数）时，应显式传入此值以避免将填充位误读为有效数据 |
+
 **主要属性：**
 
 | 属性 | 类型 | 说明 |
@@ -127,7 +134,7 @@ Step 3: 拼接: (0xB4 << 2) | 0x3 = 0x2D3 = 0b1011010011
 - 最小 1 比特（布尔值）
 - 最大 64 比特（完整无符号 64 位整数）
 
-写入 0 比特为合法空操作（不改变状态）。
+`n = 0` 为合法空操作（不改变读写器状态，不抛异常），适用于写入、读取和前窥。
 
 ## 前窥探针（Peek）的使用场景
 
@@ -235,6 +242,56 @@ except BitCapacityExceededError as e:
     print(f"写入超限: {e}")
 ```
 
+### 使用 total_bits 处理非字节对齐数据流
+
+当写入的数据总比特数不是 8 的倍数时，底层字节缓冲区会有填充位。使用 `total_bits` 参数可以精确控制读取器识别有效数据范围，避免误读填充位。
+
+```python
+from solocoder_py.bitstream import BitWriter, BitReader, InsufficientBitsError
+
+# 写入 11 比特（非8倍数，末字节有5个填充位）
+writer = BitWriter()
+writer.write_bits(0b101, 3)
+writer.write_bits(0b1100101011, 10)  # 错误写法: 拆分为多个
+# 正确:
+writer.reset()
+writer.write_bits(0b101, 3)     # 3 bits
+writer.write_bits(0b1100101, 7)  # 7 bits → 合计10 bits, 需要再加1
+writer.write_bits(0b1, 1)        # 1 bit  → 合计11 bits
+
+actual_bits = writer.total_bits_written  # = 11
+data = writer.to_bytes()  # 底层有2字节（16比特），但只有前11比特有效
+
+# 读取时指定 total_bits，读取器会精确限制在11比特范围内
+reader = BitReader(data, total_bits=actual_bits)
+assert reader.total_bits_available == 11
+assert reader.remaining_bits == 11
+
+a = reader.read_bits(3)   # a = 0b101
+b = reader.read_bits(7)   # b = 0b1100101
+assert reader.remaining_bits == 1
+c = reader.read_bits(1)   # c = 0b1
+assert reader.remaining_bits == 0
+
+# 尝试读取超出范围将触发异常（即使底层字节还有空间）
+try:
+    reader.read_bits(1)
+except InsufficientBitsError:
+    print("已读到有效数据末尾")
+```
+
+**对齐时剩余比特不足的异常场景**：当使用 `total_bits` 指定非对齐有效位数时，`align_to_byte()` 可能因为需要跳过的比特数超过剩余比特数而失败：
+
+```python
+# 仅3比特有效数据，读完后对齐需要5比特，但剩余为0
+reader = BitReader(b'\xa0', total_bits=3)
+reader.read_bits(3)  # 读完所有有效数据
+try:
+    reader.align_to_byte()  # 尝试跳过5个不存在的比特
+except InsufficientBitsError:
+    print("对齐时剩余比特不足")
+```
+
 ### 字节对齐操作
 
 ```python
@@ -286,5 +343,5 @@ BitStreamError
 │   └── ValueOutOfRangeError       # 写入值超出比特范围或为负数
 ├── BitReaderError
 │   └── InsufficientBitsError      # 剩余比特不足
-└── InvalidBitCountError           # 操作比特数不在 0 或 [1, 64] 范围内
+└── InvalidBitCountError           # 操作比特数不在 [1, 64] 范围内（n=0 为合法空操作）
 ```

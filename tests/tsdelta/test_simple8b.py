@@ -93,20 +93,29 @@ class TestSelectBestMode:
 class TestPackBlock:
     def test_pack_single_value_mode_0(self):
         mode = SIMPLE8B_MODES[0]
-        block = pack_block([100], mode)
+        block, actual_count = pack_block([100], mode)
+        assert actual_count == 1
         assert block & 0x0F == 0
         assert (block >> 4) & mode.max_value == 100
 
     def test_pack_two_values_mode_1(self):
         mode = SIMPLE8B_MODES[1]
-        block = pack_block([100, 200], mode)
+        block, actual_count = pack_block([100, 200], mode)
+        assert actual_count == 2
         assert block & 0x0F == 1
         assert (block >> 4) & mode.max_value == 100
         assert (block >> (4 + 30)) & mode.max_value == 200
 
     def test_pack_zeros_mode_14(self):
         mode = SIMPLE8B_MODES[14]
-        block = pack_block([0] * 50, mode)
+        block, actual_count = pack_block([0] * 50, mode)
+        assert actual_count == 50
+        assert block & 0x0F == 14
+
+    def test_pack_partial_mode_14(self):
+        mode = SIMPLE8B_MODES[14]
+        block, actual_count = pack_block([0] * 10, mode)
+        assert actual_count == 10
         assert block & 0x0F == 14
 
     def test_pack_nonzero_mode_14_rejected(self):
@@ -128,7 +137,7 @@ class TestPackBlock:
 class TestUnpackBlock:
     def test_unpack_mode_0(self):
         mode = SIMPLE8B_MODES[0]
-        block = pack_block([12345], mode)
+        block, _ = pack_block([12345], mode)
         values, unpacked_mode = unpack_block(block)
         assert unpacked_mode.selector == 0
         assert values[0] == 12345
@@ -136,7 +145,7 @@ class TestUnpackBlock:
 
     def test_unpack_mode_1_two_values(self):
         mode = SIMPLE8B_MODES[1]
-        block = pack_block([100, 200], mode)
+        block, _ = pack_block([100, 200], mode)
         values, unpacked_mode = unpack_block(block)
         assert unpacked_mode.selector == 1
         assert values[:2] == [100, 200]
@@ -144,16 +153,78 @@ class TestUnpackBlock:
 
     def test_unpack_mode_14_zeros(self):
         mode = SIMPLE8B_MODES[14]
-        block = pack_block([0] * 120, mode)
+        block, _ = pack_block([0] * 120, mode)
         values, unpacked_mode = unpack_block(block)
         assert unpacked_mode.selector == 14
         assert all(v == 0 for v in values)
         assert len(values) == 120
 
+    def test_unpack_with_count_returns_exact_values(self):
+        mode = SIMPLE8B_MODES[14]
+        block, actual_count = pack_block([0] * 10, mode)
+        values, unpacked_mode = unpack_block(block, count=actual_count)
+        assert len(values) == 10
+        assert all(v == 0 for v in values)
+
+    def test_unpack_partial_mode_5(self):
+        mode = SIMPLE8B_MODES[5]
+        values_in = [7, 13, 42]
+        block, actual_count = pack_block(values_in, mode)
+        values_out, _ = unpack_block(block, count=actual_count)
+        assert values_out == values_in
+
     def test_invalid_selector_high(self):
         block = 0x0F
         with pytest.raises(InvalidSimple8bSelectorError):
             unpack_block(block)
+
+
+class TestPackUnpackBlockRoundtrip:
+    def test_roundtrip_mode_0(self):
+        mode = SIMPLE8B_MODES[0]
+        values = [999]
+        block, actual_count = pack_block(values, mode)
+        unpacked, _ = unpack_block(block, count=actual_count)
+        assert unpacked == values
+
+    def test_roundtrip_mode_1(self):
+        mode = SIMPLE8B_MODES[1]
+        values = [100, 200]
+        block, actual_count = pack_block(values, mode)
+        unpacked, _ = unpack_block(block, count=actual_count)
+        assert unpacked == values
+
+    def test_roundtrip_partial_mode_14(self):
+        mode = SIMPLE8B_MODES[14]
+        values = [0] * 10
+        block, actual_count = pack_block(values, mode)
+        assert actual_count == 10
+        unpacked, _ = unpack_block(block, count=actual_count)
+        assert unpacked == values
+        assert len(unpacked) == 10
+
+    def test_roundtrip_partial_mode_13(self):
+        mode = SIMPLE8B_MODES[13]
+        values = [0, 1, 0, 1, 0]
+        block, actual_count = pack_block(values, mode)
+        assert actual_count == 5
+        unpacked, _ = unpack_block(block, count=actual_count)
+        assert unpacked == values
+
+    def test_roundtrip_full_mode_14(self):
+        mode = SIMPLE8B_MODES[14]
+        values = [0] * 120
+        block, actual_count = pack_block(values, mode)
+        assert actual_count == 120
+        unpacked, _ = unpack_block(block, count=actual_count)
+        assert unpacked == values
+
+    def test_roundtrip_without_count_returns_full_block(self):
+        mode = SIMPLE8B_MODES[14]
+        block, actual_count = pack_block([0] * 10, mode)
+        unpacked, _ = unpack_block(block)
+        assert len(unpacked) == 120
+        assert unpacked[:10] == [0] * 10
 
 
 class TestSimple8bPack:

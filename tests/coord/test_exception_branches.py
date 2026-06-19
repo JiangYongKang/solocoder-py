@@ -138,6 +138,10 @@ class TestInvalidBoundsError:
         with pytest.raises(InvalidBoundsError):
             BoundingBox(min_lat=90.0, max_lat=-90.0, min_lon=-180.0, max_lon=180.0)
 
+    def test_inverted_bounding_box_lon_raises(self):
+        with pytest.raises(InvalidBoundsError):
+            BoundingBox(min_lat=-90.0, max_lat=90.0, min_lon=100.0, max_lon=50.0)
+
 
 class TestExceptionHierarchy:
     def test_invalid_bounds_inherits_coord_error(self):

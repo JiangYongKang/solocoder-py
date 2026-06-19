@@ -2,6 +2,7 @@ from .exceptions import (
     GeoSearchError,
     InvalidCoordinateError,
     InvalidLatitudeError,
+    InvalidLimitError,
     InvalidLongitudeError,
     InvalidRadiusError,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "GeoSearchError",
     "InvalidCoordinateError",
     "InvalidLatitudeError",
+    "InvalidLimitError",
     "InvalidLongitudeError",
     "InvalidRadiusError",
     "GeoSearchEngine",

@@ -1,0 +1,7 @@
+在当前项目中你已经完成了霍夫曼编码树构建器的实现，但存在以下问题需要修复：
+
+1. canonical.py 的 _symbol_sort_key 函数中，try/except 分支用于捕获混合类型符号的比较异常，但 Python 的 sorted 函数在 key 函数返回后才会执行实际的元素比较，异常发生位置不在 try 块覆盖范围内。当频率表包含字符串和整数混合符号时，排序操作会在 key 函数外部抛出 TypeError 导致规范编码生成崩溃。
+2. canonical.py 的 build_canonical_codes 方法中，处理单符号场景时硬编码了 code_length=1 和 code="0"，没有读取传入的 CodeLengthTable 中该符号的实际码长。这意味着当调用方传入单符号但码长不为 1 的码长表时，生成的编码信息与实际输入矛盾。
+3. tree.py 的 extract_code_lengths 函数内部自己实现了一套频率表校验逻辑（检查空字典、过滤正频率、验证非空），而 build_huffman_tree 函数中也有几乎相同的校验步骤。两处各自维护相同逻辑，如果校验规则需要调整则两个函数都要同步修改。
+4. test_edge_cases.py 的 test_reset_decoder 测试用例在调用 decoder.reset() 后，立即创建了一个全新的 HuffmanDecoder 对象 decoder2 用于后续验证操作。reset 后的原始 decoder 实例从未被再次使用，其内部状态（_buffer、_output、_finished）是否被正确清理完全没有得到验证。
+5. 测试代码中存在多处为了适配代码行为而修改测试断言的情况。增量解码测试和无效编码测试的预期值都被修改过，而非保持测试作为代码正确性的独立标准。

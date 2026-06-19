@@ -19,7 +19,10 @@ class LZ77Decompressor:
         output_stream: Optional[io.BytesIO] = None,
     ) -> None:
         self._config = config or LZ77Config()
-        self._output = output_stream or io.BytesIO()
+        self._output = output_stream
+        self._output_owned = output_stream is None
+        if self._output_owned:
+            self._output = io.BytesIO()
         self._input_data: bytes = b""
         self._input_pos: int = 0
         self._output_buffer: bytearray = bytearray()
@@ -50,12 +53,18 @@ class LZ77Decompressor:
         self._total_output = 0
         self._match_count = 0
         self._literal_count = 0
-        self._output = io.BytesIO()
+        if self._output_owned:
+            self._output = io.BytesIO()
 
     def decompress(self, data: bytes) -> bytes:
         self.set_input_data(data)
         self._process_all()
+        self._flush_output()
         return bytes(self._output_buffer)
+
+    def _flush_output(self) -> None:
+        if self._output is not None and self._output_buffer:
+            self._output.write(bytes(self._output_buffer))
 
     def _process_all(self) -> None:
         while self._input_pos < len(self._input_data):
@@ -155,7 +164,8 @@ class LZ77Decompressor:
         self._total_output = 0
         self._match_count = 0
         self._literal_count = 0
-        self._output = io.BytesIO()
+        if self._output_owned:
+            self._output = io.BytesIO()
 
     def close(self) -> None:
         if hasattr(self._output, "close"):

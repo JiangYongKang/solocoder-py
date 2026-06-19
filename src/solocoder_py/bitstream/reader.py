@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Union
+from typing import Optional, Union
 
 from .exceptions import (
     InsufficientBitsError,
@@ -12,15 +12,31 @@ MAX_BITS = 64
 
 
 class BitReader:
-    def __init__(self, data: Union[bytes, bytearray]) -> None:
+    def __init__(
+        self,
+        data: Union[bytes, bytearray],
+        total_bits: Optional[int] = None,
+    ) -> None:
         self._data: bytes = bytes(data)
+        max_possible_bits = len(self._data) * 8
+        if total_bits is not None:
+            if total_bits < 0:
+                raise ValueError("total_bits must be non-negative")
+            if total_bits > max_possible_bits:
+                raise ValueError(
+                    f"total_bits ({total_bits}) exceeds maximum possible "
+                    f"({max_possible_bits}) from data length"
+                )
+            self._total_bits_available: int = total_bits
+        else:
+            self._total_bits_available = max_possible_bits
         self._byte_pos: int = 0
         self._bit_offset: int = 0
         self._total_bits_read: int = 0
 
     @property
     def total_bits_available(self) -> int:
-        return len(self._data) * 8
+        return self._total_bits_available
 
     @property
     def total_bits_read(self) -> int:
@@ -28,7 +44,7 @@ class BitReader:
 
     @property
     def remaining_bits(self) -> int:
-        return self.total_bits_available - self._total_bits_read
+        return self._total_bits_available - self._total_bits_read
 
     @property
     def byte_position(self) -> int:
@@ -49,10 +65,10 @@ class BitReader:
             raise InvalidBitCountError(
                 f"Bit count must be between {MIN_BITS} and {MAX_BITS}, got {n}"
             )
-        if self._total_bits_read + n > self.total_bits_available:
+        if self._total_bits_read + n > self._total_bits_available:
             raise InsufficientBitsError(
                 f"Cannot read {n} bits: only {self.remaining_bits} bits remaining "
-                f"(total available: {self.total_bits_available}, read so far: {self._total_bits_read})"
+                f"(total available: {self._total_bits_available}, read so far: {self._total_bits_read})"
             )
 
         result = 0
@@ -96,7 +112,7 @@ class BitReader:
             return 0
 
         skip_bits = 8 - self._bit_offset
-        if self._total_bits_read + skip_bits > self.total_bits_available:
+        if self._total_bits_read + skip_bits > self._total_bits_available:
             raise InsufficientBitsError(
                 f"Cannot align: need {skip_bits} bits but only "
                 f"{self.remaining_bits} remaining"
@@ -110,22 +126,28 @@ class BitReader:
     def read_remaining(self) -> bytes:
         if self._bit_offset != 0:
             remaining_in_byte = 8 - self._bit_offset
+            effective_remaining = min(remaining_in_byte, self.remaining_bits)
             result = bytearray()
-            if self._byte_pos < len(self._data):
-                mask = (1 << remaining_in_byte) - 1
-                last_bits = (self._data[self._byte_pos] & mask) << self._bit_offset
-                if last_bits != 0:
-                    result.append(last_bits)
+            if self._byte_pos < len(self._data) and effective_remaining > 0:
+                mask = (1 << effective_remaining) - 1
+                last_bits = (self._data[self._byte_pos] >> (remaining_in_byte - effective_remaining)) & mask
+                left_align = 8 - effective_remaining
+                if last_bits != 0 or effective_remaining > 0:
+                    result.append(last_bits << left_align)
                 self._byte_pos += 1
                 self._bit_offset = 0
-            result.extend(self._data[self._byte_pos:])
-            self._byte_pos = len(self._data)
-            self._total_bits_read = self.total_bits_available
+                self._total_bits_read += effective_remaining
+            remaining_full_bytes = self.remaining_bits // 8
+            if remaining_full_bytes > 0:
+                result.extend(self._data[self._byte_pos:self._byte_pos + remaining_full_bytes])
+                self._byte_pos += remaining_full_bytes
+                self._total_bits_read += remaining_full_bytes * 8
             return bytes(result)
 
-        result = self._data[self._byte_pos:]
-        self._byte_pos = len(self._data)
-        self._total_bits_read = self.total_bits_available
+        remaining_full_bytes = self.remaining_bits // 8
+        result = self._data[self._byte_pos:self._byte_pos + remaining_full_bytes]
+        self._byte_pos += remaining_full_bytes
+        self._total_bits_read += remaining_full_bytes * 8
         return bytes(result)
 
     def reset(self) -> None:

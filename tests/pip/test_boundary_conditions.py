@@ -90,7 +90,22 @@ class TestHorizontalEdge:
 
 
 class TestRayPassingThroughVertex:
-    def test_ray_through_vertex_both_sides_opposite(self):
+    def test_ray_through_vertex_edges_on_opposite_sides_counts_once(self):
+        engine = build_engine()
+        polygon = Polygon.from_tuples([
+            (0, 0),
+            (10, 0),
+            (10, 10),
+            (0, 5),
+        ])
+        point = Point(2, 5)
+        prev_vertex = Point(10, 10)
+        next_vertex = Point(0, 0)
+        assert (prev_vertex.y > 5) != (next_vertex.y > 5)
+        result = engine.contains(polygon, point)
+        assert result == PointLocation.INSIDE
+
+    def test_ray_through_vertex_edges_on_same_side_counts_zero(self):
         engine = build_engine()
         polygon = Polygon.from_tuples([
             (0, 0),
@@ -100,24 +115,11 @@ class TestRayPassingThroughVertex:
             (0, 10),
         ])
         point = Point(2, 5)
+        prev_vertex = Point(0, 0)
+        next_vertex = Point(10, 0)
+        assert (prev_vertex.y > 5) == (next_vertex.y > 5)
         result = engine.contains(polygon, point)
-        assert result in (PointLocation.INSIDE, PointLocation.ON_BOUNDARY)
-
-    def test_ray_through_vertex_both_sides_same(self):
-        engine = build_engine()
-        polygon = Polygon.from_tuples([
-            (0, 0),
-            (5, 5),
-            (10, 0),
-            (15, 5),
-            (15, 10),
-            (0, 10),
-        ])
-        point = Point(2, 5)
-        assert engine.contains(polygon, point) in (
-            PointLocation.INSIDE,
-            PointLocation.ON_BOUNDARY,
-        )
+        assert result == PointLocation.INSIDE
 
 
 class TestNearBoundary:

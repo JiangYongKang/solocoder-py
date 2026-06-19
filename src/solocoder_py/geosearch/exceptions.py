@@ -19,3 +19,7 @@ class InvalidRadiusError(GeoSearchError):
 
 class InvalidCoordinateError(GeoSearchError):
     pass
+
+
+class InvalidLimitError(GeoSearchError):
+    pass

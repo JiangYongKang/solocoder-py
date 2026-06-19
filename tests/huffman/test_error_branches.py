@@ -24,9 +24,11 @@ from solocoder_py.huffman import (
     filter_frequency_table,
     generate_code_table,
     validate_frequency_table,
+    verify_prefix_code_property,
 )
 from solocoder_py.huffman.models import (
     CodeLengthTable,
+    FrequencyTable,
     HuffmanNode,
 )
 
@@ -253,49 +255,14 @@ class TestDecodeErrors:
         code_lengths = CodeLengthTable(lengths=code_lengths_data)
         code_table = build_canonical_codes(code_lengths, {"A": 4, "B": 2, "C": 1})
 
-        from solocoder_py.huffman import verify_prefix_code_property
         assert verify_prefix_code_property(code_table) is True
 
-        decode_table_set = set(info.code for info in code_table.codes.values())
+        codes = {sym: info.code for sym, info in code_table.items()}
         max_len = code_table.max_length()
 
-        bad_bits = None
-        for length in range(1, max_len + 2):
-            if length == 1:
-                candidates = ["0", "1"]
-            elif length == 2:
-                candidates = ["00", "01", "10", "11"]
-            else:
-                from itertools import product
-                candidates = ["".join(t) for t in product("01", repeat=length)]
-
-            for candidate in candidates:
-                prefix_is_code = any(
-                    candidate[:pl] in decode_table_set
-                    for pl in range(1, len(candidate) + 1)
-                )
-                if not prefix_is_code and len(candidate) > max_len:
-                    bad_bits = candidate
-                    break
-            if bad_bits:
-                break
-
-        if bad_bits is None:
-            suffix = "0"
-            candidate = ""
-            for _ in range(max_len + 5):
-                candidate += suffix
-                prefix_is_code = any(
-                    candidate[:pl] in decode_table_set
-                    for pl in range(1, len(candidate) + 1)
-                )
-                if not prefix_is_code and len(candidate) > max_len:
-                    bad_bits = candidate
-                    break
-
-        assert bad_bits is not None, "Could not construct invalid bit sequence for test"
-
         decoder = HuffmanDecoder(code_table)
+        bad_bits = "1" * (max_len + 1)
+
         with pytest.raises(HuffmanInvalidCodeError, match="Code exceeds maximum length"):
             decoder.write(bad_bits)
 
@@ -319,3 +286,111 @@ class TestDecodeErrors:
         from solocoder_py.huffman.models import CodeTable
         with pytest.raises(HuffmanEmptyInputError, match="Code table cannot be empty"):
             HuffmanDecoder(CodeTable(codes={}))
+
+
+class TestBugFixRegression:
+    def test_mixed_type_symbols_sort_key(self):
+        code_lengths_data = {"A": 2, 1: 2, "B": 3, 2: 3}
+        code_lengths = CodeLengthTable(lengths=code_lengths_data)
+        freq_table = {"A": 5, 1: 5, "B": 3, 2: 3}
+
+        code_table = build_canonical_codes(code_lengths, freq_table)
+
+        assert verify_prefix_code_property(code_table) is True
+        assert len(code_table) == 4
+        for sym in ["A", 1, "B", 2]:
+            assert sym in code_table
+
+    def test_single_symbol_custom_code_length(self):
+        code_lengths = CodeLengthTable(lengths={"X": 5})
+        code_table = build_canonical_codes(code_lengths, {"X": 10})
+
+        info = code_table["X"]
+        assert info.code_length == 5
+        assert info.code == "00000"
+        assert info.frequency == 10
+
+        decoded = decode("0000000000", code_table, expected_length=2)
+        assert "".join(decoded) == "XX"
+
+    def test_prepare_frequency_table_unified_validation(self):
+        from solocoder_py.huffman import prepare_frequency_table
+
+        valid = prepare_frequency_table({"A": 5, "B": 3})
+        assert valid == {"A": 5, "B": 3}
+
+        with pytest.raises(HuffmanEmptyFrequencyTableError):
+            prepare_frequency_table({})
+
+        with pytest.raises(HuffmanInvalidFrequencyError):
+            prepare_frequency_table({"A": -1})
+
+        with pytest.raises(HuffmanInvalidFrequencyError):
+            prepare_frequency_table({"A": "not_an_int"})
+
+        with pytest.raises(HuffmanInvalidFrequencyError):
+            prepare_frequency_table({"A": 0})
+
+        freq_table_obj = FrequencyTable(frequencies={"X": 10, "Y": 20})
+        valid2 = prepare_frequency_table(freq_table_obj)
+        assert valid2 == {"X": 10, "Y": 20}
+
+        from solocoder_py.huffman.frequency import validate_frequency_table
+        with pytest.raises(HuffmanInvalidFrequencyError, match=">= 0"):
+            validate_frequency_table({"A": -1}, min_frequency=0)
+
+        validate_frequency_table({"A": 0}, min_frequency=0)
+
+    def test_decoder_reset_reuses_same_instance(self):
+        encoded1 = encode("AAAAA")
+        encoded2 = encode("BBBBB")
+
+        decoder = HuffmanDecoder(encoded1.code_table)
+        decoder.write(encoded1.bit_string)
+        result1 = decoder.finish(expected_length=5)
+        assert "".join(result1) == "AAAAA"
+
+        decoder.reset()
+        assert decoder._buffer == ""
+        assert decoder._output == []
+        assert decoder._finished is False
+
+        decoder.write(encoded1.bit_string)
+        result2 = decoder.finish(expected_length=5)
+        assert "".join(result2) == "AAAAA"
+
+        decoder.reset()
+        decoder.write(encoded1.bit_string)
+        result3 = decoder.finish(expected_length=5)
+        assert "".join(result3) == "AAAAA"
+
+    def test_incremental_decode_write_returns_partial_results(self):
+        text = "ABCDEABCDE"
+        encoded = encode(text)
+
+        decoder = HuffmanDecoder(encoded.code_table)
+        bs = encoded.bit_string
+
+        all_write_results: list[Any] = []
+        for i in range(0, len(bs), 2):
+            chunk = bs[i : i + 2]
+            partial = decoder.write(chunk)
+            all_write_results.extend(partial)
+
+        final_result = decoder.finish(expected_length=len(text))
+
+        assert "".join(all_write_results) == text
+        assert "".join(final_result) == text
+        assert all_write_results == final_result
+
+    def test_invalid_code_sequence_constructed_directly(self):
+        code_lengths_data = {"A": 1, "B": 2, "C": 3}
+        code_lengths = CodeLengthTable(lengths=code_lengths_data)
+        code_table = build_canonical_codes(code_lengths, {"A": 4, "B": 2, "C": 1})
+
+        max_len = code_table.max_length()
+        assert max_len == 3
+
+        decoder = HuffmanDecoder(code_table)
+        with pytest.raises(HuffmanInvalidCodeError, match="Code exceeds maximum length"):
+            decoder.write("1" * (max_len + 1))

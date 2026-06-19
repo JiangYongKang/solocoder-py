@@ -163,11 +163,10 @@ class _QuadNode:
 
     def insert_rectangle(self, rect: Rectangle) -> None:
         if not self.boundary.contains(rect):
-            if not self.boundary.intersects(rect):
-                raise OutOfBoundsError(
-                    f"Rectangle at ({rect.x}, {rect.y}) with size {rect.width}x{rect.height} "
-                    f"is outside quadtree boundary"
-                )
+            raise OutOfBoundsError(
+                f"Rectangle at ({rect.x}, {rect.y}) with size {rect.width}x{rect.height} "
+                f"is outside quadtree boundary"
+            )
 
         if self.is_divided:
             quadrant = self._get_quadrant_for_rect(rect)
@@ -243,7 +242,7 @@ class Quadtree:
         )
         self._max_capacity = max_capacity
         self._max_depth = max_depth
-        self._root = _QuadNode(boundary, 0, max_capacity, max_depth)
+        self._root = _QuadNode(self._boundary, 0, max_capacity, max_depth)
         self._point_count = 0
         self._rectangle_count = 0
 

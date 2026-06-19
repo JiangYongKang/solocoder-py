@@ -7,7 +7,7 @@ from .exceptions import (
     InvalidPolygonError,
     PipError,
 )
-from .models import Point, Polygon
+from .models import Point, Polygon, PolygonWithHoles
 
 __all__ = [
     "PointLocation",
@@ -20,4 +20,5 @@ __all__ = [
     "PipError",
     "Point",
     "Polygon",
+    "PolygonWithHoles",
 ]

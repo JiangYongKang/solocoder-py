@@ -85,3 +85,59 @@ class Polygon:
         i = index % n
         j = (index + 1) % n
         return (self.vertices[i], self.vertices[j])
+
+    @property
+    def winding_order(self) -> float:
+        n = len(self.vertices)
+        area = 0.0
+        for i in range(n):
+            v1 = self.vertices[i]
+            v2 = self.vertices[(i + 1) % n]
+            area += v1.x * v2.y - v2.x * v1.y
+        return area
+
+    def is_counterclockwise(self) -> bool:
+        return self.winding_order > 0
+
+    def is_clockwise(self) -> bool:
+        return self.winding_order < 0
+
+    def reverse(self) -> None:
+        self.vertices.reverse()
+
+
+@dataclass
+class PolygonWithHoles:
+    outer_ring: Polygon
+    inner_rings: List[Polygon]
+
+    def __post_init__(self) -> None:
+        if self.outer_ring is None:
+            raise InvalidPolygonError("Outer ring cannot be None")
+        if not isinstance(self.outer_ring, Polygon):
+            raise InvalidPolygonError(
+                f"Outer ring must be a Polygon, got {type(self.outer_ring)}"
+            )
+        if self.inner_rings is None:
+            raise InvalidPolygonError("Inner rings cannot be None")
+        if not isinstance(self.inner_rings, list):
+            raise InvalidPolygonError("Inner rings must be a list")
+        for i, ring in enumerate(self.inner_rings):
+            if not isinstance(ring, Polygon):
+                raise InvalidPolygonError(
+                    f"Inner ring {i} is not a Polygon instance: {type(ring)}"
+                )
+
+    @classmethod
+    def from_tuples(
+        cls,
+        outer_ring: List[Tuple[float, float]],
+        inner_rings: List[List[Tuple[float, float]]],
+    ) -> "PolygonWithHoles":
+        outer = Polygon.from_tuples(outer_ring)
+        inners = [Polygon.from_tuples(ring) for ring in inner_rings]
+        return cls(outer_ring=outer, inner_rings=inners)
+
+    @property
+    def hole_count(self) -> int:
+        return len(self.inner_rings)

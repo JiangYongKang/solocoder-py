@@ -15,6 +15,10 @@
 
 压缩器类，负责将原始字节数据压缩为 LZ77 编码格式。
 
+构造参数：
+- `config`：压缩配置（`LZ77Config` 实例，可选）
+- `output_stream`：输出流（`io.BytesIO` 或兼容的文件对象，可选）。如果提供，压缩数据会写入该流；否则内部创建一个 `BytesIO`。
+
 主要方法：
 - `compress(data: bytes) -> bytes`：压缩数据并返回压缩结果
 - `get_compressed_data() -> bytes`：获取已压缩的数据
@@ -25,6 +29,10 @@
 ### LZ77Decompressor
 
 解压器类，负责将 LZ77 压缩数据还原为原始数据。
+
+构造参数：
+- `config`：解压配置（`LZ77Config` 实例，可选）
+- `output_stream`：输出流（`io.BytesIO` 或兼容的文件对象，可选）。如果提供，解压完成后数据会写入该流；否则内部创建一个 `BytesIO`。
 
 主要方法：
 - `decompress(data: bytes) -> bytes`：解压数据并返回原始结果
@@ -39,11 +47,13 @@
 配置类，用于自定义压缩/解压参数。
 
 可配置参数：
-- `window_size`：滑动窗口大小（默认 32768 字节）
-- `min_match_length`：最小匹配长度（默认 3 字节）
-- `max_match_length`：最大匹配长度（默认 258 字节）
+- `window_size`：滑动窗口大小（默认 32768 字节，最大 65535 字节）
+- `min_match_length`：最小匹配长度（默认 3 字节，最小 2 字节）
+- `max_match_length`：最大匹配长度（默认 258 字节，最大为 min_match_length + 255）
 - `hash_chain_limit`：哈希链最大长度（默认 256）
-- `literal_block_max`：字面块最大长度（默认 128 字节）
+- `literal_block_max`：字面块最大长度（默认 128 字节，最大 128 字节）
+
+> **注意**：由于编码格式限制，`max_match_length` 不得超过 `min_match_length + 255`，`literal_block_max` 不得超过 128，`window_size` 不得超过 65535。超出这些限制会在创建配置时抛出 `InvalidConfigError`。
 
 ### CompressionStats
 
@@ -139,7 +149,7 @@ assert data == decompressed
 from solocoder_py.lz77 import LZ77Compressor, LZ77Config
 
 config = LZ77Config(
-    window_size=65536,
+    window_size=65535,
     min_match_length=4,
     max_match_length=128,
     hash_chain_limit=512,

@@ -1,11 +1,12 @@
 import pytest
 
-from solocoder_py.pip import Point, PointLocation, Polygon, RayCastingEngine
+from solocoder_py.pip import Point, PointLocation, Polygon, PolygonWithHoles, RayCastingEngine
 
 from .conftest import (
     build_butterfly_polygon,
     build_concave_polygon,
     build_engine,
+    build_holed_polygon,
     build_square_polygon,
     build_triangle_polygon,
 )
@@ -81,28 +82,28 @@ class TestTrianglePointInPolygon:
 
 
 class TestConcavePolygon:
-    def test_point_in_main_body_of_concave(self):
+    def test_point_in_notch_region_is_outside(self):
         engine = build_engine()
         concave = build_concave_polygon()
         point = Point(5, 8)
-        assert engine.contains(concave, point) == PointLocation.INSIDE
+        assert engine.contains(concave, point) == PointLocation.OUTSIDE
 
-    def test_point_in_concave_notch_outside(self):
+    def test_point_below_notch_is_inside(self):
         engine = build_engine()
         concave = build_concave_polygon()
         point = Point(5, 3)
-        assert engine.contains(concave, point) == PointLocation.OUTSIDE
-
-    def test_point_left_of_notch_inside(self):
-        engine = build_engine()
-        concave = build_concave_polygon()
-        point = Point(1, 3)
         assert engine.contains(concave, point) == PointLocation.INSIDE
 
-    def test_point_right_of_notch_inside(self):
+    def test_point_left_upper_region_is_inside(self):
         engine = build_engine()
         concave = build_concave_polygon()
-        point = Point(9, 3)
+        point = Point(1, 8)
+        assert engine.contains(concave, point) == PointLocation.INSIDE
+
+    def test_point_right_upper_region_is_inside(self):
+        engine = build_engine()
+        concave = build_concave_polygon()
+        point = Point(9, 8)
         assert engine.contains(concave, point) == PointLocation.INSIDE
 
 
@@ -133,24 +134,67 @@ class TestButterflyPolygon:
 
 
 class TestPolygonWithHole:
-    def test_point_in_outer_ring(self):
+    def test_point_inside_outer_outside_inner_is_inside(self):
         engine = build_engine()
-        outer = Polygon.from_tuples([
-            (0, 0),
-            (10, 0),
-            (10, 10),
-            (0, 10),
-        ])
-        inner = Polygon.from_tuples([
-            (3, 3),
-            (3, 7),
-            (7, 7),
-            (7, 3),
-        ])
+        holed = build_holed_polygon()
+        point = Point(5, 9)
+        result = engine.contains_holed(holed, point)
+        assert result == PointLocation.INSIDE
+        assert engine.is_inside_holed(holed, point) is True
 
-        point_outside_both = Point(5, 5)
-        assert engine.contains(outer, point_outside_both) == PointLocation.INSIDE
-        assert engine.contains(inner, point_outside_both) == PointLocation.INSIDE
+    def test_point_in_hole_is_outside(self):
+        engine = build_engine()
+        holed = build_holed_polygon()
+        point = Point(5, 5)
+        result = engine.contains_holed(holed, point)
+        assert result == PointLocation.OUTSIDE
+        assert engine.is_outside_holed(holed, point) is True
+
+    def test_point_outside_outer_is_outside(self):
+        engine = build_engine()
+        holed = build_holed_polygon()
+        point = Point(15, 5)
+        result = engine.contains_holed(holed, point)
+        assert result == PointLocation.OUTSIDE
+
+    def test_point_on_outer_boundary(self):
+        engine = build_engine()
+        holed = build_holed_polygon()
+        point = Point(5, 0)
+        result = engine.contains_holed(holed, point)
+        assert result == PointLocation.ON_BOUNDARY
+        assert engine.is_on_holed_boundary(holed, point) is True
+
+    def test_point_on_inner_boundary(self):
+        engine = build_engine()
+        holed = build_holed_polygon()
+        point = Point(5, 3)
+        result = engine.contains_holed(holed, point)
+        assert result == PointLocation.ON_BOUNDARY
+
+    def test_point_left_of_hole_is_inside(self):
+        engine = build_engine()
+        holed = build_holed_polygon()
+        point = Point(1, 5)
+        result = engine.contains_holed(holed, point)
+        assert result == PointLocation.INSIDE
+
+    def test_winding_order_detection(self):
+        holed = build_holed_polygon()
+        assert holed.outer_ring.is_counterclockwise()
+        assert holed.hole_count == 1
+
+    def test_polygon_with_holes_from_tuples(self):
+        holed = PolygonWithHoles.from_tuples(
+            outer_ring=[(0, 0), (10, 0), (10, 10), (0, 10)],
+            inner_rings=[
+                [(2, 2), (8, 2), (8, 8), (2, 8)],
+            ],
+        )
+        assert holed.hole_count == 1
+        engine = build_engine()
+        assert engine.is_inside_holed(holed, Point(1, 1)) is True
+        assert engine.is_inside_holed(holed, Point(5, 5)) is False
 
 
 class TestContainsMany:

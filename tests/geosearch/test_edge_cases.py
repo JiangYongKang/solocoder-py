@@ -248,10 +248,13 @@ class TestResultStructure:
         assert hasattr(response, 'results')
         assert hasattr(response, 'total_count')
         assert hasattr(response, 'filtered_count')
+        assert hasattr(response, 'returned_count')
 
         assert isinstance(response.results, list)
         assert isinstance(response.total_count, int)
         assert isinstance(response.filtered_count, int)
+        assert isinstance(response.returned_count, int)
+        assert response.total_count >= response.returned_count
 
     def test_each_result_has_point_and_distance(self, beijing_center, candidates_around_beijing):
         engine = GeoSearchEngine(candidates=candidates_around_beijing)
@@ -288,4 +291,6 @@ class TestDuplicatePoints:
         engine = GeoSearchEngine(candidates=duplicates)
         response = engine.search(beijing_center, radius_km=10.0, limit=3)
 
-        assert response.total_count == 3
+        assert response.total_count == 5
+        assert response.returned_count == 3
+        assert len(response.results) == 3

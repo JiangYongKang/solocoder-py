@@ -7,7 +7,10 @@ from .exceptions import (
     HuffmanCodeLengthOverflowError,
     HuffmanEmptyFrequencyTableError,
 )
-from .frequency import validate_frequency_table
+from .frequency import (
+    prepare_frequency_table,
+    validate_frequency_table,
+)
 from .models import (
     CodeInfo,
     CodeLengthTable,
@@ -26,7 +29,11 @@ def build_canonical_codes(
     lengths_dict = code_lengths.lengths
 
     if len(lengths_dict) == 1:
-        single_symbol = next(iter(lengths_dict.keys()))
+        single_symbol, actual_length = next(iter(lengths_dict.items()))
+        if actual_length <= 0:
+            raise HuffmanCodeLengthOverflowError(
+                f"Code length for {single_symbol!r} must be positive, got {actual_length}"
+            )
         codes: dict[Any, CodeInfo] = {}
         freq = 0
         if freq_table is not None:
@@ -34,11 +41,17 @@ def build_canonical_codes(
                 freq = freq_table.frequencies.get(single_symbol, 0)
             else:
                 freq = freq_table.get(single_symbol, 0)
+        code_value = 0
+        code_str = format(code_value, f"0{actual_length}b")
+        if len(code_str) != actual_length:
+            raise HuffmanCodeLengthOverflowError(
+                f"Code value overflow: {code_value} cannot fit in {actual_length} bits"
+            )
         codes[single_symbol] = CodeInfo(
             symbol=single_symbol,
-            code_length=1,
+            code_length=actual_length,
             frequency=freq,
-            code="0",
+            code=code_str,
         )
         return CodeTable(codes=codes)
 
@@ -96,10 +109,12 @@ def build_canonical_codes(
 
 
 def _symbol_sort_key(symbol: Any) -> tuple:
+    type_name = type(symbol).__name__
     try:
-        return (0, symbol)
+        _ = symbol < symbol
+        return (0, type_name, symbol)
     except TypeError:
-        return (1, repr(symbol))
+        return (1, type_name, repr(symbol))
 
 
 def generate_code_table(
@@ -107,18 +122,10 @@ def generate_code_table(
 ) -> CodeTable:
     from .tree import build_code_lengths
 
-    if isinstance(freq_table, FrequencyTable):
-        freq_dict = freq_table.frequencies
-    else:
-        freq_dict = freq_table
+    valid_freqs = prepare_frequency_table(freq_table)
 
-    if not freq_dict:
-        raise HuffmanEmptyFrequencyTableError("Frequency table is empty")
-
-    validate_frequency_table(freq_dict)
-
-    code_lengths = build_code_lengths(freq_dict)
-    return build_canonical_codes(code_lengths, freq_dict)
+    code_lengths = build_code_lengths(valid_freqs)
+    return build_canonical_codes(code_lengths, valid_freqs)
 
 
 def verify_prefix_code_property(code_table: CodeTable) -> bool:

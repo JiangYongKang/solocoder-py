@@ -1,0 +1,7 @@
+在当前项目中你已经完成了时间戳二阶差分压缩器的实现，但存在以下问题需要修复：
+
+1. simple8b.py 的 pack_block 方法在打包未填满的最后一个 Simple-8b 块时，使用 min(mode.count, len(values)) 限制实际打包数量，但 unpack_block 方法始终按 mode.count 返回全部条目的值。当最后一个块只打包了部分位置（如 mode 14 可装 120 个但只有 10 个实际值）时，解包会多返回填充的零值，破坏 pack/unpack 的往返对称性。
+2. compressor.py 的 compress_timestamps 函数在压缩流程中两次调用了 compute_deltas 计算二阶差分：第一次在 compressor.get_compressed_data() 内部完成编码，第二次在函数末尾为了获取构造 CompressedBlock 所需的 delta_result 元数据又重新计算了一次。这导致在时间戳数量较大时差分计算被重复执行。
+3. decompressor.py 的 _parse_header 方法中对 simple8b_length 做了小于零的检测，但该字段使用 Python struct 的 uint32（I 格式）解包，在 Python 中永远不可能是负数，这是一段永远不会被触发的死代码。当数据损坏使该字段变为极大值时，实际触发的是 TruncatedDataError 而非更准确的 CorruptedDataError。
+4. compressor.py 的 _compress_from_deltas 方法在值域校验中使用了 `max(abs(val), 1)` 与 max_second_order_delta 比较。当用户将 max_second_order_delta 设置为 0（意图仅允许零值二阶差分）时，即使是 val=0 也会因为 `max(abs(0), 1) = 1 > 0` 被错误拒绝，导致等间隔时间戳压缩抛出 ValueOutOfRangeError。
+5. 测试代码中 test_delta.py、test_compressor.py 和 test_simple8b.py 的多处断言在调试过程中被降低标准以迁就实现缺陷，而非以测试作为不变的规格基准。

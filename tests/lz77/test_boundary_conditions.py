@@ -166,6 +166,30 @@ class TestConfigBoundaries:
         with pytest.raises(InvalidConfigError, match="literal_block_max must be >= 1"):
             LZ77Config(literal_block_max=0)
 
+    def test_invalid_window_size_exceeds_max_distance(self):
+        with pytest.raises(InvalidConfigError, match="window_size must be <="):
+            LZ77Config(window_size=65536)
+
+    def test_invalid_max_match_length_exceeds_encoding(self):
+        with pytest.raises(InvalidConfigError, match="max_match_length must be <= min_match_length"):
+            LZ77Config(min_match_length=3, max_match_length=300)
+
+    def test_invalid_literal_block_max_exceeds_encoding(self):
+        with pytest.raises(InvalidConfigError, match="literal_block_max must be <="):
+            LZ77Config(literal_block_max=129)
+
+    def test_max_match_length_at_encoding_limit(self):
+        config = LZ77Config(min_match_length=3, max_match_length=258)
+        assert config.max_match_length == 258
+
+    def test_literal_block_max_at_encoding_limit(self):
+        config = LZ77Config(literal_block_max=128)
+        assert config.literal_block_max == 128
+
+    def test_window_size_at_max_distance(self):
+        config = LZ77Config(window_size=65535)
+        assert config.window_size == 65535
+
     def test_valid_minimal_config(self):
         config = LZ77Config(
             window_size=1,

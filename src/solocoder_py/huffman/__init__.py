@@ -27,6 +27,7 @@ from .frequency import (
     count_frequencies_bytes,
     count_frequencies_text,
     filter_frequency_table,
+    prepare_frequency_table,
     validate_frequency_table,
 )
 from .models import (
@@ -63,6 +64,7 @@ __all__ = [
     "count_frequencies_bytes",
     "validate_frequency_table",
     "filter_frequency_table",
+    "prepare_frequency_table",
     "build_huffman_tree",
     "extract_code_lengths",
     "build_code_lengths",

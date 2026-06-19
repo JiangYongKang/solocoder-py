@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from solocoder_py.bitstream import BitReader, BitWriter
+from solocoder_py.bitstream import BitReader, BitWriter, InsufficientBitsError
 
 
 class TestZeroBitsOperations:
@@ -230,3 +230,54 @@ class TestAlignOperations:
         skip = reader.align_to_byte()
         assert skip == 0
         assert reader.is_aligned
+
+
+class TestBitReaderTotalBitsParameter:
+    def test_total_bits_default_equals_data_bytes(self):
+        reader = BitReader(bytes([0xA5, 0x3C]))
+        assert reader.total_bits_available == 16
+
+    def test_total_bits_explicitly_set(self):
+        reader = BitReader(bytes([0xA5, 0x3C, 0x7E, 0x00]), total_bits=24)
+        assert reader.total_bits_available == 24
+        assert reader.remaining_bits == 24
+
+    def test_total_bits_non_aligned_length(self):
+        reader = BitReader(bytes([0b10110000]), total_bits=4)
+        assert reader.total_bits_available == 4
+        assert reader.read_bits(4) == 0b1011
+        assert reader.remaining_bits == 0
+
+    def test_total_bits_align_success(self):
+        data = bytes([0b10111000, 0b11001010])
+        reader = BitReader(data, total_bits=11)
+        reader.read_bits(3)
+        assert reader.remaining_bits == 8
+        skip = reader.align_to_byte()
+        assert skip == 5
+        assert reader.remaining_bits == 3
+        assert reader.read_bits(3) == 0b110
+
+    def test_total_bits_roundtrip_with_writer(self):
+        writer = BitWriter()
+        writer.write_bits(0b101, 3)
+        writer.write_bits(0b1100101, 7)
+        expected_bits = writer.total_bits_written
+        data = writer.to_bytes()
+        reader = BitReader(data, total_bits=expected_bits)
+        assert reader.read_bits(3) == 0b101
+        assert reader.read_bits(7) == 0b1100101
+        assert reader.remaining_bits == 0
+
+    def test_total_bits_zero(self):
+        reader = BitReader(bytes([0x00]), total_bits=0)
+        assert reader.total_bits_available == 0
+        assert reader.remaining_bits == 0
+        with pytest.raises(InsufficientBitsError):
+            reader.read_bits(1)
+
+    def test_total_bits_read_remaining_respects_limit(self):
+        reader = BitReader(bytes([0xA5, 0x3C, 0x7E]), total_bits=16)
+        result = reader.read_remaining()
+        assert result == bytes([0xA5, 0x3C])
+        assert reader.remaining_bits == 0

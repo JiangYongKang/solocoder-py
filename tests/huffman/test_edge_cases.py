@@ -168,11 +168,16 @@ class TestEncoderDecoderEdgeCases:
 
         decoder = HuffmanDecoder(encoded.code_table)
         bs = encoded.bit_string
+        incremental_results: list[Any] = []
         for i in range(0, len(bs), 3):
             chunk = bs[i : i + 3]
-            decoder.write(chunk)
-        result = decoder.finish(expected_length=len(text))
-        assert "".join(result) == text
+            decoded_chunk = decoder.write(chunk)
+            incremental_results.extend(decoded_chunk)
+        final_result = decoder.finish(expected_length=len(text))
+
+        assert "".join(incremental_results) == text
+        assert "".join(final_result) == text
+        assert incremental_results == final_result
 
     def test_encoder_with_preset_freq_table(self):
         freq = {"A": 5, "B": 3, "C": 2, "D": 1}
@@ -193,6 +198,9 @@ class TestEncoderDecoderEdgeCases:
         assert "".join(decoded) == "BBBBB"
 
     def test_reset_decoder(self):
+        freq_table = {"A": 5, "B": 5, "C": 3, "D": 2}
+        code_table = generate_code_table(freq_table)
+
         encoded1 = encode("AAAAA")
         encoded2 = encode("BBBBB")
 
@@ -202,7 +210,17 @@ class TestEncoderDecoderEdgeCases:
         assert "".join(result1) == "AAAAA"
 
         decoder.reset()
+
+        assert decoder._buffer == ""
+        assert decoder._output == []
+        assert decoder._finished is False
+
+        decoder.write(encoded1.bit_string)
+        result2 = decoder.finish(expected_length=5)
+        assert "".join(result2) == "AAAAA"
+
+        decoder.reset()
         decoder2 = HuffmanDecoder(encoded2.code_table)
         decoder2.write(encoded2.bit_string)
-        result2 = decoder2.finish(expected_length=5)
-        assert "".join(result2) == "BBBBB"
+        result3 = decoder2.finish(expected_length=5)
+        assert "".join(result3) == "BBBBB"

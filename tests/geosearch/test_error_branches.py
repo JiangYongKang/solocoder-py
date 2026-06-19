@@ -6,6 +6,7 @@ from solocoder_py.geosearch import (
     GeoPoint,
     GeoSearchEngine,
     InvalidLatitudeError,
+    InvalidLimitError,
     InvalidLongitudeError,
     InvalidRadiusError,
 )
@@ -40,21 +41,33 @@ class TestInvalidLatitude:
         with pytest.raises(InvalidLatitudeError):
             GeoSearchEngine._validate_coordinate(None, 0.0)
 
+    def test_geopoint_construction_rejects_invalid_latitude(self):
+        with pytest.raises(InvalidLatitudeError):
+            GeoPoint(91.0, 0.0)
+
+    def test_geopoint_construction_rejects_nan_latitude(self):
+        with pytest.raises(InvalidLatitudeError):
+            GeoPoint(math.nan, 0.0)
+
+    def test_geopoint_construction_rejects_inf_latitude(self):
+        with pytest.raises(InvalidLatitudeError):
+            GeoPoint(math.inf, 0.0)
+
     def test_center_latitude_invalid_raises_on_search(self, beijing_center):
         engine = GeoSearchEngine()
-        invalid_center = GeoPoint(91.0, 0.0)
         with pytest.raises(InvalidLatitudeError):
+            invalid_center = GeoPoint(91.0, 0.0)
             engine.search(invalid_center, radius_km=10.0)
 
     def test_add_candidate_invalid_latitude_raises(self):
         engine = GeoSearchEngine()
-        invalid_point = GeoPoint(91.0, 0.0)
         with pytest.raises(InvalidLatitudeError):
+            invalid_point = GeoPoint(91.0, 0.0)
             engine.add_candidate(invalid_point)
 
     def test_init_with_invalid_latitude_raises(self):
-        invalid_points = [GeoPoint(91.0, 0.0)]
         with pytest.raises(InvalidLatitudeError):
+            invalid_points = [GeoPoint(91.0, 0.0)]
             GeoSearchEngine(candidates=invalid_points)
 
 
@@ -87,21 +100,33 @@ class TestInvalidLongitude:
         with pytest.raises(InvalidLongitudeError):
             GeoSearchEngine._validate_coordinate(0.0, None)
 
+    def test_geopoint_construction_rejects_invalid_longitude(self):
+        with pytest.raises(InvalidLongitudeError):
+            GeoPoint(0.0, 181.0)
+
+    def test_geopoint_construction_rejects_nan_longitude(self):
+        with pytest.raises(InvalidLongitudeError):
+            GeoPoint(0.0, math.nan)
+
+    def test_geopoint_construction_rejects_inf_longitude(self):
+        with pytest.raises(InvalidLongitudeError):
+            GeoPoint(0.0, math.inf)
+
     def test_center_longitude_invalid_raises_on_search(self):
         engine = GeoSearchEngine()
-        invalid_center = GeoPoint(0.0, 181.0)
         with pytest.raises(InvalidLongitudeError):
+            invalid_center = GeoPoint(0.0, 181.0)
             engine.search(invalid_center, radius_km=10.0)
 
     def test_add_candidate_invalid_longitude_raises(self):
         engine = GeoSearchEngine()
-        invalid_point = GeoPoint(0.0, 181.0)
         with pytest.raises(InvalidLongitudeError):
+            invalid_point = GeoPoint(0.0, 181.0)
             engine.add_candidate(invalid_point)
 
     def test_init_with_invalid_longitude_raises(self):
-        invalid_points = [GeoPoint(0.0, 181.0)]
         with pytest.raises(InvalidLongitudeError):
+            invalid_points = [GeoPoint(0.0, 181.0)]
             GeoSearchEngine(candidates=invalid_points)
 
 
@@ -135,7 +160,7 @@ class TestNegativeRadius:
 
     def test_negative_limit_raises(self, beijing_center):
         engine = GeoSearchEngine()
-        with pytest.raises(InvalidRadiusError):
+        with pytest.raises(InvalidLimitError):
             engine.search(beijing_center, radius_km=10.0, limit=-1)
 
     def test_zero_radius_is_valid(self, beijing_center):
@@ -146,7 +171,9 @@ class TestNegativeRadius:
     def test_zero_limit_is_valid(self, beijing_center):
         engine = GeoSearchEngine(candidates=[beijing_center])
         response = engine.search(beijing_center, radius_km=10.0, limit=0)
-        assert response.total_count == 0
+        assert response.returned_count == 0
+        assert response.total_count == 1
+        assert len(response.results) == 0
 
 
 class TestInvalidCandidatesSkippedDuringSearch:
@@ -260,10 +287,23 @@ class TestInvalidCandidatesSkippedDuringSearch:
         assert len(response.results) == 0
 
     def test_add_candidates_rejects_entire_list_if_any_invalid(self):
+        class MockInvalidGeoPoint:
+            def __init__(self, lat, lng):
+                self._lat = lat
+                self._lng = lng
+
+            @property
+            def latitude(self):
+                return self._lat
+
+            @property
+            def longitude(self):
+                return self._lng
+
         points = [
-            GeoPoint(0.0, 0.0),
-            GeoPoint(91.0, 0.0),
-            GeoPoint(1.0, 1.0),
+            MockInvalidGeoPoint(0.0, 0.0),
+            MockInvalidGeoPoint(91.0, 0.0),
+            MockInvalidGeoPoint(1.0, 1.0),
         ]
 
         engine = GeoSearchEngine()
@@ -273,13 +313,34 @@ class TestInvalidCandidatesSkippedDuringSearch:
         assert engine.candidate_count == 0
 
     def test_init_rejects_entire_list_if_any_invalid(self):
+        class MockInvalidGeoPoint:
+            def __init__(self, lat, lng):
+                self._lat = lat
+                self._lng = lng
+
+            @property
+            def latitude(self):
+                return self._lat
+
+            @property
+            def longitude(self):
+                return self._lng
+
         points = [
-            GeoPoint(0.0, 0.0),
-            GeoPoint(0.0, 181.0),
+            MockInvalidGeoPoint(0.0, 0.0),
+            MockInvalidGeoPoint(0.0, 181.0),
         ]
 
         with pytest.raises(InvalidLongitudeError):
             GeoSearchEngine(candidates=points)
+
+    def test_geopoint_construction_rejects_entire_list_if_any_invalid(self):
+        with pytest.raises(InvalidLatitudeError):
+            [
+                GeoPoint(0.0, 0.0),
+                GeoPoint(91.0, 0.0),
+                GeoPoint(1.0, 1.0),
+            ]
 
 
 class TestIntegerCoordinates:

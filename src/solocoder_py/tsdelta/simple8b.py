@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import struct
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .exceptions import (
     InvalidSimple8bSelectorError,
@@ -50,16 +50,16 @@ def select_best_mode(values: List[int], max_count: int = 120) -> Simple8bMode:
     return best_mode
 
 
-def pack_block(values: List[int], mode: Simple8bMode) -> int:
+def pack_block(values: List[int], mode: Simple8bMode) -> Tuple[int, int]:
     if mode.selector < 0 or mode.selector > 14:
         raise InvalidSimple8bSelectorError(
             f"Invalid Simple-8b selector: {mode.selector}"
         )
 
-    count = min(mode.count, len(values))
+    actual_count = min(mode.count, len(values))
 
     if mode.bit_width == 0:
-        for v in values[:count]:
+        for v in values[:actual_count]:
             if v != 0:
                 raise Simple8bOverflowError(
                     f"Mode 14 (0-bit) can only encode zeros, got {v}"
@@ -67,7 +67,7 @@ def pack_block(values: List[int], mode: Simple8bMode) -> int:
 
     block = mode.selector
 
-    for i in range(count):
+    for i in range(actual_count):
         val = values[i]
         if val > mode.max_value:
             raise Simple8bOverflowError(
@@ -76,10 +76,10 @@ def pack_block(values: List[int], mode: Simple8bMode) -> int:
             )
         block |= (val & mode.max_value) << (4 + i * mode.bit_width)
 
-    return block
+    return block, actual_count
 
 
-def unpack_block(block: int) -> Tuple[List[int], Simple8bMode]:
+def unpack_block(block: int, count: Optional[int] = None) -> Tuple[List[int], Simple8bMode]:
     selector = block & 0x0F
 
     if selector < 0 or selector > 14:
@@ -88,9 +88,10 @@ def unpack_block(block: int) -> Tuple[List[int], Simple8bMode]:
         )
 
     mode = SIMPLE8B_MODES[selector]
+    actual_count = count if count is not None else mode.count
     values: List[int] = []
 
-    for i in range(mode.count):
+    for i in range(actual_count):
         shift = 4 + i * mode.bit_width
         if mode.bit_width == 0:
             val = 0
@@ -112,7 +113,7 @@ def simple8b_pack(values: List[int]) -> bytes:
         remaining = values[pos:]
         mode = select_best_mode(remaining)
         count = min(mode.count, len(remaining))
-        block = pack_block(remaining[:count], mode)
+        block, _ = pack_block(remaining[:count], mode)
         result.append(block)
         pos += count
 

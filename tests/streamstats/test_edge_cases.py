@@ -140,8 +140,8 @@ class TestUnequalBatchSizesMerge:
         assert merged.count == full.count
         assert math.isclose(merged.mean, full.mean)
         assert math.isclose(merged.variance_sample, full.variance_sample, rel_tol=1e-10)
-        assert math.isclose(merged.skewness, full.skewness, rel_tol=1e-3, abs_tol=1e-3)
-        assert math.isclose(merged.kurtosis, full.kurtosis, rel_tol=1e-3, abs_tol=1e-3)
+        assert math.isclose(merged.skewness, full.skewness, rel_tol=1e-9, abs_tol=1e-9)
+        assert math.isclose(merged.kurtosis, full.kurtosis, rel_tol=1e-9, abs_tol=1e-9)
 
     def test_large_batch_merged_with_small(self):
         small_data = [100.0, 200.0, 300.0]
@@ -157,8 +157,8 @@ class TestUnequalBatchSizesMerge:
         assert merged.count == full.count
         assert math.isclose(merged.mean, full.mean)
         assert math.isclose(merged.variance_sample, full.variance_sample, rel_tol=1e-10)
-        assert math.isclose(merged.skewness, full.skewness, rel_tol=1e-3, abs_tol=1e-3)
-        assert math.isclose(merged.kurtosis, full.kurtosis, rel_tol=1e-3, abs_tol=1e-3)
+        assert math.isclose(merged.skewness, full.skewness, rel_tol=1e-9, abs_tol=1e-9)
+        assert math.isclose(merged.kurtosis, full.kurtosis, rel_tol=1e-9, abs_tol=1e-9)
 
     def test_one_element_merged_with_many(self):
         one_data = [999.0]

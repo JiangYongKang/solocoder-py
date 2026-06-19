@@ -1,0 +1,9 @@
+在当前项目中你已经完成了 LZ77 风格滑动窗口压缩器的实现，但存在以下问题需要修复：
+
+1. compressor.py 的 _update_hash_chain 方法声明了 pos 参数但在方法体内却使用 self._input_pos 来计算哈希值。这导致在 _find_match 遍历哈希链上的候选位置时，每个匹配区间内的中间位置全部用当前全局位置做了哈希注册，而不是各中间位置的实际偏移。长窗口和多候选链场景下这会严重影响匹配精度和压缩比。
+2. compressor.py 中已经完整实现了 _slide_window 和 _clean_hash_table 方法（分别负责从哈希表中删除过期位置和淘汰窗口外数据），但这两个方法在主循环 _process_all 中从未被调用。当处理的数据量超过窗口大小时，已滑出窗口的旧位置引用仍残留在哈希表中，后续匹配会沿哈希链查到无效的历史位置。
+3. compressor.py 的 _write_match_pair 方法对长度偏移只分配了 1 字节编码空间（最大 255），但当用户通过 LZ77Config 将 max_match_length 设置为大于 min_match_length+255 的值时，超出的偏移值会通过 `min(offset, 0xFF)` 被静默截断。解压时无法还原正确匹配长度，导致数据静默损坏。
+4. compressor.py 的 _write_literal_block 方法用 7 位（0-127）编码字面块长度，但 LZ77Config 的 literal_block_max 允许设置为 128 以上的值。超过 128 字节的字面块在编码时长度信息被截断，解压器按照错误长度读取字面量数据会导致后续所有数据错位。
+5. decompressor.py 的 __init__ 定义了 output_stream 参数并赋值了 self._output_stream，但整个解压过程中解压结果只追加到 _output_buffer 列表中，从未向 self._output_stream 写入任何数据。调用方通过该参数传入的输出流对象始终为空。
+6. test_error_branches.py 的 test_corrupted_control_marker 测试用例使用 try/except/pass 吞掉了异常且没有 assert 断言，其构造的"损坏数据"碰巧在跳过首字节后形成了合法的匹配对编码，解压器不会抛出任何错误检测类异常，该测试实际未验证任何错误检测路径。
+7. README.md 中描述了"窗口自动滑动旧数据淘汰"功能，但代码中 _slide_window 和 _clean_hash_table 从未被主循环调用，窗口淘汰逻辑形同虚设，文档描述与代码实际行为存在矛盾。
