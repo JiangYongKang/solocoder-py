@@ -1,13 +1,8 @@
 产物不满意：
-
-1. models.py 中 AlertRule.__post_init__ 使用 InvalidRuleError 验证 rule_id、name 和 root_group 的合法性，但该异常类未在 __init__.py 的导出列表中出现。test_error_branches.py 的 TestInvalidRuleError 测试用例被迫使用 `pytest.raises(Exception)` 捕获而非具体的 InvalidRuleError 类型，如果外部代码通过 `from solocoder_py.alert_rule import InvalidRuleError` 导入会直接触发 `ImportError`。调用方无法对这类数据校验异常做细粒度分类处理。根本原因是模型在 exceptions.py 中定义了异常类却在编写 __init__.py 时遗漏了导出声明。
-
-2. evaluator.py 的 get_silenced_rules 方法通过 is_silenced 判断规则是否处于冷却期，但 is_silenced 只比较当前时间与"上次触发时刻+冷却时长"的关系，不区分当前条件是否真正满足。当一条规则在上次触发后仍处于冷却期内如果当前指标值导致条件不满足，EvaluationResult.silenced 字段返回 False 但 is_silenced 仍返回 True，get_silenced_rules 依然会将其纳入返回列表。提示词要求查询"当前处于冷却期也未触发的规则列表"，"也未触发"指的是因为冷却抑制而未触发的规则，不包括条件本身不满足的情况。模型将"在冷却期内"简单等同于"被静默"，导致查询接口的语义与提示词预期存在偏差。
-
-3. evaluator.py 的 evaluate 方法遍历 self._rules 字典依次调用 _evaluate_rule，但如果某一规则的评估过程因 MetricNotFoundError 或 TypeMismatchError 抛出异常，整个 for 循环立即中断，所有尚未被评估的规则结果全部丢失。test_evaluate_returns_all_results 只验证了两条规则都正常评估的场景，未覆盖一条规则出错时其余规则仍应获得结果的异常隔离需求。生产环境中一条配置错误的规则不应阻止其他规则的正常评估。根本原因是模型没有在 evaluate 方法的循环体内部增加 try-except 做单个规则的异常容错。
+1. models.py 中 AlertRule.__post_init__ 使用 InvalidRuleError 做校验，但该异常类未在 __init__.py 导出。测试被迫用 `pytest.raises(Exception)` 捕获，外部导入会触发 ImportError。调用方无法对校验异常做细粒度分类处理。根因是 exceptions.py 定义了异常类却遗漏了导出声明。
+2. evaluator.py 的 get_silenced_rules 通过 is_silenced 判断是否处于冷却期，但 is_silenced 只比较时间不区分当前条件是否满足。当一条规则在冷却期内但当前指标不满足条件时，EvaluationResult.silenced 为 False 但 is_silenced 为 True，get_silenced_rules 仍将其纳入。提示词要求"当前处于冷却期也未触发"，模型将"在冷却期内"简单等同于"被静默"，导致查询语义与预期偏差。
+3. evaluator.py 的 evaluate 方法遍历 self._rules 字典依次调用 _evaluate_rule，如果某一规则评估过程因 MetricNotFoundError 或 TypeMismatchError 抛出异常，整个 for 循环立即中断，所有尚未被评估的规则结果全部丢失。一条配置错误的规则不应阻止其他规则的正常评估。根因是模型没有在 evaluate 的循环体内部增加 try-except 做单个规则的异常容错。
 
 过程不满意：
-
-1. 模型在收到提示词后的第一步操作就是用 todo_write 创建了 7 项执行计划，然后才执行 view_folder 查看项目目录、file_search 搜索已有代码包、逐文件阅读 rule_engine 参考模块。这属于"不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划"的过程硬伤。虽然后续重新调用了 todo_write 更新计划，但初次计划是在对项目结构和代码约定缺乏了解的情况下制定的，计划粒度可能与实际模块边界不匹配，属于无谓的低效操作。
-
-2. 模型将全部五份源文件（models.py、evaluator.py、exceptions.py、clock.py、__init__.py）、三份测试文件及 README 共九个文件一次性平行写入，中间没有任何"写完一部分代码、运行对应测试、根据结果修正"的增量验证环节。然后一次性运行全部 92 个测试首次即全部通过，整个思考过程中不存在"测试失败、分析错误、修复代码、回归验证"的工程迭代循环。这种一次性交付的模式虽然产物最终通过了测试，但违反了逐个功能点分批验证的严谨工程实践。
+1. 模型在收到提示词后的第一步操作就是用 todo_write 创建了 7 项执行计划，然后才执行 view_folder 查看项目目录、file_search 搜索已有代码包、逐文件阅读参考模块。这属于"不能在刚收到任务时就直接创建 TodoList 应先分析问题再规划"的过程硬伤。虽然后续更新了计划，但初次计划是在对项目结构和代码约定缺乏了解的情况下制定的，计划粒度可能与实际模块边界不匹配。
+2. 模型将全部五份源文件、三份测试文件及 README 共九个文件一次性平行写入，中间没有任何增量验证环节。然后一次性运行全部 92 个测试首次即全部通过，整个思考过程不存在"测试失败、分析错误、修复代码、回归验证"的工程迭代循环。这种一次性交付的模式虽然产物最终通过了测试，但违反了逐个功能点分批验证的严谨工程实践。

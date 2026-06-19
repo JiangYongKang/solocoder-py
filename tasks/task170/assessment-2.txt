@@ -1,6 +1,7 @@
 产物不满意：
-1. tracer.py 的 start_span_from_context 方法中新增了父 Span 结束状态的校验逻辑，但只在 self._active_spans 中查找父 Span。如果传入的 TraceContext 对应的父 Span 已经结束并从活跃列表移入了 self._completed_spans，校验会因其不在活跃列表中而悄然通过，继续为一个已结束的 Span 创建子 Span。原因是校验逻辑只覆盖了活跃状态的 Span 而未搜索已完成列表，应同时在 self._completed_spans 中查找并校验父 Span 是否已结束。
+1. tracer.py 的 start_span_from_context 新增了父 Span 结束状态校验，但只在 _active_spans 中查找。如果父 Span 已结束移入 _completed_spans，校验因不在活跃列表中而通过，仍会为已结束 Span 创建子 Span。原因是校验只覆盖活跃状态未搜索已完成列表，应同时在 _completed_spans 中查找。
 2. 提示词要求修复的是 totp 包的三个问题（未使用的异常类、算法字段装饰性问题、密钥熵最低边界），但模型在 tracing 包中额外移除了 SpanNotFoundError、引入了实例级 random.Random 替代全局 random 调用、修改了 get_trace_root 的锁范围等变更，这些均不属于提示词要求的修复范围，属于超出任务边界的自发改动。在标注工作流中模型应按提示词要求的包范围进行变更，不应擅自修改与当前任务无关的包代码。
+
 过程不满意：
-1. 模型在 session-cot 中详细记录了 totp 包的修复过程和具体的代码变更细节（_ALGORITHM_MAP 映射表、verify_totp 抛异常、密钥边界从 16 改为 20 字节等），但完全未提及 tracing 包的六处变更（移除 SpanNotFoundError、引入 self._rng、修改 get_trace_root 锁范围、conftest 中移除 reset_instance 调用等）。这属于思考过程记录与实际代码修改不一致，说明模型在完成 tracing 包的额外修改后未在 session-cot 中如实记录，导致后续标注人员无法追溯这些变更的决策依据。
+1. 模型在 session-cot 中详细记录了 totp 包的修复过程和具体的代码变更细节（_ALGORITHM_MAP 映射表、verify_totp 抛异常、密钥边界从 16 改为 20 字节等），但完全未提及 tracing 包的六处变更。这属于思考过程记录与实际代码修改不一致，说明模型在完成 tracing 包的额外修改后未在 session-cot 中如实记录，导致后续标注人员无法追溯这些变更的决策依据。
 2. 模型在收到提示词后直接查看了 totp 包的四个文件并创建了 TodoList，但从未阅读或提及 tracing 包的任何文件。从思考过程看模型对任务范围的认知停留在 totp 包，然而最终提交的 diff 却同时包含 tracing 包的修改，说明模型在未经过分析和规划的情况下对 tracing 包做了自发改动，缺乏对任务边界和提示词范围的正确理解。涉及非任务包的文件修改应基于明确的错误分析后再进行，而非临时起意的额外改动。

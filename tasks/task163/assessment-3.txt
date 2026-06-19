@@ -1,7 +1,7 @@
 产物不满意：
-1. tracer.py 的 `start_span_from_context` 方法新增了一段遍历 `self._completed_spans` 的已结束 Span 扫描逻辑，当 context 对应的 Span 在活跃集合中未找到时就遍历全部已完成 Span 来匹配 span_id 并抛出 `CannotCreateChildSpanError`。提示词只要求让 `_make_sampling_decision` 自身具备线程安全，并未要求对 `start_span_from_context` 做任何功能扩展。该变更新增了持锁状态下的 O(n) 线性扫描路径，一旦 completed_spans 中 Span 数量增长会阻塞其他并发的 tracer 操作。提示词是纯修复任务，模型不应在修复过程中自行添加未被要求的功能逻辑。
-2. 由于 `start_span_from_context` 新增了 completed_spans 扫描行为，模型被动修改了两个测试文件来适配自引入的变更。`test_normal_flows.py` 中原有的 `test_context_propagation_across_independent_spans` 被整体替换为 `test_context_propagation_from_external_context`，删除了对"已结束本地 Span 的 context 跨 Span 传播"这一场景的测试覆盖。`test_error_branches.py` 新增了 7 个测试方法，全部用于覆盖模型自引入的 completed_spans 扫描逻辑的各分支场景。这些测试变更的驱动力是范围外的 `start_span_from_context` 修改，而非提示词要求的验证需求，属于被动补偿性测试而非主动质量保障。
+1. tracer.py 的 start_span_from_context 新增了遍历 _completed_spans 的已结束 Span 扫描逻辑。提示词只要求让 _make_sampling_decision 自身具备线程安全，未要求修改 start_span_from_context。该变更引入持锁状态下的 O(n) 线性扫描，一旦 completed_spans 增长会阻塞其他并发操作。提示词是纯修复任务，不应在修复中自行添加未被要求的功能逻辑。
+2. 由于 start_span_from_context 新增了扫描行为，模型被动修改了两个测试文件来适配。test_normal_flows.py 中被替换的测试删除了"已结束本地 Span 的 context 传播"场景覆盖，test_error_branches.py 新增 7 个测试方法全部覆盖模型自引入的扫描分支。这些测试变更驱动力是范围外修改而非提示词要求的验证，属于被动补偿性测试。
 
 过程不满意：
-1. 模型在执行 Lock 改 RLock 和 `_make_sampling_decision` 加锁修复后运行测试，发现测试失败后没有先通过阅读失败用例的堆栈信息来定位根因，而是直接对 `start_span_from_context` 方法添加了新的 completed_spans 扫描逻辑。添加新逻辑后又发现这导致原有测试不通过，于是再去修改两个测试文件来适配自引入的变更。整个过程是"引入新行为导致测试失败、再修改测试来配合新行为"的倒置流程。正确做法是先读堆栈定位具体失败行，判断失败是否由 lock 修复本身引起，只对出问题的代码做最小范围修正，而不是借机扩展其他方法的功能。
-2. 模型在 COT 的"修复总结"中将 `start_span_from_context` 的变更定性为"附带修正"，并声称该行为"符合用户已结束 Span 创建子 Span 理应被拒绝的要求"。但 prompt-3.txt 中完全没有提及已结束 Span 创建子 Span 的场景，更没有要求修改 `start_span_from_context`。模型将自己在思考过程中推断的"用户应该会这样要求"当作实际需求来实现，属于对提示词边界判断的偏差。缺陷修复任务中，修改范围应以提示词明确列出的问题条目为边界，不应根据自我推断来扩展修复面。
+1. 模型在执行 Lock 改 RLock 和采样决策加锁修复后运行测试，发现失败后没有先阅读失败用例的堆栈定位根因，而是直接对 `start_span_from_context` 添加了新的扫描逻辑。添加后又发现导致原有测试不通过于是再去修改两个测试文件来适配。整个过程是"引入新行为导致测试失败、再修改测试配合新行为"的倒置流程。正确做法是先读堆栈定位具体失败行，只对出问题的代码做最小修正，而不是借机扩展其他方法的功能。
+2. 模型在 COT 的修复总结中将 `start_span_from_context` 的变更定性为"附带修正"，声称该行为"符合用户已结束 Span 创建子 Span 理应被拒绝的要求"。但 prompt-3.txt 完全没有提及此场景，更没有要求修改 `start_span_from_context`。模型将自己推断的"用户应该会这样要求"当作实际需求来实现，属于对提示词边界判断的偏差。缺陷修复任务中修改范围应以提示词明确列出的问题为边界，不应根据自我推断来扩展修复面。

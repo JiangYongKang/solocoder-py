@@ -1,11 +1,11 @@
 产物不满意：
-1. exceptions.py 中 BackoffActiveError 的提示信息使用了英文 `"Please wait X seconds before retrying"`，与提示词明确要求的"直接返回'请等待 X 秒后重试'"不一致。用户看到英文提示会困惑，且提示词中列出的是中文文案，模型应在实现时直接采用提示词指定的错误消息文本。正确做法是在 BackoffActiveError 的 `__init__` 中将提示语改为中文，如 `f"请等待 {remaining_seconds} 秒后重试"`。
-2. exceptions.py 中 AccountLockedError 的提示信息使用了英文 `"Account 'xxx' is locked"`，与提示词要求的"直接返回'账户已锁定'"不符。这个错误消息是面向终端用户的直接展示文案，英文输出在中文用户场景下不可接受。正确做法是将 `super().__init__(f"Account '{account}' is locked")` 改为 `super().__init__(f"账户 '{account}' 已锁定")`。
-3. engine.py 的 is_account_locked 方法对从未登录过的账户返回 False，而同类查询方法 get_account_failure_count 对不存在的账户计数器会抛出 NoSuchAccountCounterError 异常。这两个方法的语义不一致，调用方无法区分"账户未被锁定"和"账户从未存在过"。提示词要求覆盖"不存在的账户计数器访问"场景，正确做法是让 is_account_locked 也抛出 NoSuchAccountCounterError 以保持 API 语义一致。
-4. engine.py 的 attempt_login 方法中对 password_verifier 的调用包裹了一段无效的 try-except 代码，捕获所有异常后仅做 `isinstance(e, LoginRateError)` 判断然后无条件 re-raise。这个 try 块既不转换异常也不做额外处理，纯粹是死代码，阅读者会误以为这里有特殊的异常分类逻辑。正确做法是删除这段多余的 try-except，直接用 `password_ok = password_verifier()` 调用。
-5. README.md 中的测试示例代码断言 `assert "请等待 10 秒" in str(result.error)`，但实际 BackoffActiveError 输出的错误消息是英文 `"Please wait 10 seconds before retrying"`。这意味着 README 文档中的示例代码本身就是错误的，如果用户按文档粘贴代码运行会得到断言失败的意外结果，原因是文档编写时没有核对代码中的实际错误消息文案。
+1. exceptions.py 中 BackoffActiveError 的提示信息使用了英文 `"Please wait X seconds before retrying"`，与提示词明确要求的"直接返回'请等待 X 秒后重试'"不一致。用户看到英文提示会困惑，且提示词中列出的是中文文案，模型应在实现时直接采用提示词指定的错误消息文本，改为 `f"请等待 {remaining_seconds} 秒后重试"`。
+2. exceptions.py 中 AccountLockedError 的提示信息使用了英文 `"Account 'xxx' is locked"`，与提示词要求的"直接返回'账户已锁定'"不符。这个错误消息是面向终端用户的直接展示文案，英文输出在中文用户场景下不可接受。正确做法是将提示语改为 `f"账户 '{account}' 已锁定"`。
+3. engine.py 的 is_account_locked 对从未登录过的账户返回 False，而同类方法 get_account_failure_count 对不存在的计数器抛出 NoSuchAccountCounterError。两个方法语义不一致，调用方无法区分"账户未被锁定"和"账户从未存在过"。正确做法是让 is_account_locked 也抛出 NoSuchAccountCounterError 保持 API 语义一致。
+4. engine.py 的 attempt_login 方法中对 password_verifier 的调用包裹了一段无效的 try-except 代码，捕获所有异常后仅做 isinstance 判断然后无条件 re-raise。这个 try 块既不转换异常也不做额外处理，纯粹是死代码。正确做法是删除这段多余的 try-except，直接用 `password_ok = password_verifier()` 调用。
+5. README.md 中的测试示例代码断言 `assert "请等待 10 秒" in str(result.error)`，但实际 BackoffActiveError 输出的错误消息是英文 `"Please wait 10 seconds before retrying"`。这意味着文档中的示例代码本身就是错误的，如果用户按文档粘贴代码运行会得到断言失败的结果，原因是文档编写时没有核对代码中的实际错误消息文案。
 
 过程不满意：
-1. 模型在查看完项目结构后直接创建了包含 11 项子任务的 TodoList 才开始实现代码，没有在规划前仔细分析提示词中的中文文案要求、错误消息规范等关键细节。这直接导致 exceptions.py 中的 BackoffActiveError 和 AccountLockedError 两条错误消息均使用了英文，与提示词明确指定的中文文案不符。正确做法是先逐条梳理提示词中的用户可见文案要求再制定执行计划。
-2. 模型在首轮运行测试遇到 4 个失败后，对 tests/login_rate/ 下的测试文件进行了三轮试错式修改，每次修改策略不同却没有先分析 engine.py 中退避计时和 CAPTCHA 拦截的逻辑交互关系。三轮修改的本质原因是测试中的连续失败之间时间推进不足以抵消退避周期，模型通过调整测试参数、拆分测试步骤、改用不同账户等方式间接规避问题而非分析原理后做最小修改。正确做法是先用堆栈和断言信息定位失败的根本原因再针对性修复。
-3. 模型在编写 CAPTCHA 绕过的测试时，先后修改了 test_captcha_allows_locked_account_password_check 的 CAPTCHA 阈值三次（从 1 改为 3，再调整为先触发子网阈值再测账户锁定，最后又补充第三轮失败逻辑），每次修改都依赖再次运行测试来验证是否正确，是典型的试错式调试。正确做法应该先梳理 CAPTCHA 检查、锁定检查、退避检查三者之间的优先级和执行顺序，再一次性编写正确的测试逻辑。
+1. 模型在查看完项目结构后直接创建了包含 11 项子任务的 TodoList 才开始实现代码，没有在规划前仔细分析提示词中的中文文案要求、错误消息规范等关键细节。这直接导致 exceptions.py 中的两条错误消息均使用了英文与提示词指定的中文文案不符。正确做法是先逐条梳理提示词中的用户可见文案要求再制定执行计划。
+2. 模型在首轮运行测试遇到 4 个失败后对测试文件进行了三轮试错式修改，每次修改策略不同却没有先分析 engine.py 中退避计时和 CAPTCHA 拦截的逻辑交互关系。三轮修改的本质原因是测试中的连续失败之间时间推进不足以抵消退避周期，模型通过调整测试参数、拆分测试步骤等方式间接规避问题而非分析原理后做最小修改。正确做法是先用堆栈和断言信息定位失败的根本原因再针对性修复。
+3. 模型在编写 CAPTCHA 绕过的测试时先后修改了 CAPTCHA 阈值三次，每次修改都依赖再次运行测试来验证是否正确，是典型的试错式调试。正确做法应该先梳理 CAPTCHA 检查、锁定检查、退避检查三者之间的优先级和执行顺序，再一次性编写正确的测试逻辑。
