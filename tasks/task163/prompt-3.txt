@@ -1,0 +1,3 @@
+当前 tracing 分布式追踪的修复仍存在一些遗留问题需要处理：
+1. `_make_sampling_decision` 方法内部直接访问 `self._rng` 但自身不加锁，完全依赖调用方持有锁。如果未来有代码在锁外调用该方法，多线程并发会破坏 random.Random 的内部状态，导致采样决策失真。需要让该方法自身具备线程安全保障，而非把锁责任推给调用方。
+2. 重新运行 `poetry run pytest tests/tracing/ -q`，需要让所有测试通过。

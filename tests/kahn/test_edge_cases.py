@@ -196,31 +196,71 @@ class TestKahnEdgeCases:
 
     def test_10_discrete_nodes_enumerate_lazy_memory(self) -> None:
         import gc
-        import sys
+        import tracemalloc
+
+        tracemalloc.start()
 
         graph = build_10_discrete_nodes()
         kahn = KahnTopologicalSort(graph)
-
         gen = kahn.enumerate_all_topological_orders()
 
-        first_100 = []
+        gc.collect()
+        tracemalloc.reset_peak()
+
+        batch_1_memory_peak = None
+        batch_2_memory_peak = None
+
+        count = 0
+        for order in gen:
+            _ = order
+            count += 1
+            if count == 5000:
+                gc.collect()
+                _, batch_1_memory_peak = tracemalloc.get_traced_memory()
+            elif count == 50000:
+                gc.collect()
+                _, batch_2_memory_peak = tracemalloc.get_traced_memory()
+                break
+
+        assert count == 50000
+        assert batch_1_memory_peak is not None
+        assert batch_2_memory_peak is not None
+
+        growth_ratio = batch_2_memory_peak / max(batch_1_memory_peak, 1)
+        assert growth_ratio < 3.0
+
+        del gen
+        gc.collect()
+
+        tracemalloc.stop()
+
+    def test_enumerate_supports_partial_consumption_then_resume(self) -> None:
+        graph = build_10_discrete_nodes()
+        kahn = KahnTopologicalSort(graph)
+        gen = kahn.enumerate_all_topological_orders()
+
+        first_batch = []
         for i, order in enumerate(gen):
-            first_100.append(tuple(order))
+            first_batch.append(tuple(order))
             if i >= 99:
                 break
 
-        assert len(first_100) == 100
-        assert len(set(first_100)) == 100
+        assert len(first_batch) == 100
+        assert len(set(first_batch)) == 100
 
-        gen_size = sys.getsizeof(gen)
-        list_100_size = sum(sys.getsizeof(o) for o in first_100)
-        assert gen_size < list_100_size
+        second_batch = []
+        for i, order in enumerate(gen):
+            second_batch.append(tuple(order))
+            if i >= 99:
+                break
 
-        del first_100
-        gc.collect()
+        assert len(second_batch) == 100
+        assert len(set(second_batch)) == 100
+        assert set(first_batch).isdisjoint(set(second_batch))
 
         remaining_count = 0
         for _ in gen:
             remaining_count += 1
 
-        assert remaining_count == math.factorial(10) - 100
+        total = len(first_batch) + len(second_batch) + remaining_count
+        assert total == math.factorial(10)

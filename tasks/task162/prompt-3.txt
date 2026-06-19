@@ -1,0 +1,3 @@
+当前 health 健康检查聚合器的实现仍存在一些问题需要修复：
+1. README.md 中 ProbeResult 的字段说明表缺少 root_cause 字段的文档。该字段已在 aggregator.py 的级联传播逻辑中使用、测试中也对其做了断言，但 README 的字段表、级联检测机制描述和代码示例均未提及，开发者查阅文档时无法知晓该字段的存在和语义。需要补充 root_cause 的完整文档。
+2. 重新运行 `poetry run pytest tests/health/ -q`，需要让所有测试通过。

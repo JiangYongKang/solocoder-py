@@ -304,17 +304,22 @@ class TestTraceContext:
         tracer.end_span(child)
         tracer.end_span(parent)
 
-    def test_context_propagation_across_independent_spans(self, tracer):
-        span1 = tracer.start_span("span1")
-        context = span1.context
-        tracer.end_span(span1)
+    def test_context_propagation_from_external_context(self, tracer):
+        from solocoder_py.tracing import TraceContext
 
-        span2 = tracer.start_span_from_context("span2", context)
-        assert span2.trace_id == span1.trace_id
-        assert span2.parent_span_id == span1.span_id
-        assert span2.sampled == span1.sampled
+        external_context = TraceContext(
+            trace_id="a" * 32,
+            span_id="b" * 16,
+            sampled=True,
+            parent_span_id=None,
+        )
 
-        tracer.end_span(span2)
+        span = tracer.start_span_from_context("from-external", external_context)
+        assert span.trace_id == external_context.trace_id
+        assert span.parent_span_id == external_context.span_id
+        assert span.sampled == external_context.sampled
+
+        tracer.end_span(span)
 
 
 class TestQueryOperations:

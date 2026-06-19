@@ -67,6 +67,25 @@ class TestCannotCreateChildSpanError:
         with pytest.raises(CannotCreateChildSpanError, match="already ended span"):
             tracer.start_span("child", parent=parent)
 
+    def test_create_child_from_context_for_ended_span_raises(self, tracer):
+        parent = tracer.start_span("parent")
+        context = parent.context
+        tracer.end_span(parent)
+
+        with pytest.raises(CannotCreateChildSpanError, match="already ended span"):
+            tracer.start_span_from_context("child", context)
+
+    def test_create_child_from_context_for_active_span_allowed(self, tracer):
+        parent = tracer.start_span("parent")
+        context = parent.context
+
+        child = tracer.start_span_from_context("child", context)
+        assert child.parent_span_id == parent.span_id
+        assert child.trace_id == parent.trace_id
+
+        tracer.end_span(child)
+        tracer.end_span(parent)
+
     def test_span_add_child_for_ended_span_raises(self, tracer):
         parent = tracer.start_span("parent")
         tracer.end_span(parent)
@@ -111,6 +130,68 @@ class TestCannotCreateChildSpanError:
             tracer.start_span("child2", parent=parent)
 
         assert len(parent.children) == initial_children_count
+
+    def test_create_child_from_context_for_completed_parent_raises(self, tracer):
+        parent = tracer.start_span("parent")
+        tracer.end_span(parent)
+
+        context = parent.context
+
+        with pytest.raises(CannotCreateChildSpanError, match="already ended span"):
+            tracer.start_span_from_context("child", context)
+
+    def test_create_child_from_context_for_active_parent_succeeds(self, tracer):
+        parent = tracer.start_span("parent")
+        context = parent.context
+
+        child = tracer.start_span_from_context("child", context)
+        assert child.parent_span_id == parent.span_id
+        assert child.trace_id == parent.trace_id
+
+        tracer.end_span(child)
+        tracer.end_span(parent)
+
+    def test_create_child_from_external_context_succeeds(self, tracer):
+        from solocoder_py.tracing import TraceContext
+
+        external_context = TraceContext(
+            trace_id="abc123def456abc123def456abc12345",
+            span_id="abc123def4567890",
+            sampled=True,
+        )
+
+        child = tracer.start_span_from_context("child", external_context)
+        assert child.parent_span_id == external_context.span_id
+        assert child.trace_id == external_context.trace_id
+        assert child.sampled == external_context.sampled
+
+        tracer.end_span(child)
+
+    def test_create_child_from_context_parent_in_completed_with_children_already(self, tracer):
+        parent = tracer.start_span("parent")
+        child1 = tracer.start_span("child1", parent=parent)
+        tracer.end_span(child1)
+        tracer.end_span(parent)
+
+        context = parent.context
+
+        with pytest.raises(CannotCreateChildSpanError):
+            tracer.start_span_from_context("child2", context)
+
+    def test_create_child_from_context_after_multiple_completed_spans(self, tracer):
+        span1 = tracer.start_span("span1")
+        tracer.end_span(span1)
+
+        span2 = tracer.start_span("span2")
+        tracer.end_span(span2)
+
+        span3 = tracer.start_span("span3")
+        tracer.end_span(span3)
+
+        context = span2.context
+
+        with pytest.raises(CannotCreateChildSpanError, match="span2"):
+            tracer.start_span_from_context("child-of-span2", context)
 
 
 class TestSpanNotStartedError:

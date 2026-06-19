@@ -20,6 +20,7 @@ from .models import (
     SessionInfo,
     generate_session_id,
     validate_session_config,
+    validate_session_id,
     validate_user_id,
 )
 
@@ -134,8 +135,7 @@ class SessionStore:
             return self._make_session_info(session)
 
     def get_session(self, session_id: str) -> SessionInfo:
-        if not session_id or not isinstance(session_id, str):
-            raise SessionNotFoundError("session_id must be a non-empty string")
+        validate_session_id(session_id)
 
         with self._lock:
             self._cleanup_expired_tombstones()
@@ -179,8 +179,7 @@ class SessionStore:
         session_id: str,
         data: Dict[str, Any],
     ) -> SessionInfo:
-        if not session_id or not isinstance(session_id, str):
-            raise SessionNotFoundError("session_id must be a non-empty string")
+        validate_session_id(session_id)
 
         with self._lock:
             self._cleanup_expired_tombstones()

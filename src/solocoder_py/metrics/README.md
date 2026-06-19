@@ -2,6 +2,19 @@
 
 内存型指标采集器，支持 Counter、Gauge、Histogram 三种指标类型，标签分组，以及 Prometheus 文本格式导出。
 
+## API 变更记录
+
+### `Labels` 类已从公开 API 移除
+
+`Labels`（可变标签类）已从包的公开导出列表（`__all__`）中移除。此前通过 `from solocoder_py.metrics import Labels` 导入会失败。
+
+**移除原因**：`Labels` 是可变类型，不适合作为字典键或集合元素，且与 `FrozenLabels` 功能高度重叠。模块内部仅在 `FrozenLabels.frozen` 属性中使用，外部使用者无需感知可变标签类。
+
+**替代方案**：
+- 创建指标时直接传入 `dict[str, str]` 作为 `labels` 参数，无需手动构造 `Labels` 对象
+- 如需不可变标签封装，使用 `FrozenLabels`：`from solocoder_py.metrics import FrozenLabels`
+- 如仍需访问 `Labels`（不推荐），可通过内部路径 `from solocoder_py.metrics.models import Labels` 导入
+
 ## 模块功能
 
 - **三种指标类型**：Counter（单调递增计数器）、Gauge（瞬时值仪表）、Histogram（分布统计直方图）

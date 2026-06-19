@@ -2,6 +2,7 @@ import pytest
 
 from solocoder_py.session_store import (
     InvalidSessionConfigError,
+    InvalidSessionIdError,
     InvalidUserIdError,
     SessionCreateConfig,
     SessionExpiredError,
@@ -28,17 +29,17 @@ class TestSessionNotFound:
 
     def test_get_empty_session_id(self):
         store = make_store()
-        with pytest.raises(SessionNotFoundError):
+        with pytest.raises(InvalidSessionIdError):
             store.get_session("")
 
     def test_get_none_session_id(self):
         store = make_store()
-        with pytest.raises(SessionNotFoundError):
+        with pytest.raises(InvalidSessionIdError):
             store.get_session(None)
 
     def test_update_empty_session_id(self):
         store = make_store()
-        with pytest.raises(SessionNotFoundError):
+        with pytest.raises(InvalidSessionIdError):
             store.update_session("", {"k": "v"})
 
 

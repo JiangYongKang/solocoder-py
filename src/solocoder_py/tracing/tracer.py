@@ -30,7 +30,7 @@ class Tracer:
         self._sampling_rate = sampling_rate
         self._trace_id_counter = 0
         self._span_id_counter = 0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._rng = random.Random()
         self._active_spans: dict[str, Span] = {}
         self._completed_spans: dict[str, list[Span]] = {}
@@ -73,7 +73,8 @@ class Tracer:
             return True
         if self._sampling_rate <= 0.0:
             return False
-        return self._rng.random() < self._sampling_rate
+        with self._lock:
+            return self._rng.random() < self._sampling_rate
 
     def _generate_new_trace_id(self) -> tuple[str, bool]:
         with self._lock:
@@ -133,6 +134,16 @@ class Tracer:
                 raise CannotCreateChildSpanError(
                     f"cannot create child span for already ended span '{parent_span.name}'"
                 )
+
+            if parent_span is None:
+                for spans in self._completed_spans.values():
+                    for span in spans:
+                        if span.span_id == context.span_id:
+                            from .exceptions import CannotCreateChildSpanError
+
+                            raise CannotCreateChildSpanError(
+                                f"cannot create child span for already ended span '{span.name}'"
+                            )
 
         span_id = self._generate_new_span_id()
 

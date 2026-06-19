@@ -13,7 +13,6 @@ class LogLevel(IntEnum):
 
 
 _VALID_LEVEL_NAMES = {level.name for level in LogLevel}
-_VALID_LEVEL_VALUES = set(LogLevel)
 
 _DEFAULT_LEVEL = LogLevel.INFO
 
@@ -34,11 +33,6 @@ def _validate_name(name: str, func_name: str) -> None:
 
 def _resolve_level(level: _LevelType, func_name: str) -> LogLevel:
     if isinstance(level, LogLevel):
-        if level not in _VALID_LEVEL_VALUES:
-            raise ValueError(
-                f"{func_name}: Invalid log level value: {level!r}. "
-                f"Valid levels: {', '.join(sorted(_VALID_LEVEL_NAMES))}"
-            )
         return level
     if isinstance(level, str):
         upper = level.upper()

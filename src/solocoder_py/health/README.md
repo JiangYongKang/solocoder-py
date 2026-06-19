@@ -54,7 +54,8 @@
 | `probe_type` | ProbeType | 探针类型 |
 | `healthy` | bool | 是否健康 |
 | `error` | Optional[str] | 可选的错误信息 |
-| `cascaded_from` | Optional[str] | 级联来源组件 ID，若为级联不健康则记录来源 |
+| `cascaded_from` | Optional[str] | 直接导致级联不健康的上一跳依赖组件 ID，若本级联则为 None |
+| `root_cause` | Optional[str] | 级联链条最末端的根本原因组件 ID，即触发整条级联链路的原始不健康组件；非级联场景为 None |
 
 ### ComponentHealth
 单个组件的健康状态汇总数据类。
@@ -112,7 +113,9 @@
 1. **就绪探针级联**：当执行某组件的就绪检查时，如果其依赖的任何组件就绪探针不健康，则该组件的就绪状态自动判定为不健康（即使该组件自身的探针返回健康）
 2. **存活探针独立**：存活探针不受依赖影响，仅反映组件自身的存活性
 3. **递归检查**：依赖检查是递归的，如果 B 依赖 C，C 不健康，则 B 不健康，进而 A 也不健康
-4. **级联标记**：级联不健康的组件会在 `ProbeResult.cascaded_from` 字段中记录第一个导致级联的依赖组件 ID
+4. **级联标记**：级联不健康的组件会在 `ProbeResult.cascaded_from` 字段中记录直接导致级联的上一跳依赖组件 ID，同时在 `ProbeResult.root_cause` 字段中记录级联链路最末端的原始根本原因组件 ID（即链路的发起者）
+   - 例如：A → B → C（C 自身不健康），则 B.cascaded_from = "C"、B.root_cause = "C"；A.cascaded_from = "B"、A.root_cause = "C"
+5. **降级原因消息**：`DegradedComponent.reason` 在级联场景下会优先使用 `root_cause` 来标记根本原因，便于直接定位故障源头
 
 ### 降级标记机制
 
@@ -258,7 +261,9 @@ assert not result.components["cache"].is_ready()
 assert not result.components["service"].is_ready()
 assert not result.components["gateway"].is_ready()
 assert result.components["service"].readiness.cascaded_from == "cache"
+assert result.components["service"].readiness.root_cause == "cache"
 assert result.components["gateway"].readiness.cascaded_from == "service"
+assert result.components["gateway"].readiness.root_cause == "cache"  # 级联链路末端的根本原因
 ```
 
 ### 存活探针不受依赖影响

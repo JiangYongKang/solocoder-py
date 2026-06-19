@@ -198,6 +198,8 @@ class Histogram:
         self._bucket_counts: list[int] = [0] * (len(self._buckets) + 1)
         self._sum: float = 0.0
         self._count: int = 0
+        self._min: float = 0.0
+        self._max: float = 0.0
         self._lock = threading.RLock()
 
     @staticmethod
@@ -259,6 +261,14 @@ class Histogram:
         with self._lock:
             self._sum += value
             self._count += 1
+            if self._count == 1:
+                self._min = value
+                self._max = value
+            else:
+                if value < self._min:
+                    self._min = value
+                if value > self._max:
+                    self._max = value
             idx = bisect_left(self._buckets, value)
             self._bucket_counts[idx] += 1
 
@@ -275,12 +285,16 @@ class Histogram:
         if q < 0 or q > 1:
             raise InvalidOperationError("Quantile must be in range [0, 1]")
         with self._lock:
-            if q == 0:
-                return float(self._buckets[0]) if self._buckets else 0.0
-            if q == 1:
-                return float(self._buckets[-1]) if self._buckets else 0.0
             if self._count == 0:
+                if q == 0:
+                    return float(self._buckets[0]) if self._buckets else 0.0
+                if q == 1:
+                    return float(self._buckets[-1]) if self._buckets else 0.0
                 return 0.0
+            if q == 0:
+                return self._min
+            if q == 1:
+                return self._max
             target_rank = q * self._count
             cumulative = 0.0
             num_buckets = len(self._bucket_counts)
@@ -292,10 +306,10 @@ class Histogram:
                         upper = self._buckets[i]
                     else:
                         lower = self._buckets[-1]
-                        upper = self._buckets[-1]
+                        upper = self._max
                     prev_cumulative = cumulative - self._bucket_counts[i]
                     offset = target_rank - prev_cumulative
                     if self._bucket_counts[i] > 0 and lower != upper:
                         return lower + (upper - lower) * (offset / self._bucket_counts[i])
                     return upper
-            return float(self._buckets[-1]) if self._buckets else 0.0
+            return self._max
