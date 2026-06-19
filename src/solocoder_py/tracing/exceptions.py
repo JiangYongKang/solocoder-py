@@ -17,9 +17,5 @@ class InvalidSamplingRateError(TracingError):
     pass
 
 
-class SpanNotFoundError(TracingError):
-    pass
-
-
 class CannotCreateChildSpanError(TracingError):
     pass

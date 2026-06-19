@@ -94,7 +94,7 @@ CAPTCHA 验证器协议接口。外部实现需提供 `verify()` 方法。
 | `unlock_account(account)` | 管理员手动解锁指定账户 |
 | `get_account_failure_count(account)` | 查询指定账户的累计失败次数 |
 | `get_subnet_failure_count(subnet)` | 查询指定子网的累计失败次数 |
-| `is_account_locked(account)` | 判断指定账户是否被锁定 |
+| `is_account_locked(account)` | 判断指定账户是否被锁定（不存在抛 NoSuchAccountCounterError） |
 | `reset_account(account)` | 重置指定账户的计数器 |
 | `reset_subnet(subnet)` | 重置指定子网的计数器 |
 | `reset_all()` | 重置所有计数器 |

@@ -1,0 +1,7 @@
+当前 tracing 分布式追踪的实现存在一些问题需要修复：
+1. Span ID 生成和采样决策中使用了 Python 全局随机数模块，但在并发场景下这些调用位于锁保护范围之外。Python 的 random 模块并非线程安全实现，多线程并发时内部状态可能被破坏，导致 Span ID 碰撞或采样比例偏离配置值。需要修复并发安全性。
+2. 通过 TraceContext 创建子 Span 时没有检查原父 Span 是否已经结束，而已结束 Span 创建子 Span 理应被拒绝。当前实现只在直接传 parent 参数的路径上做了结束状态校验，遗漏了 context 传播路径。需要补全校验。
+3. SpanNotFoundError 异常类已定义并导出为公共 API，但在查找 Span 的方法中从未被抛出，查找不到时返回了 None。异常定义与使用行为不一致，需要统一为一种方式。
+4. 获取 Trace 根 Span 的查询操作分两次独立加锁执行，两次加锁之间 Span 状态可能变化，导致根 Span 被遗漏。需要保证查询的原子性。
+5. conftest.py 中对非单例 Tracer 实例的 fixture 做了无效的 reset_instance 清理调用，混淆了单例与普通实例的生命周期。需要清理这段无效代码。
+6. 重新运行 `poetry run pytest tests/tracing/ -q`，需要让所有测试通过。

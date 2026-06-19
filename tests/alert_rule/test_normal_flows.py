@@ -383,9 +383,47 @@ class TestCooldownSuppression:
         evaluator.add_rule(r1)
         evaluator.add_rule(r2)
         evaluator.evaluate_rule("r1", {"cpu": 90, "mem": 50})
-        silenced = evaluator.get_silenced_rules()
+        silenced = evaluator.get_silenced_rules({"cpu": 90, "mem": 50})
         assert "r1" in silenced
         assert "r2" not in silenced
+
+    def test_get_silenced_rules_excludes_unmet_conditions(
+        self, clock: ManualClock, evaluator: AlertRuleEvaluator
+    ):
+        r1 = make_and_rule(rule_id="r1", cooldown_seconds=60.0)
+        evaluator.add_rule(r1)
+        evaluator.evaluate_rule("r1", {"cpu": 90})
+        clock.advance(1.0)
+        silenced_met = evaluator.get_silenced_rules({"cpu": 90})
+        assert "r1" in silenced_met
+        silenced_unmet = evaluator.get_silenced_rules({"cpu": 50})
+        assert "r1" not in silenced_unmet
+
+    def test_evaluate_exception_tolerance(self, evaluator: AlertRuleEvaluator):
+        r1 = make_and_rule(rule_id="r1", conditions=[
+            make_condition("cpu", ComparisonOperator.GT, 80)
+        ])
+        r2 = make_and_rule(rule_id="r2", conditions=[
+            make_condition("nonexistent", ComparisonOperator.GT, 50)
+        ])
+        r3 = make_and_rule(rule_id="r3", conditions=[
+            make_condition("mem", ComparisonOperator.GT, 90)
+        ])
+        evaluator.add_rule(r1)
+        evaluator.add_rule(r2)
+        evaluator.add_rule(r3)
+        results = evaluator.evaluate({"cpu": 90, "mem": 95})
+        result_map = {r.rule_id: r for r in results}
+        assert result_map["r1"].triggered is True
+        assert result_map["r1"].alert_fired is True
+        assert result_map["r1"].error is None
+        assert result_map["r2"].triggered is False
+        assert result_map["r2"].alert_fired is False
+        assert result_map["r2"].error is not None
+        assert result_map["r2"].error.metric_name == "nonexistent"
+        assert result_map["r3"].triggered is True
+        assert result_map["r3"].alert_fired is True
+        assert result_map["r3"].error is None
 
     def test_is_silenced(self, clock: ManualClock, evaluator: AlertRuleEvaluator):
         rule = make_and_rule(rule_id="r1", cooldown_seconds=60.0)

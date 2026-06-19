@@ -3,11 +3,9 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .exceptions import (
-    InvalidSessionConfigError,
-    InvalidUserIdError,
     SessionExpiredError,
     SessionForciblyLoggedOutError,
     SessionIdleTimeoutError,
@@ -21,39 +19,23 @@ from .models import (
     SessionCreateConfig,
     SessionInfo,
     generate_session_id,
+    validate_session_config,
+    validate_user_id,
 )
-
-
-def _validate_user_id(user_id: str) -> None:
-    if not user_id or not isinstance(user_id, str) or not user_id.strip():
-        raise InvalidUserIdError("user_id must be a non-empty string")
-
-
-def _validate_config(config: SessionCreateConfig) -> None:
-    if config.ttl <= 0:
-        raise InvalidSessionConfigError("ttl must be positive")
-    if config.idle_timeout <= 0:
-        raise InvalidSessionConfigError("idle_timeout must be positive")
-    if config.idle_timeout > config.ttl:
-        raise InvalidSessionConfigError(
-            "idle_timeout must be less than or equal to ttl"
-        )
-    if config.max_concurrent_sessions <= 0:
-        raise InvalidSessionConfigError(
-            "max_concurrent_sessions must be positive"
-        )
 
 
 @dataclass
 class _UserSessions:
-    sessions: "OrderedDict[str, Session]" = field(
-        default_factory=OrderedDict
-    )
+    sessions: "OrderedDict[str, Session]" = field(default_factory=OrderedDict)
+
+
+_Tombstone = Tuple[str, float]
 
 
 class SessionStore:
     _sessions_by_id: Dict[str, Session]
     _sessions_by_user: Dict[str, _UserSessions]
+    _tombstones: Dict[str, _Tombstone]
     _default_config: SessionCreateConfig
     _lock: threading.RLock
     _clock: Clock
@@ -70,10 +52,15 @@ class SessionStore:
                 max_concurrent_sessions=5,
                 eviction_strategy=EvictionStrategy.EVICT_OLDEST,
             )
-        _validate_config(default_config)
+        validate_session_config(
+            default_config.ttl,
+            default_config.idle_timeout,
+            default_config.max_concurrent_sessions,
+        )
 
         self._sessions_by_id = {}
         self._sessions_by_user = {}
+        self._tombstones = {}
         self._default_config = default_config
         self._lock = threading.RLock()
         self._clock = clock or Clock()
@@ -84,14 +71,18 @@ class SessionStore:
         data: Optional[Dict[str, Any]] = None,
         config: Optional[SessionCreateConfig] = None,
     ) -> SessionInfo:
-        _validate_user_id(user_id)
+        validate_user_id(user_id)
         if config is None:
             config = self._default_config
-        _validate_config(config)
+        validate_session_config(
+            config.ttl, config.idle_timeout, config.max_concurrent_sessions
+        )
 
         session_data = dict(data) if data else {}
 
         with self._lock:
+            self._cleanup_expired_tombstones()
+
             user_sessions = self._sessions_by_user.get(user_id)
             if user_sessions is None:
                 user_sessions = _UserSessions()
@@ -107,15 +98,18 @@ class SessionStore:
                     oldest_id, oldest_session = next(
                         iter(user_sessions.sessions.items())
                     )
-                    oldest_session.forcibly_logged_out = True
-                    oldest_session.forced_logout_reason = (
-                        "evicted due to concurrent session limit"
+                    self._forcibly_logout_session(
+                        oldest_id,
+                        oldest_session,
+                        "evicted due to concurrent session limit",
                     )
-                    del user_sessions.sessions[oldest_id]
 
             for _ in range(100):
                 session_id = generate_session_id()
-                if session_id not in self._sessions_by_id:
+                if (
+                    session_id not in self._sessions_by_id
+                    and session_id not in self._tombstones
+                ):
                     break
             else:
                 raise RuntimeError("failed to generate unique session id")
@@ -144,11 +138,14 @@ class SessionStore:
             raise SessionNotFoundError("session_id must be a non-empty string")
 
         with self._lock:
+            self._cleanup_expired_tombstones()
+
             session = self._sessions_by_id.get(session_id)
             if session is None:
-                raise SessionNotFoundError(
-                    f"session not found: {session_id}"
-                )
+                tombstone = self._tombstones.get(session_id)
+                if tombstone is not None:
+                    raise SessionForciblyLoggedOutError(tombstone[0])
+                raise SessionNotFoundError(f"session not found: {session_id}")
 
             if session.forcibly_logged_out:
                 raise SessionForciblyLoggedOutError(
@@ -159,17 +156,11 @@ class SessionStore:
             now = self._clock.now()
 
             if now >= session.expires_at:
-                del self._sessions_by_id[session_id]
-                user_sessions = self._sessions_by_user.get(session.user_id)
-                if user_sessions and session_id in user_sessions.sessions:
-                    del user_sessions.sessions[session_id]
+                self._remove_session(session_id)
                 raise SessionExpiredError("session has expired")
 
             if now >= session.idle_expires_at:
-                del self._sessions_by_id[session_id]
-                user_sessions = self._sessions_by_user.get(session.user_id)
-                if user_sessions and session_id in user_sessions.sessions:
-                    del user_sessions.sessions[session_id]
+                self._remove_session(session_id)
                 raise SessionIdleTimeoutError(
                     "session has timed out due to inactivity"
                 )
@@ -192,11 +183,14 @@ class SessionStore:
             raise SessionNotFoundError("session_id must be a non-empty string")
 
         with self._lock:
+            self._cleanup_expired_tombstones()
+
             session = self._sessions_by_id.get(session_id)
             if session is None:
-                raise SessionNotFoundError(
-                    f"session not found: {session_id}"
-                )
+                tombstone = self._tombstones.get(session_id)
+                if tombstone is not None:
+                    raise SessionForciblyLoggedOutError(tombstone[0])
+                raise SessionNotFoundError(f"session not found: {session_id}")
 
             if session.forcibly_logged_out:
                 raise SessionForciblyLoggedOutError(
@@ -207,17 +201,11 @@ class SessionStore:
             now = self._clock.now()
 
             if now >= session.expires_at:
-                del self._sessions_by_id[session_id]
-                user_sessions = self._sessions_by_user.get(session.user_id)
-                if user_sessions and session_id in user_sessions.sessions:
-                    del user_sessions.sessions[session_id]
+                self._remove_session(session_id)
                 raise SessionExpiredError("session has expired")
 
             if now >= session.idle_expires_at:
-                del self._sessions_by_id[session_id]
-                user_sessions = self._sessions_by_user.get(session.user_id)
-                if user_sessions and session_id in user_sessions.sessions:
-                    del user_sessions.sessions[session_id]
+                self._remove_session(session_id)
                 raise SessionIdleTimeoutError(
                     "session has timed out due to inactivity"
                 )
@@ -237,22 +225,14 @@ class SessionStore:
             return False
 
         with self._lock:
-            session = self._sessions_by_id.pop(session_id, None)
-            if session is None:
-                return False
-
-            user_sessions = self._sessions_by_user.get(session.user_id)
-            if user_sessions and session_id in user_sessions.sessions:
-                del user_sessions.sessions[session_id]
-                if not user_sessions.sessions:
-                    del self._sessions_by_user[session.user_id]
-
-            return True
+            return self._remove_session(session_id)
 
     def list_sessions_by_user(self, user_id: str) -> List[SessionInfo]:
-        _validate_user_id(user_id)
+        validate_user_id(user_id)
 
         with self._lock:
+            self._cleanup_expired_tombstones()
+
             user_sessions = self._sessions_by_user.get(user_id)
             if user_sessions is None:
                 return []
@@ -270,28 +250,28 @@ class SessionStore:
                 result.append(self._make_session_info(session))
 
             for expired_id in expired_ids:
-                del user_sessions.sessions[expired_id]
-                del self._sessions_by_id[expired_id]
-            if not user_sessions.sessions:
-                del self._sessions_by_user[user_id]
+                self._remove_session(expired_id)
 
             return result
 
-    def logout_all_sessions(self, user_id: str, reason: Optional[str] = None) -> int:
-        _validate_user_id(user_id)
+    def logout_all_sessions(
+        self, user_id: str, reason: Optional[str] = None
+    ) -> int:
+        validate_user_id(user_id)
 
         with self._lock:
+            self._cleanup_expired_tombstones()
+
             user_sessions = self._sessions_by_user.get(user_id)
             if user_sessions is None:
                 return 0
 
             count = 0
-            for session in user_sessions.sessions.values():
-                session.forcibly_logged_out = True
-                session.forced_logout_reason = reason or "user logged out all sessions"
+            final_reason = reason or "user logged out all sessions"
+            session_items = list(user_sessions.sessions.items())
+            for session_id, session in session_items:
+                self._forcibly_logout_session(session_id, session, final_reason)
                 count += 1
-
-            del self._sessions_by_user[user_id]
 
             return count
 
@@ -299,6 +279,47 @@ class SessionStore:
         with self._lock:
             self._sessions_by_id.clear()
             self._sessions_by_user.clear()
+            self._tombstones.clear()
+
+    def _forcibly_logout_session(
+        self,
+        session_id: str,
+        session: Session,
+        reason: str,
+    ) -> None:
+        user_sessions = self._sessions_by_user.get(session.user_id)
+        if user_sessions and session_id in user_sessions.sessions:
+            del user_sessions.sessions[session_id]
+            if not user_sessions.sessions:
+                del self._sessions_by_user[session.user_id]
+
+        if session_id in self._sessions_by_id:
+            del self._sessions_by_id[session_id]
+
+        tombstone_ttl = session.ttl
+        expires_at = self._clock.now() + tombstone_ttl
+        self._tombstones[session_id] = (reason, expires_at)
+
+    def _remove_session(self, session_id: str) -> bool:
+        session = self._sessions_by_id.pop(session_id, None)
+        if session is None:
+            return False
+
+        user_sessions = self._sessions_by_user.get(session.user_id)
+        if user_sessions and session_id in user_sessions.sessions:
+            del user_sessions.sessions[session_id]
+            if not user_sessions.sessions:
+                del self._sessions_by_user[session.user_id]
+
+        return True
+
+    def _cleanup_expired_tombstones(self) -> None:
+        now = self._clock.now()
+        expired_ids = [
+            sid for sid, (_, exp) in self._tombstones.items() if now >= exp
+        ]
+        for sid in expired_ids:
+            del self._tombstones[sid]
 
     def _make_session_info(self, session: Session) -> SessionInfo:
         return SessionInfo(

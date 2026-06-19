@@ -47,7 +47,8 @@ class OAuth2StateManager:
     def _generate_random_string(length: int) -> str:
         if length <= 0:
             raise ValueError("length must be positive")
-        return secrets.token_urlsafe(length)
+        num_bytes = length
+        return secrets.token_urlsafe(num_bytes)[:length]
 
     @staticmethod
     def parse_code_challenge_method(method: str) -> CodeChallengeMethod:

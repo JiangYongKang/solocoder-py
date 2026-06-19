@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
+
+if TYPE_CHECKING:
+    from .exceptions import AlertRuleError
 
 
 class ComparisonOperator(str, Enum):
@@ -73,3 +76,4 @@ class EvaluationResult:
     triggered: bool
     alert_fired: bool
     silenced: bool
+    error: Optional[AlertRuleError] = None

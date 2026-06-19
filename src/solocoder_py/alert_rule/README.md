@@ -12,7 +12,7 @@
 | `ConditionGroup` | 条件组：通过 AND 或 OR 逻辑运算符组合多个 Condition 或嵌套的 ConditionGroup |
 | `AlertRule` | 告警规则：绑定一个根条件组和可选的冷却时间 |
 | `AlertRuleEvaluator` | 评估器：管理规则、执行评估、维护冷却状态 |
-| `EvaluationResult` | 评估结果：包含是否触发、是否告警、是否被抑制 |
+| `EvaluationResult` | 评估结果：包含是否触发、是否告警、是否被抑制、错误信息（评估失败时） |
 | `ManualClock` | 可控时钟：用于测试中精确控制时间推进 |
 
 ## 比较运算符
@@ -77,9 +77,13 @@ root = ConditionGroup(
 
 - 冷却时间为 0 表示每次条件满足都触发（无抑制）
 - 冷却时间为负值会在创建规则时被拒绝（抛出 `InvalidCooldownError`）
-- 可通过 `is_silenced(rule_id)` 查询单条规则的静默状态
-- 可通过 `get_silenced_rules()` 获取当前所有处于冷却期的规则列表
+- 可通过 `is_silenced(rule_id)` 查询单条规则是否处于冷却窗口
+- 可通过 `get_silenced_rules(metrics)` 获取当前"条件满足但因冷却期被抑制"的规则列表
 - 可通过 `clear_cooldown(rule_id)` 或 `clear_all_cooldowns()` 手动清除冷却状态
+
+## 批量评估容错
+
+使用 `evaluate(metrics)` 批量评估所有规则时，单条规则的评估异常不会影响其他规则。失败的规则会在 `EvaluationResult.error` 字段中记录具体异常，而 `triggered`、`alert_fired`、`silenced` 均为 `False`。
 
 ## 使用示例
 
@@ -143,8 +147,13 @@ assert result.triggered is True
 assert result.alert_fired is True
 assert result.silenced is False
 
-# 查询冷却中的规则
+# 查询冷却中且条件仍满足的规则
 evaluator.evaluate_rule("server-alert", metrics)
-silenced = evaluator.get_silenced_rules()
+silenced = evaluator.get_silenced_rules(metrics)
 assert "server-alert" in silenced
+
+# 查询时条件不满足，规则不被视为被抑制
+low_metrics = {"cpu_usage": 50, "mem_usage": 50, "disk_usage": 50}
+silenced_low = evaluator.get_silenced_rules(low_metrics)
+assert "server-alert" not in silenced_low
 ```

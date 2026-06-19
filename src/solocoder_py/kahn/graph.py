@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Deque, Dict, Iterable, List, Optional, Set
+from typing import Deque, Dict, Iterable, Iterator, List, Optional, Set
 
 from .exceptions import (
     CycleDetectedError,
@@ -52,10 +52,10 @@ class Digraph:
     def get_neighbors(self, node: str) -> Iterable[str]:
         if node not in self._adjacency:
             raise NodeNotFoundError(f"Node not found: {node}")
-        return sorted(self._adjacency[node])
+        return iter(self._adjacency[node])
 
-    def get_nodes(self) -> List[str]:
-        return sorted(self._adjacency.keys())
+    def get_nodes(self) -> Iterable[str]:
+        return iter(self._adjacency.keys())
 
     def get_edges(self) -> List[Edge]:
         edges: List[Edge] = []
@@ -98,13 +98,14 @@ class KahnTopologicalSort:
         self._graph.add_edge(from_node, to_node)
 
     def sort(self) -> TopologicalSortResult:
-        in_degree: Dict[str, int] = {
-            node: self._graph.get_in_degree(node)
-            for node in self._graph.get_nodes()
-        }
+        in_degree: Dict[str, int] = {}
+        nodes_list: List[str] = []
+        for node in self._graph.get_nodes():
+            nodes_list.append(node)
+            in_degree[node] = self._graph.get_in_degree(node)
 
         queue: Deque[str] = deque()
-        for node in self._graph.get_nodes():
+        for node in nodes_list:
             if in_degree[node] == 0:
                 queue.append(node)
 
@@ -127,7 +128,7 @@ class KahnTopologicalSort:
         cycle_nodes: List[str] = []
         if has_cycle:
             visited_set = set(topo_order)
-            for node in self._graph.get_nodes():
+            for node in nodes_list:
                 if node not in visited_set:
                     cycle_nodes.append(node)
 
@@ -141,7 +142,7 @@ class KahnTopologicalSort:
         result = self.sort()
         return result.cycle_nodes
 
-    def enumerate_all_topological_orders(self) -> List[List[str]]:
+    def enumerate_all_topological_orders(self) -> Iterator[List[str]]:
         result = self.sort()
         if result.has_cycle:
             raise CycleDetectedError(
@@ -149,29 +150,28 @@ class KahnTopologicalSort:
                 cycle_nodes=result.cycle_nodes,
             )
 
+        nodes_list: List[str] = list(self._graph.get_nodes())
+
         in_degree: Dict[str, int] = {
-            node: self._graph.get_in_degree(node)
-            for node in self._graph.get_nodes()
+            node: self._graph.get_in_degree(node) for node in nodes_list
         }
 
-        results: List[List[str]] = []
-        self._backtrack([], in_degree, set(), results)
-        return results
+        return self._backtrack_gen([], in_degree, set(), nodes_list)
 
-    def _backtrack(
+    def _backtrack_gen(
         self,
         current: List[str],
         in_degree: Dict[str, int],
         visited: Set[str],
-        results: List[List[str]],
-    ) -> None:
+        nodes_list: List[str],
+    ) -> Iterator[List[str]]:
         total_nodes = self._graph.node_count
         if len(current) == total_nodes:
-            results.append(list(current))
+            yield list(current)
             return
 
         available: List[str] = []
-        for node in self._graph.get_nodes():
+        for node in nodes_list:
             if node not in visited and in_degree[node] == 0:
                 available.append(node)
 
@@ -182,7 +182,7 @@ class KahnTopologicalSort:
             for neighbor in self._graph.get_neighbors(node):
                 in_degree[neighbor] -= 1
 
-            self._backtrack(current, in_degree, visited, results)
+            yield from self._backtrack_gen(current, in_degree, visited, nodes_list)
 
             for neighbor in self._graph.get_neighbors(node):
                 in_degree[neighbor] += 1

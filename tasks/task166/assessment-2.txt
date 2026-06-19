@@ -1,0 +1,9 @@
+产物不满意：
+1. prompt-2.txt 中列出的四条修复要求全部针对 alert_rule 包（导出 InvalidRuleError、修正 get_silenced_rules 查询语义、增加批量评估异常容错、运行 alert_rule 测试），与 task166 实际对应的 metrics 包完全不相关。prompt 内容与任务包之间存在明确错位，导致本轮会话的产物无法按 prompt 要求审查 metrics 包的缺陷修复情况。查看 git diff 发现 metrics 包的实际变更仅有 Labels 类从公开 API 移除、quantile 方法中 +Inf 桶的边界处理修正、以及 README 文档措辞调整，无法对应 prompt 中的任何一条修复要求。
+2. __init__.py 中移除了 Labels 的导入和 __all__ 导出，这是一项破坏性 API 变更，但没有任何文档或变更日志说明为什么移除、外部代码应如何迁移，也未在 README 中标注此项变更。原有的 Labels 类支持可变标签操作且暴露在公开 API 中，移除后外部通过 `from solocoder_py.metrics import Labels` 导入会直接失败报 `ImportError`。这属于未经沟通的接口清理，可能破坏依赖该公开类的下游代码。
+3. models.py 中 quantile 方法的 +Inf 桶处理逻辑存在设计缺陷：当样本全部落在 +Inf 桶时，`lower != upper` 条件始终为假，此时直接返回 upper 值即最后一个桶边界，而非样本的真实观测值。例如桶边界为 [1, 2, 3] 且所有样本值均为 100，调用 quantile(0.5) 将返回 3 而非 100，这会让调用方误以为大部分请求延迟在 3 以内。原因是 +Inf 桶无上边界信息，不应与常规桶使用相同的线性插值逻辑，正确做法是在 +Inf 桶内使用最大观测值作为上边界或单独处理该桶的分位数计算。
+
+过程不满意：
+1. 模型在收到 prompt 后的第一步操作就是创建了包含 5 项子任务的 TodoList，然后才开始阅读 alert_rule 包的源码文件。prompt 内容指向 alert_rule 包但任务实际对应 metrics 包，模型在未先确认当前任务包与 prompt 所述包是否一致的情况下就直接进入编码，说明缺少对任务上下文的基本校验。正确做法是先查看 task166 对应的包目录（src/solocoder_py/metrics/）下的现有代码，确认 prompt 中描述的模块与当前包是否匹配，若发现不匹配应先向标注人员反馈而非盲目执行。
+2. 模型在整个会话中全程操作 alert_rule 包的代码文件（__init__.py、evaluator.py、models.py、test_normal_flows.py、test_error_branches.py 等），未打开或查看 metrics 包下的任何文件。然而 models.py 中的 quantile 方法和 __init__.py 中的公开 API 导出列表都发生了变更，说明 metrics 包的改动是在模型没有显式关注的情况下产生的。这可能是前一轮会话残留的修改被误纳入本轮变更范围，模型的代码审查范围控制存在盲区。
+3. 模型在会话总结中声称"全部 4 个问题已修复，96 个测试全部通过"，将 alert_rule 的测试结果作为本轮任务完成的证据，但完全未提及 task166 对应的 metrics 包的 101 个测试结果。这说明模型对任务上下文的认知仅来自 prompt 的文字内容，没有将任务编号与实际包目录进行关联校验，属于对任务目标的单向理解偏差。

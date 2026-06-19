@@ -6,10 +6,7 @@ import threading
 import time
 from typing import Optional
 
-from .exceptions import (
-    InvalidSamplingRateError,
-    SpanNotFoundError,
-)
+from .exceptions import InvalidSamplingRateError
 from .models import Span, TraceContext
 
 
@@ -34,6 +31,7 @@ class Tracer:
         self._trace_id_counter = 0
         self._span_id_counter = 0
         self._lock = threading.Lock()
+        self._rng = random.Random()
         self._active_spans: dict[str, Span] = {}
         self._completed_spans: dict[str, list[Span]] = {}
         self._pid = os.getpid()
@@ -75,18 +73,20 @@ class Tracer:
             return True
         if self._sampling_rate <= 0.0:
             return False
-        return random.random() < self._sampling_rate
+        return self._rng.random() < self._sampling_rate
 
-    def _generate_new_trace_id(self) -> str:
+    def _generate_new_trace_id(self) -> tuple[str, bool]:
         with self._lock:
             timestamp_ns = time.time_ns()
             self._trace_id_counter = (self._trace_id_counter + 1) & 0xFFFF
             counter = self._trace_id_counter
-            random_bits = random.getrandbits(64)
-        return _generate_trace_id(timestamp_ns, counter, random_bits)
+            random_bits = self._rng.getrandbits(64)
+            sampled = self._make_sampling_decision()
+        return _generate_trace_id(timestamp_ns, counter, random_bits), sampled
 
     def _generate_new_span_id(self) -> str:
-        random_bits = random.getrandbits(64)
+        with self._lock:
+            random_bits = self._rng.getrandbits(64)
         return _generate_span_id(random_bits)
 
     def start_span(self, name: str, parent: Optional[Span] = None) -> Span:
@@ -100,12 +100,11 @@ class Tracer:
             trace_id = parent.trace_id
             parent_span_id = parent.span_id
             sampled = parent.sampled
+            span_id = self._generate_new_span_id()
         else:
-            trace_id = self._generate_new_trace_id()
+            trace_id, sampled = self._generate_new_trace_id()
             parent_span_id = None
-            sampled = self._make_sampling_decision()
-
-        span_id = self._generate_new_span_id()
+            span_id = self._generate_new_span_id()
 
         span = Span(
             name=name,
@@ -126,6 +125,15 @@ class Tracer:
     def start_span_from_context(
         self, name: str, context: TraceContext
     ) -> Span:
+        with self._lock:
+            parent_span = self._active_spans.get(context.span_id)
+            if parent_span is not None and parent_span.is_ended:
+                from .exceptions import CannotCreateChildSpanError
+
+                raise CannotCreateChildSpanError(
+                    f"cannot create child span for already ended span '{parent_span.name}'"
+                )
+
         span_id = self._generate_new_span_id()
 
         span = Span(
@@ -205,12 +213,12 @@ class Tracer:
             return len(self._completed_spans)
 
     def get_trace_root(self, trace_id: str) -> Optional[Span]:
-        spans = self.get_trace_spans(trace_id)
-        for span in spans:
-            if span.parent_span_id is None:
-                return span
-
         with self._lock:
+            spans = self._completed_spans.get(trace_id, [])
+            for span in spans:
+                if span.parent_span_id is None:
+                    return span
+
             for span in self._active_spans.values():
                 if span.trace_id == trace_id and span.parent_span_id is None:
                     return span

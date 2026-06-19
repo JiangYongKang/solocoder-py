@@ -7,11 +7,11 @@ from solocoder_py.metrics import (
     FrozenLabels,
     Gauge,
     Histogram,
-    Labels,
     MetricFamily,
     MetricsRegistry,
     export_to_prometheus,
 )
+from solocoder_py.metrics.models import Labels
 
 
 class TestLabels:

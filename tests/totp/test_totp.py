@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import time
-from unittest.mock import patch
 
 import pytest
 
@@ -12,10 +11,13 @@ from solocoder_py.totp import (
     DEFAULT_SECRET_BYTES,
     InMemoryTotpStore,
     InvalidDriftWindowError,
+    InvalidRecoveryCodeError,
     InvalidSecretError,
+    InvalidTotpCodeError,
     RecoveryCodeConsumedError,
     SecretAlreadyExistsError,
     SecretNotFoundError,
+    SUPPORTED_ALGORITHMS,
     TotpService,
     compute_totp,
     generate_recovery_codes,
@@ -140,6 +142,73 @@ class TestTotpVerification:
         assert code_now != code_future
 
 
+class TestAlgorithmSupport:
+    def test_different_algorithms_produce_different_codes(self):
+        secret = generate_secret()
+        now = int(time.time())
+
+        code_sha1 = compute_totp(secret, algorithm="SHA1", timestamp=now)
+        code_sha256 = compute_totp(secret, algorithm="SHA256", timestamp=now)
+        code_sha512 = compute_totp(secret, algorithm="SHA512", timestamp=now)
+
+        assert code_sha1 != code_sha256
+        assert code_sha1 != code_sha512
+        assert code_sha256 != code_sha512
+
+    def test_service_uses_configured_algorithm(self):
+        service_sha1 = TotpService(algorithm="SHA1")
+        service_sha256 = TotpService(algorithm="SHA256")
+
+        result1 = service_sha1.generate_secret_for_user("user1")
+        result256 = service_sha256.generate_secret_for_user("user2")
+
+        assert service_sha1.algorithm == "SHA1"
+        assert service_sha256.algorithm == "SHA256"
+
+        now = int(time.time())
+        code_sha1 = compute_totp(result1.secret, algorithm="SHA1", timestamp=now)
+        code_sha256 = compute_totp(result256.secret, algorithm="SHA256", timestamp=now)
+
+        verification1 = service_sha1.verify_totp("user1", code_sha1)
+        verification256 = service_sha256.verify_totp("user2", code_sha256)
+
+        assert verification1.success is True
+        assert verification256.success is True
+
+    def test_service_algorithm_mismatch_fails(self):
+        service_sha1 = TotpService(algorithm="SHA1")
+        result = service_sha1.generate_secret_for_user("user1")
+
+        now = int(time.time())
+        code_sha256 = compute_totp(result.secret, algorithm="SHA256", timestamp=now)
+
+        with pytest.raises(InvalidTotpCodeError):
+            service_sha1.verify_totp("user1", code_sha256)
+
+    def test_unsupported_algorithm_raises(self):
+        with pytest.raises(InvalidSecretError, match="Unsupported algorithm"):
+            compute_totp(generate_secret(), algorithm="MD5")
+
+    def test_service_unsupported_algorithm_raises(self):
+        with pytest.raises(InvalidSecretError, match="Unsupported algorithm"):
+            TotpService(algorithm="MD5")
+
+    def test_supported_algorithms_constant(self):
+        assert SUPPORTED_ALGORITHMS == {"SHA1", "SHA256", "SHA512"}
+
+    def test_uri_includes_algorithm(self):
+        service = TotpService(algorithm="SHA256", issuer="TestApp")
+        result = service.generate_secret_for_user("user1")
+        assert "algorithm=SHA256" in result.uri
+
+    def test_secret_model_stores_algorithm(self):
+        from solocoder_py.totp import TotpSecret
+
+        ts = TotpSecret(user_id="u", secret="TEST", issuer="Test", algorithm="SHA512")
+        assert ts.algorithm == "SHA512"
+        assert "algorithm=SHA512" in ts.get_uri()
+
+
 class TestDriftTolerance:
     def test_drift_tolerance_previous_window(self, make_service):
         service = make_service(drift_windows=1)
@@ -197,8 +266,8 @@ class TestReplayProtection:
         first = service.verify_totp("user1", code)
         assert first.success is True
 
-        second = service.verify_totp("user1", code)
-        assert second.success is False
+        with pytest.raises(InvalidTotpCodeError):
+            service.verify_totp("user1", code)
 
     def test_replay_with_drift_windows(self, make_service):
         service = make_service(drift_windows=2)
@@ -211,8 +280,8 @@ class TestReplayProtection:
         first = service.verify_totp("user1", code)
         assert first.success is True
 
-        second = service.verify_totp("user1", code)
-        assert second.success is False
+        with pytest.raises(InvalidTotpCodeError):
+            service.verify_totp("user1", code)
 
 
 class TestRecoveryCodes:
@@ -275,8 +344,8 @@ class TestRecoveryCodes:
         assert set(new_codes) != set(old_codes)
 
         for old_code in old_codes:
-            verification = service.verify_recovery_code("user1", old_code)
-            assert verification.success is False
+            with pytest.raises(InvalidRecoveryCodeError):
+                service.verify_recovery_code("user1", old_code)
 
     def test_regenerate_recovery_codes_after_all_consumed(self, make_service):
         service = make_service()
@@ -323,22 +392,24 @@ class TestBoundaryConditions:
         future_code = compute_totp(secret, timestamp=now + 30)
 
         assert service.verify_totp("user1", current_code).success is True
-        assert service.verify_totp("user1", past_code).success is False
-        assert service.verify_totp("user1", future_code).success is False
+        with pytest.raises(InvalidTotpCodeError):
+            service.verify_totp("user1", past_code)
+        with pytest.raises(InvalidTotpCodeError):
+            service.verify_totp("user1", future_code)
 
     def test_minimum_secret_bytes(self):
         with pytest.raises(InvalidSecretError):
-            generate_secret(10)
+            generate_secret(16)
 
-    def test_secret_bytes_at_boundary_16(self):
-        secret = generate_secret(16)
+    def test_secret_bytes_at_boundary_20(self):
+        secret = generate_secret(20)
         padded = secret + "=" * ((8 - len(secret) % 8) % 8)
         decoded = base64.b32decode(padded.upper())
-        assert len(decoded) == 16
+        assert len(decoded) == 20
 
     def test_service_minimum_secret_bytes(self):
         with pytest.raises(InvalidSecretError):
-            TotpService(secret_bytes=10)
+            TotpService(secret_bytes=16)
 
     def test_all_recovery_codes_consumed_then_regenerate(self, make_service):
         service = make_service()
@@ -413,8 +484,8 @@ class TestExceptionCases:
         service = make_service()
         service.generate_secret_for_user("user1")
 
-        verification = service.verify_totp("user1", "000000")
-        assert verification.success is False
+        with pytest.raises(InvalidTotpCodeError):
+            service.verify_totp("user1", "000000")
 
     def test_used_totp_code_replay_rejected(self, make_service):
         service = make_service(drift_windows=1)
@@ -426,8 +497,8 @@ class TestExceptionCases:
         first = service.verify_totp("user1", code)
         assert first.success is True
 
-        second = service.verify_totp("user1", code)
-        assert second.success is False
+        with pytest.raises(InvalidTotpCodeError):
+            service.verify_totp("user1", code)
 
     def test_code_outside_drift_window_rejected(self, make_service):
         service = make_service(drift_windows=1)
@@ -437,8 +508,8 @@ class TestExceptionCases:
         now = int(time.time())
         code_far_future = compute_totp(secret, timestamp=now + 120)
 
-        verification = service.verify_totp("user1", code_far_future)
-        assert verification.success is False
+        with pytest.raises(InvalidTotpCodeError):
+            service.verify_totp("user1", code_far_future)
 
     def test_consumed_recovery_code_rejected(self, make_service):
         service = make_service()
@@ -502,12 +573,12 @@ class TestExceptionCases:
         with pytest.raises(SecretNotFoundError):
             service.regenerate_recovery_codes("nonexistent")
 
-    def test_invalid_recovery_code_returns_false(self, make_service):
+    def test_invalid_recovery_code_raises(self, make_service):
         service = make_service()
         service.generate_secret_for_user("user1")
 
-        verification = service.verify_recovery_code("user1", "wrongcode123")
-        assert verification.success is False
+        with pytest.raises(InvalidRecoveryCodeError):
+            service.verify_recovery_code("user1", "wrongcode123")
 
     def test_service_digits_too_low(self):
         with pytest.raises(ValueError):
@@ -528,6 +599,23 @@ class TestExceptionCases:
     def test_generate_recovery_codes_zero_count(self):
         with pytest.raises(ValueError):
             generate_recovery_codes(0)
+
+    def test_invalid_totp_code_error_message(self, make_service):
+        service = make_service()
+        service.generate_secret_for_user("user1")
+
+        with pytest.raises(InvalidTotpCodeError, match="Invalid TOTP code or code outside drift tolerance window"):
+            service.verify_totp("user1", "000000")
+
+    def test_used_totp_code_error_message(self, make_service):
+        service = make_service()
+        result = service.generate_secret_for_user("user1")
+        code = compute_totp(result.secret)
+
+        service.verify_totp("user1", code)
+
+        with pytest.raises(InvalidTotpCodeError, match="TOTP code has already been used in this time window"):
+            service.verify_totp("user1", code)
 
 
 # ============================================================
@@ -610,3 +698,13 @@ class TestExceptionHierarchy:
         assert issubclass(RecoveryCodeConsumedError, TotpError)
         assert issubclass(InvalidSecretError, TotpError)
         assert issubclass(InvalidDriftWindowError, TotpError)
+
+    def test_invalid_totp_code_is_totp_error(self):
+        from solocoder_py.totp import TotpError, InvalidTotpCodeError
+
+        assert issubclass(InvalidTotpCodeError, TotpError)
+
+    def test_invalid_recovery_code_is_totp_error(self):
+        from solocoder_py.totp import TotpError, InvalidRecoveryCodeError
+
+        assert issubclass(InvalidRecoveryCodeError, TotpError)

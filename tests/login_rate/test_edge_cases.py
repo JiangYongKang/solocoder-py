@@ -10,6 +10,7 @@ from solocoder_py.login_rate import (
     LoginRateConfig,
     LoginRateManager,
     ManualClock,
+    NoSuchAccountCounterError,
 )
 
 
@@ -99,7 +100,8 @@ class TestSubnetIndependentAccountCounters:
         manager.attempt_login("alice", "192.168.1.10", lambda: False)
 
         assert manager.is_account_locked("alice") is True
-        assert manager.is_account_locked("bob") is False
+        with pytest.raises(NoSuchAccountCounterError, match="不存在该账户的计数器"):
+            manager.is_account_locked("bob")
 
         result = manager.attempt_login("bob", "192.168.1.20", lambda: True)
         assert result.success is True

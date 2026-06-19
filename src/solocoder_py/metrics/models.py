@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from bisect import bisect_left, bisect_right
+from bisect import bisect_left
 from typing import Mapping, Optional, Sequence
 
 from .exceptions import InvalidBoundariesError, InvalidOperationError
@@ -283,14 +283,19 @@ class Histogram:
                 return 0.0
             target_rank = q * self._count
             cumulative = 0.0
-            for i in range(len(self._buckets)):
+            num_buckets = len(self._bucket_counts)
+            for i in range(num_buckets):
                 cumulative += self._bucket_counts[i]
                 if cumulative >= target_rank:
-                    lower = self._buckets[i - 1] if i > 0 else 0.0
-                    upper = self._buckets[i]
+                    if i < len(self._buckets):
+                        lower = self._buckets[i - 1] if i > 0 else 0.0
+                        upper = self._buckets[i]
+                    else:
+                        lower = self._buckets[-1]
+                        upper = self._buckets[-1]
                     prev_cumulative = cumulative - self._bucket_counts[i]
                     offset = target_rank - prev_cumulative
-                    if self._bucket_counts[i] > 0:
+                    if self._bucket_counts[i] > 0 and lower != upper:
                         return lower + (upper - lower) * (offset / self._bucket_counts[i])
                     return upper
             return float(self._buckets[-1]) if self._buckets else 0.0

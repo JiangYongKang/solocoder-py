@@ -10,6 +10,7 @@ from solocoder_py.alert_rule import (
     ConditionGroup,
     InvalidCooldownError,
     InvalidConditionError,
+    InvalidRuleError,
     LogicalOperator,
     ManualClock,
     MetricNotFoundError,
@@ -183,15 +184,23 @@ class TestInvalidConditionError:
 
 
 class TestInvalidRuleError:
-    def test_empty_rule_id_raises(self):
+    def test_invalid_rule_error_is_exported(self):
+        assert InvalidRuleError is not None
+        assert issubclass(InvalidRuleError, Exception)
+
+    def test_empty_rule_id_raises_invalid_rule_error(self):
         root = ConditionGroup(operator=LogicalOperator.AND, children=[])
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidRuleError):
             AlertRule(rule_id="", name="test", root_group=root)
 
-    def test_empty_name_raises(self):
+    def test_empty_name_raises_invalid_rule_error(self):
         root = ConditionGroup(operator=LogicalOperator.AND, children=[])
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidRuleError):
             AlertRule(rule_id="r1", name="", root_group=root)
+
+    def test_invalid_root_group_raises_invalid_rule_error(self):
+        with pytest.raises(InvalidRuleError):
+            AlertRule(rule_id="r1", name="test", root_group="not-a-group")
 
 
 class TestRemoveRuleCleanup:

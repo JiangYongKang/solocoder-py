@@ -114,7 +114,9 @@ class HealthCheckAggregator:
                 )
             elif not health.is_ready():
                 reason = health.readiness.error or "Readiness probe failed"
-                if health.readiness.cascaded_from:
+                if health.readiness.root_cause:
+                    reason = f"Cascaded from unhealthy dependency: {health.readiness.root_cause}"
+                elif health.readiness.cascaded_from:
                     reason = f"Cascaded from unhealthy dependency: {health.readiness.cascaded_from}"
                 degraded.append(
                     DegradedComponent(component_id=cid, reason=reason)
@@ -168,11 +170,13 @@ class HealthCheckAggregator:
                     dep, checking, cache
                 )
                 if readiness_result.healthy and not dep_health.is_ready():
+                    root_cause = dep_health.readiness.root_cause or dep
                     readiness_result = ProbeResult(
                         probe_type=ProbeType.READINESS,
                         healthy=False,
                         error=f"Dependency '{dep}' is not ready",
                         cascaded_from=dep,
+                        root_cause=root_cause,
                     )
 
             health = ComponentHealth(

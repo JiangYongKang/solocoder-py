@@ -85,6 +85,7 @@ class TestSingleComponentReadinessUnhealthy:
         assert "db" in degraded_ids
         assert "api" in degraded_ids
         assert result.components["api"].readiness.cascaded_from == "db"
+        assert result.components["api"].readiness.root_cause == "db"
         assert "Cascaded from unhealthy dependency: db" in [
             dc.reason for dc in result.degraded_components if dc.component_id == "api"
         ][0]
@@ -110,8 +111,15 @@ class TestThreeLevelDependencyChain:
         assert not result.components["level2"].is_ready()
         assert not result.components["level3"].is_ready()
         assert result.components["level1"].readiness.cascaded_from is None
+        assert result.components["level1"].readiness.root_cause is None
         assert result.components["level2"].readiness.cascaded_from == "level1"
+        assert result.components["level2"].readiness.root_cause == "level1"
         assert result.components["level3"].readiness.cascaded_from == "level2"
+        assert result.components["level3"].readiness.root_cause == "level1"
+        api_reason = [
+            dc.reason for dc in result.degraded_components if dc.component_id == "level3"
+        ][0]
+        assert "level1" in api_reason
 
     def test_middle_component_unhealthy(self, aggregator: HealthCheckAggregator):
         aggregator.register_component(
@@ -133,7 +141,9 @@ class TestThreeLevelDependencyChain:
         assert not result.components["level2"].is_ready()
         assert not result.components["level3"].is_ready()
         assert result.components["level2"].readiness.cascaded_from is None
+        assert result.components["level2"].readiness.root_cause is None
         assert result.components["level3"].readiness.cascaded_from == "level2"
+        assert result.components["level3"].readiness.root_cause == "level2"
 
 
 class TestLivenessProbeIndependent:

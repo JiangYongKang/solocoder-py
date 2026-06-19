@@ -8,6 +8,7 @@ from solocoder_py.kahn import KahnTopologicalSort
 from tests.kahn.conftest import (
     build_multi_source_dag,
     build_simple_dag,
+    get_node_set,
     is_valid_topological_order,
 )
 
@@ -21,17 +22,17 @@ class TestKahnNormalFlows:
         assert result.is_valid is True
         assert result.has_cycle is False
         assert len(result.order) == graph.node_count
-        assert set(result.order) == set(graph.get_nodes())
+        assert set(result.order) == get_node_set(graph)
         assert is_valid_topological_order(graph, result.order)
 
     def test_simple_dag_enumerate_all_orders(self) -> None:
         graph = build_simple_dag()
         kahn = KahnTopologicalSort(graph)
-        all_orders = kahn.enumerate_all_topological_orders()
+        all_orders = list(kahn.enumerate_all_topological_orders())
 
         assert len(all_orders) == 2
 
-        orders_as_tuples = [tuple(o) for o in all_orders]
+        orders_as_tuples = {tuple(o) for o in all_orders}
         assert ("A", "B", "C", "D") in orders_as_tuples
         assert ("A", "C", "B", "D") in orders_as_tuples
 
@@ -41,7 +42,7 @@ class TestKahnNormalFlows:
     def test_multi_source_dag_enumerate_no_duplicates(self) -> None:
         graph = build_multi_source_dag()
         kahn = KahnTopologicalSort(graph)
-        all_orders = kahn.enumerate_all_topological_orders()
+        all_orders = list(kahn.enumerate_all_topological_orders())
 
         unique_orders = {tuple(o) for o in all_orders}
         assert len(all_orders) == len(unique_orders)
@@ -49,16 +50,16 @@ class TestKahnNormalFlows:
     def test_multi_source_dag_enumerate_all_valid(self) -> None:
         graph = build_multi_source_dag()
         kahn = KahnTopologicalSort(graph)
-        all_orders = kahn.enumerate_all_topological_orders()
+        all_orders = list(kahn.enumerate_all_topological_orders())
 
         for order in all_orders:
             assert is_valid_topological_order(graph, order)
 
     def test_multi_source_dag_full_permutation_count(self) -> None:
         graph = build_multi_source_dag()
-        nodes = graph.get_nodes()
+        nodes = list(get_node_set(graph))
         kahn = KahnTopologicalSort(graph)
-        all_orders = kahn.enumerate_all_topological_orders()
+        all_orders = list(kahn.enumerate_all_topological_orders())
 
         valid_count = 0
         for perm in permutations(nodes):
@@ -104,7 +105,9 @@ class TestKahnNormalFlows:
 
         result = kahn.sort()
         assert result.is_valid is True
-        assert result.order == ["A", "B"]
+        assert is_valid_topological_order(kahn.graph, result.order)
+        assert set(result.order) == {"A", "B"}
+        assert result.order.index("A") < result.order.index("B")
 
     def test_sort_result_properties(self) -> None:
         graph = build_simple_dag()
@@ -115,3 +118,18 @@ class TestKahnNormalFlows:
         assert result.has_cycle is False
         assert result.cycle_nodes == []
         assert len(result.order) == 4
+
+    def test_enumerate_returns_iterator(self) -> None:
+        from collections.abc import Iterator
+
+        graph = build_simple_dag()
+        kahn = KahnTopologicalSort(graph)
+        gen = kahn.enumerate_all_topological_orders()
+
+        assert isinstance(gen, Iterator)
+
+        first = next(gen)
+        assert is_valid_topological_order(graph, first)
+
+        remaining = list(gen)
+        assert len(remaining) == 1

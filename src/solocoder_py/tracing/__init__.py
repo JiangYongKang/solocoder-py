@@ -2,7 +2,6 @@ from .exceptions import (
     CannotCreateChildSpanError,
     InvalidSamplingRateError,
     SpanAlreadyEndedError,
-    SpanNotFoundError,
     SpanNotStartedError,
     TracingError,
 )
@@ -17,6 +16,5 @@ __all__ = [
     "SpanAlreadyEndedError",
     "SpanNotStartedError",
     "InvalidSamplingRateError",
-    "SpanNotFoundError",
     "CannotCreateChildSpanError",
 ]

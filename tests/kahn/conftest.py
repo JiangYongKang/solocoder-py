@@ -44,6 +44,13 @@ def build_discrete_nodes() -> Digraph:
     return graph
 
 
+def build_10_discrete_nodes() -> Digraph:
+    graph = Digraph()
+    for i in range(10):
+        graph.add_node(f"N{i}")
+    return graph
+
+
 def build_simple_cycle() -> Digraph:
     graph = Digraph()
     graph.add_edge("A", "B")
@@ -83,7 +90,15 @@ def build_fully_connected_dag() -> Digraph:
     return graph
 
 
+def get_node_set(graph: Digraph) -> set[str]:
+    return set(graph.get_nodes())
+
+
 def is_valid_topological_order(graph: Digraph, order: List[str]) -> bool:
+    if set(order) != get_node_set(graph):
+        return False
+    if len(order) != graph.node_count:
+        return False
     node_pos = {node: i for i, node in enumerate(order)}
     for edge in graph.get_edges():
         if node_pos[edge.from_node] >= node_pos[edge.to_node]:

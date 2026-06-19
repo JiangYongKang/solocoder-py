@@ -440,3 +440,140 @@ class TestLogLevelEnum:
     def test_level_from_name(self):
         assert LogLevel["DEBUG"] == LogLevel.DEBUG
         assert LogLevel["INFO"] == LogLevel.INFO
+
+
+class TestEnumParameterSupport:
+    def test_set_level_with_enum_debug(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", LogLevel.DEBUG)
+        assert mgr.get_effective_level("app") == LogLevel.DEBUG
+
+    def test_set_level_with_enum_info(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", LogLevel.INFO)
+        assert mgr.get_effective_level("app") == LogLevel.INFO
+
+    def test_set_level_with_enum_warning(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", LogLevel.WARNING)
+        assert mgr.get_effective_level("app") == LogLevel.WARNING
+
+    def test_set_level_with_enum_error(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", LogLevel.ERROR)
+        assert mgr.get_effective_level("app") == LogLevel.ERROR
+
+    def test_set_level_with_enum_critical(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", LogLevel.CRITICAL)
+        assert mgr.get_effective_level("app") == LogLevel.CRITICAL
+
+    def test_set_level_mixed_string_and_enum(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", "DEBUG")
+        mgr.set_level("app.service", LogLevel.WARNING)
+        assert mgr.get_effective_level("app") == LogLevel.DEBUG
+        assert mgr.get_effective_level("app.service") == LogLevel.WARNING
+
+    def test_is_enabled_with_enum(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", LogLevel.INFO)
+        assert mgr.is_enabled("app", LogLevel.DEBUG) is False
+        assert mgr.is_enabled("app", LogLevel.INFO) is True
+        assert mgr.is_enabled("app", LogLevel.WARNING) is True
+
+    def test_is_enabled_with_mixed_string_and_enum(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", "WARNING")
+        assert mgr.is_enabled("app", LogLevel.INFO) is False
+        assert mgr.is_enabled("app", "WARNING") is True
+
+    def test_enum_overwrite_with_string(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", LogLevel.DEBUG)
+        mgr.set_level("app", "ERROR")
+        assert mgr.get_effective_level("app") == LogLevel.ERROR
+
+    def test_string_overwrite_with_enum(self):
+        mgr = LogLevelManager()
+        mgr.set_level("app", "DEBUG")
+        mgr.set_level("app", LogLevel.ERROR)
+        assert mgr.get_effective_level("app") == LogLevel.ERROR
+
+
+class TestNameParameterValidation:
+    def test_set_level_name_none_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="set_level: 'name' must not be None"):
+            mgr.set_level(None, "DEBUG")
+
+    def test_set_level_name_non_string_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="set_level: 'name' must be a string, got int"):
+            mgr.set_level(123, "DEBUG")
+        with pytest.raises(TypeError, match="set_level: 'name' must be a string, got list"):
+            mgr.set_level([], "DEBUG")
+
+    def test_get_effective_level_name_none_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="get_effective_level: 'name' must not be None"):
+            mgr.get_effective_level(None)
+
+    def test_get_effective_level_name_non_string_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="get_effective_level: 'name' must be a string, got int"):
+            mgr.get_effective_level(123)
+
+    def test_is_enabled_name_none_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="is_enabled: 'name' must not be None"):
+            mgr.is_enabled(None, "DEBUG")
+
+    def test_is_enabled_name_non_string_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="is_enabled: 'name' must be a string, got dict"):
+            mgr.is_enabled({}, "DEBUG")
+
+    def test_clear_level_name_none_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="clear_level: 'name' must not be None"):
+            mgr.clear_level(None)
+
+    def test_clear_level_name_non_string_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="clear_level: 'name' must be a string, got bool"):
+            mgr.clear_level(True)
+
+    def test_has_explicit_level_name_none_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="has_explicit_level: 'name' must not be None"):
+            mgr.has_explicit_level(None)
+
+    def test_has_explicit_level_name_non_string_raises_type_error(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="has_explicit_level: 'name' must be a string, got float"):
+            mgr.has_explicit_level(3.14)
+
+
+class TestLevelParameterValidation:
+    def test_set_level_level_non_string_non_enum_raises(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="set_level: 'level' must be a string or LogLevel enum, got int"):
+            mgr.set_level("app", 10)
+        with pytest.raises(TypeError, match="set_level: 'level' must be a string or LogLevel enum, got list"):
+            mgr.set_level("app", ["DEBUG"])
+
+    def test_is_enabled_level_non_string_non_enum_raises(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="is_enabled: 'level' must be a string or LogLevel enum, got int"):
+            mgr.is_enabled("app", 20)
+
+    def test_set_level_none_level_raises(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="set_level: 'level' must be a string or LogLevel enum, got NoneType"):
+            mgr.set_level("app", None)
+
+    def test_is_enabled_none_level_raises(self):
+        mgr = LogLevelManager()
+        with pytest.raises(TypeError, match="is_enabled: 'level' must be a string or LogLevel enum, got NoneType"):
+            mgr.is_enabled("app", None)

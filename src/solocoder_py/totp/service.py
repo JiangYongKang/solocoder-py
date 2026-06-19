@@ -10,7 +10,9 @@ from typing import Optional
 
 from .exceptions import (
     InvalidDriftWindowError,
+    InvalidRecoveryCodeError,
     InvalidSecretError,
+    InvalidTotpCodeError,
     RecoveryCodeConsumedError,
     SecretAlreadyExistsError,
     SecretNotFoundError,
@@ -33,6 +35,14 @@ DEFAULT_DRIFT_WINDOWS = 1
 DEFAULT_RECOVERY_CODE_COUNT = 8
 DEFAULT_RECOVERY_CODE_BYTES = 16
 
+SUPPORTED_ALGORITHMS = {"SHA1", "SHA256", "SHA512"}
+
+_ALGORITHM_MAP = {
+    "SHA1": hashlib.sha1,
+    "SHA256": hashlib.sha256,
+    "SHA512": hashlib.sha512,
+}
+
 
 def _base32_encode(data: bytes) -> str:
     return base64.b32encode(data).decode("ascii").rstrip("=")
@@ -48,9 +58,16 @@ def _base32_decode(encoded: str) -> bytes:
         raise InvalidSecretError(f"Invalid Base32 secret: {e}") from e
 
 
+def _validate_algorithm(algorithm: str) -> None:
+    if algorithm not in SUPPORTED_ALGORITHMS:
+        raise InvalidSecretError(
+            f"Unsupported algorithm {algorithm}. Must be one of: {', '.join(sorted(SUPPORTED_ALGORITHMS))}"
+        )
+
+
 def generate_secret(secret_bytes: int = DEFAULT_SECRET_BYTES) -> str:
-    if secret_bytes < 16:
-        raise InvalidSecretError("Secret must be at least 16 bytes (128 bits)")
+    if secret_bytes < 20:
+        raise InvalidSecretError("Secret must be at least 20 bytes (160 bits)")
     random_bytes = secrets.token_bytes(secret_bytes)
     return _base32_encode(random_bytes)
 
@@ -70,9 +87,11 @@ def _hash_recovery_code(code: str) -> str:
     return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
-def _hotp(key: bytes, counter: int, digits: int = 6) -> str:
+def _hotp(key: bytes, counter: int, digits: int = 6, algorithm: str = DEFAULT_ALGORITHM) -> str:
+    _validate_algorithm(algorithm)
+    hash_func = _ALGORITHM_MAP[algorithm]
     counter_bytes = struct.pack(">Q", counter)
-    hs = hmac.new(key, counter_bytes, hashlib.sha1).digest()
+    hs = hmac.new(key, counter_bytes, hash_func).digest()
     offset = hs[-1] & 0x0F
     binary = struct.unpack(">I", hs[offset : offset + 4])[0] & 0x7FFFFFFF
     otp = binary % (10**digits)
@@ -89,11 +108,13 @@ def compute_totp(
     secret: str,
     digits: int = DEFAULT_DIGITS,
     period: int = DEFAULT_PERIOD,
+    algorithm: str = DEFAULT_ALGORITHM,
     timestamp: Optional[int] = None,
 ) -> str:
+    _validate_algorithm(algorithm)
     key = _base32_decode(secret)
     counter = _get_counter(period, timestamp)
-    return _hotp(key, counter, digits)
+    return _hotp(key, counter, digits, algorithm)
 
 
 class TotpService:
@@ -103,14 +124,16 @@ class TotpService:
         secret_bytes: int = DEFAULT_SECRET_BYTES,
         digits: int = DEFAULT_DIGITS,
         period: int = DEFAULT_PERIOD,
+        algorithm: str = DEFAULT_ALGORITHM,
         drift_windows: int = DEFAULT_DRIFT_WINDOWS,
         recovery_code_count: int = DEFAULT_RECOVERY_CODE_COUNT,
         store: Optional[InMemoryTotpStore] = None,
     ) -> None:
+        _validate_algorithm(algorithm)
         if drift_windows < 0:
             raise InvalidDriftWindowError("Drift windows must be non-negative")
-        if secret_bytes < 16:
-            raise InvalidSecretError("Secret must be at least 16 bytes (128 bits)")
+        if secret_bytes < 20:
+            raise InvalidSecretError("Secret must be at least 20 bytes (160 bits)")
         if digits < 6 or digits > 8:
             raise ValueError("Digits must be between 6 and 8")
         if period < 1:
@@ -122,6 +145,7 @@ class TotpService:
         self.secret_bytes = secret_bytes
         self.digits = digits
         self.period = period
+        self.algorithm = algorithm
         self.drift_windows = drift_windows
         self.recovery_code_count = recovery_code_count
         self.store = store if store is not None else InMemoryTotpStore()
@@ -141,7 +165,7 @@ class TotpService:
             issuer=self.issuer,
             digits=self.digits,
             period=self.period,
-            algorithm=DEFAULT_ALGORITHM,
+            algorithm=self.algorithm,
         )
 
         recovery_codes_plain = generate_recovery_codes(self.recovery_code_count)
@@ -200,10 +224,10 @@ class TotpService:
             counter = current_counter + offset
             if counter < 0:
                 continue
-            expected_code = _hotp(key, counter, secret.digits)
+            expected_code = _hotp(key, counter, secret.digits, secret.algorithm)
             if secrets.compare_digest(expected_code, code):
                 if record.is_code_used(counter, code):
-                    return VerificationResult(success=False)
+                    raise InvalidTotpCodeError("TOTP code has already been used in this time window")
                 record.mark_code_used(counter, code)
                 return VerificationResult(
                     success=True,
@@ -211,7 +235,7 @@ class TotpService:
                     recovery_codes_remaining=self._count_remaining_recovery_codes(record),
                 )
 
-        return VerificationResult(success=False)
+        raise InvalidTotpCodeError("Invalid TOTP code or code outside drift tolerance window")
 
     def verify_recovery_code(
         self,
@@ -236,7 +260,7 @@ class TotpService:
                     recovery_codes_remaining=self._count_remaining_recovery_codes(record),
                 )
 
-        return VerificationResult(success=False)
+        raise InvalidRecoveryCodeError("Invalid recovery code")
 
     def regenerate_recovery_codes(self, user_id: str) -> list[str]:
         record = self.store.get_record(user_id)

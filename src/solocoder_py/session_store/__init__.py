@@ -1,5 +1,6 @@
 from .exceptions import (
     InvalidSessionConfigError,
+    InvalidSessionIdError,
     InvalidUserIdError,
     SessionExpiredError,
     SessionForciblyLoggedOutError,
@@ -15,11 +16,15 @@ from .models import (
     SessionCreateConfig,
     SessionInfo,
     generate_session_id,
+    validate_session_config,
+    validate_session_id,
+    validate_user_id,
 )
 from .store import SessionStore
 
 __all__ = [
     "InvalidSessionConfigError",
+    "InvalidSessionIdError",
     "InvalidUserIdError",
     "SessionExpiredError",
     "SessionForciblyLoggedOutError",
@@ -33,5 +38,8 @@ __all__ = [
     "SessionCreateConfig",
     "SessionInfo",
     "generate_session_id",
+    "validate_session_config",
+    "validate_session_id",
+    "validate_user_id",
     "SessionStore",
 ]

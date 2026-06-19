@@ -8,7 +8,7 @@ from .exceptions import (
     MetricTypeError,
 )
 from .exporter import PrometheusExporter, export_to_prometheus
-from .models import Counter, FrozenLabels, Gauge, Histogram, Labels
+from .models import Counter, FrozenLabels, Gauge, Histogram
 from .registry import MetricFamily, MetricsRegistry
 
 __all__ = [
@@ -22,7 +22,6 @@ __all__ = [
     "Counter",
     "Gauge",
     "Histogram",
-    "Labels",
     "FrozenLabels",
     "MetricFamily",
     "MetricsRegistry",

@@ -47,8 +47,8 @@
 - `cumulative_counts()`：各桶累计样本数（含 +Inf 桶）
 - `quantile(q)`：计算分位数，q ∈ [0, 1]
 
-### Labels / FrozenLabels
-标签封装类。`FrozenLabels` 是不可变的，用于作为字典键。
+### FrozenLabels
+不可变标签封装类，用于作为字典键及标签查询。
 - `matches(query)`：判断是否匹配给定标签子集
 - `has_keys(keys)`：判断是否包含所有给定标签名
 
@@ -70,7 +70,7 @@
 ### Histogram
 - 用途：统计观察值分布，如请求延迟、响应体大小
 - 特性：记录样本落入的桶区间，累计计数；可计算分位数
-- 桶边界：创建时指定，必须为正数且互不相同；桶区间为左闭右开 `[lower, upper)`
+- 桶边界：创建时指定，必须为正数且互不相同；桶采用上边界闭合语义 `(-Inf, upper]`（即 Prometheus `le` 语义：less than or equal），边界值归属到其所在上边界对应的桶，超出最大边界的样本归入 +Inf 桶
 - 不允许的操作：`inc()`、`dec()`、`set()`
 
 ## Prometheus 导出格式

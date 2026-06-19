@@ -37,6 +37,7 @@ class ProbeResult:
     healthy: bool
     error: Optional[str] = None
     cascaded_from: Optional[str] = None
+    root_cause: Optional[str] = None
 
 
 @dataclass
@@ -76,11 +77,13 @@ class AggregatedHealth:
                         "healthy": ch.readiness.healthy,
                         "error": ch.readiness.error,
                         "cascaded_from": ch.readiness.cascaded_from,
+                        "root_cause": ch.readiness.root_cause,
                     },
                     "liveness": {
                         "healthy": ch.liveness.healthy,
                         "error": ch.liveness.error,
                         "cascaded_from": ch.liveness.cascaded_from,
+                        "root_cause": ch.liveness.root_cause,
                     },
                     "dependencies": ch.dependencies,
                 }

@@ -1,0 +1,7 @@
+产物不满意：
+1. prompt-2.txt 要求修复 log_level 日志级别控制器的 LogLevel 枚举兼容和 name 参数校验问题，但 task165 对应的是 login_rate 登录限流包。会话中模型仅操作了 log_level 目录下文件，所有工具调用均指向 log_level 路径，对 login_rate 下的 engine.py 等核心文件未执行任何读取。从 login_rate 包视角看本轮未产出有效代码变更，提示词需求与目标任务包之间存在根本性错配。
+2. prompt-2.txt 第三条要求重新运行 tests/log_level/ 测试并确保全部通过，但 task165 的任务包是 login_rate，提示词指定的测试目录与任务包不一致。模型按照提示词执行了 tests/log_level/ 的测试验证并报告 90 个测试通过，但始终没有运行 tests/login_rate/ 的测试套件来确认当前任务包的代码状态。在缺陷修复任务中确认目标包的测试基线是否正常是完成修复的前置条件，模型省略了这一关键验证步骤。
+
+过程不满意：
+1. 模型在收到提示词后第一步就调用 todo_write 创建了 5 项子任务计划，然后才用 view_files 打开代码文件开始分析。这种先规划后分析的顺序违反了标注规范中 "不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划" 的原则，虽然模型后续根据分析结果更新了计划，但初始计划缺乏对代码事实的了解，存在计划方向错误的风险。
+2. 模型在编写 test_set_level_level_non_string_non_enum_raises 测试用例时连续四轮 edit_file_search_replace 修改，每次都推翻上一轮方案：先尝试用整数构造无效枚举值测试 ValueError 分支，发现 IntEnum 不允许后改为创建 FakeLogLevel 类，最终又简化为仅测试 TypeError。同一处测试反复推翻重写属于试错式编写，应先分析 _resolve_level 函数代码分支再一次性设计测试。

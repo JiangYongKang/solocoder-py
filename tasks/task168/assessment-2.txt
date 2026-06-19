@@ -1,0 +1,5 @@
+产物不满意：
+1. prompt-2.txt 要求清理未使用的导入和修正随机字符串参数命名问题，但 session_store/models.py 中 import secrets 在 generate_session_id 被实际调用，import time 在 Clock.now 被实际调用，不存在未使用导入；generate_session_id 使用 token_hex 也无参数命名歧义。模型对 session_store 的变更（抽取三个校验函数、新增 InvalidSessionIdError、引入墓碑机制、重构注销流程）与提示词三条要求完全无关，将问题修复变成了功能扩展和代码重构。
+2. store.py 的 get_session 和 update_session 方法对空字符串和非字符串 session_id 的校验逻辑与 models.py 新增的 validate_session_id 函数完全相同（均检查 not session_id or not isinstance），但前者抛出 SessionNotFoundError 后者抛出 InvalidSessionIdError。同一校验条件在不同调用路径产生两种不同异常类型，API 行为不一致，调用方需要根据场景分别处理两种异常。
+过程不满意：
+1. 模型的思考过程全文只涉及 oauth2 包的源文件和测试文件，未读取任何一个 session_store 包下的文件。然而代码变更覆盖了 session_store 下的四个文件（store.py 新增墓碑机制和提取内部辅助方法、__init__.py 扩展导出列表、exceptions.py 新增 InvalidSessionIdError、models.py 新增三个校验函数），变更量近百行。模型在 session-cot-2.md 中没有规划、分析或记录 session_store 的任何修改，最终总结也只声称完成了 oauth2 的修复。这是典型的幻觉与虚假完成，模型对其在 session_store 包下所做的大量变更完全没有过程可见性，标注人员无法从思考轨迹中追踪这些改动的决策依据和修改动机。

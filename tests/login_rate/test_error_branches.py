@@ -92,7 +92,7 @@ class TestInvalidAccountRejection:
         clock = ManualClock(start_time=0.0)
         manager = LoginRateManager(clock=clock)
 
-        with pytest.raises(InvalidAccountError, match="Invalid account"):
+        with pytest.raises(InvalidAccountError, match="无效的账户名"):
             manager.attempt_login("", "192.168.1.10", lambda: True)
 
     def test_none_account_rejected(self):
@@ -128,7 +128,7 @@ class TestInvalidIPRejection:
         clock = ManualClock(start_time=0.0)
         manager = LoginRateManager(clock=clock)
 
-        with pytest.raises(InvalidIPError, match="Invalid IP address"):
+        with pytest.raises(InvalidIPError, match="无效的 IP 地址"):
             manager.attempt_login("user1", "", lambda: True)
 
     def test_malformed_ip_rejected(self):
@@ -160,14 +160,14 @@ class TestNonexistentCounterAccess:
         clock = ManualClock(start_time=0.0)
         manager = LoginRateManager(clock=clock)
 
-        with pytest.raises(NoSuchAccountCounterError, match="No counter exists for account"):
+        with pytest.raises(NoSuchAccountCounterError, match="不存在该账户的计数器"):
             manager.get_account_failure_count("ghost_user")
 
     def test_get_nonexistent_subnet_counter_raises(self):
         clock = ManualClock(start_time=0.0)
         manager = LoginRateManager(clock=clock)
 
-        with pytest.raises(NoSuchSubnetCounterError, match="No counter exists for subnet"):
+        with pytest.raises(NoSuchSubnetCounterError, match="不存在该子网的计数器"):
             manager.get_subnet_failure_count("10.0.0.0/24")
 
     def test_has_account_counter_check(self):

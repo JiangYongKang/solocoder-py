@@ -67,6 +67,7 @@ class TestCheckFunctionExceptionHandling:
         assert not result.components["api"].is_ready()
         assert "ConnectionError" in result.components["db"].readiness.error
         assert result.components["api"].readiness.cascaded_from == "db"
+        assert result.components["api"].readiness.root_cause == "db"
 
     def test_multiple_exceptions_handled_independently(self, aggregator: HealthCheckAggregator):
         def check1():

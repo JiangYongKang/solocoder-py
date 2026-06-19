@@ -31,3 +31,7 @@ class InvalidSessionConfigError(SessionStoreError):
 
 class InvalidUserIdError(SessionStoreError):
     pass
+
+
+class InvalidSessionIdError(SessionStoreError):
+    pass

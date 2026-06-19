@@ -13,7 +13,6 @@ from .exceptions import (
     CaptchaRequiredError,
     InvalidAccountError,
     InvalidIPError,
-    LoginRateError,
     NoSuchAccountCounterError,
     NoSuchSubnetCounterError,
 )
@@ -179,12 +178,7 @@ class LoginRateManager:
                         error=BackoffActiveError(remaining_backoff),
                     )
 
-                try:
-                    password_ok = password_verifier()
-                except Exception as e:
-                    if isinstance(e, LoginRateError):
-                        raise
-                    raise
+                password_ok = password_verifier()
 
                 if password_ok:
                     account_state.reset()
@@ -241,7 +235,7 @@ class LoginRateManager:
         _validate_account(account)
         with self._struct_lock:
             if account not in self._state.account_states:
-                return False
+                raise NoSuchAccountCounterError(account)
             return self._state.account_states[account].is_locked
 
     def reset_account(self, account: str) -> None:

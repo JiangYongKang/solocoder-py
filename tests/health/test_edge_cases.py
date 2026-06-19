@@ -227,6 +227,7 @@ class TestDependencyEdgeCases:
         assert not result.components["dep2"].is_ready()
         assert not result.components["main"].is_ready()
         assert result.components["main"].readiness.cascaded_from == "dep2"
+        assert result.components["main"].readiness.root_cause == "dep2"
 
     def test_deep_dependency_chain_healthy(self, aggregator: HealthCheckAggregator):
         aggregator.register_component(
@@ -289,8 +290,15 @@ class TestDependencyEdgeCases:
         assert not result.components["right"].is_ready()
         assert not result.components["top"].is_ready()
         assert result.components["left"].readiness.cascaded_from == "base"
+        assert result.components["left"].readiness.root_cause == "base"
         assert result.components["right"].readiness.cascaded_from == "base"
+        assert result.components["right"].readiness.root_cause == "base"
         assert result.components["top"].readiness.cascaded_from == "left"
+        assert result.components["top"].readiness.root_cause == "base"
+        top_reason = [
+            dc.reason for dc in result.degraded_components if dc.component_id == "top"
+        ][0]
+        assert "base" in top_reason
 
 
 class TestComponentConfigValidation:

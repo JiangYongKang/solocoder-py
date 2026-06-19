@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from .clock import Clock, RealClock
 from .exceptions import (
+    AlertRuleError,
     MetricNotFoundError,
     NestingDepthExceededError,
     RuleNotFoundError,
@@ -51,7 +52,18 @@ class AlertRuleEvaluator:
     def evaluate(self, metrics: dict[str, Any]) -> list[EvaluationResult]:
         results: list[EvaluationResult] = []
         for rule in self._rules.values():
-            results.append(self._evaluate_rule(rule, metrics))
+            try:
+                results.append(self._evaluate_rule(rule, metrics))
+            except AlertRuleError as exc:
+                results.append(
+                    EvaluationResult(
+                        rule_id=rule.rule_id,
+                        triggered=False,
+                        alert_fired=False,
+                        silenced=False,
+                        error=exc,
+                    )
+                )
         return results
 
     def evaluate_rule(
@@ -69,8 +81,17 @@ class AlertRuleEvaluator:
         elapsed = self._clock.now() - last_triggered_at
         return elapsed < cooldown_seconds
 
-    def get_silenced_rules(self) -> list[str]:
-        return [rid for rid in self._rules if self.is_silenced(rid)]
+    def get_silenced_rules(self, metrics: dict[str, Any]) -> list[str]:
+        silenced: list[str] = []
+        for rid, rule in self._rules.items():
+            if not self.is_silenced(rid):
+                continue
+            try:
+                if self._evaluate_group(rule.root_group, metrics):
+                    silenced.append(rid)
+            except AlertRuleError:
+                pass
+        return silenced
 
     def clear_cooldown(self, rule_id: str) -> None:
         if rule_id not in self._rules:
