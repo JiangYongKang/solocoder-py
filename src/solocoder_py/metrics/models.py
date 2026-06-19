@@ -305,7 +305,10 @@ class Histogram:
                         lower = self._buckets[i - 1] if i > 0 else 0.0
                         upper = self._buckets[i]
                     else:
-                        lower = self._buckets[-1]
+                        if self._min > self._buckets[-1]:
+                            lower = self._min
+                        else:
+                            lower = self._buckets[-1]
                         upper = self._max
                     prev_cumulative = cumulative - self._bucket_counts[i]
                     offset = target_rank - prev_cumulative

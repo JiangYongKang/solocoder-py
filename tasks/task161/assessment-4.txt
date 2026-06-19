@@ -1,0 +1,9 @@
+产物不满意：
+1. 本次修改将 `tracemalloc.reset_peak()` 从 `enumerate_all_topological_orders()` 调用之后移至调用之前，使峰值测量窗口覆盖了枚举方法的完整执行，满足提示词要求。全部 39 个测试通过，未发现产物缺陷。
+2. 新增的 `post_create_peak` 断言阈值为 5MB。对于 10 个离散节点场景，惰性实现仅需约 10-50KB 内存（in_degree 字典、nodes_list 列表和生成器状态），非惰性预物化 3628800 个排列列表则需要 500MB 以上，5MB 的阈值留有充分余量，能有效区分两种实现。
+3. 模型设计了两道防线：`post_create_peak` 捕获"调用时即预计算所有结果"的非惰性行为，`growth_ratio` 捕获"迭代过程中逐步累积存储"的非惰性行为，互补覆盖了两种典型预物化模式，策略合理。
+4. `batch_1_memory_peak` 和 `batch_2_memory_peak` 基于同一次 `reset_peak()` 后的累计峰值，`growth_ratio` 比较从 reset 到 50000 次迭代的峰值相较于到 5000 次的增长率。惰性实现该比率接近 1.0，阈值 3.0 容错充分，不会误判。
+5. `tracemalloc` 生命周期管理存在小瑕疵：若断言失败导致测试提前退出，`tracemalloc.stop()` 不会被调用，可能影响后续测试的 tracemalloc 状态，建议用 try/finally 包裹清理逻辑。
+
+过程不满意：
+1. 模型思考过程简洁高效，从诊断到修复一步到位，未出现试错式调试或反复推翻。但模型仅描述了修改方案（将 reset_peak 移到调用之前），未提及会先阅读 `graph.py` 中 `enumerate_all_topological_orders` 和 `_backtrack_gen` 的源码来确认惰性实现状态，就无法评估 sort 内部临时分配等边界条件是否影响 5MB 阈值的合理性。正确做法是先读源码确认实现特征再修改测试。

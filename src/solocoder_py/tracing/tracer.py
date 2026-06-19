@@ -34,6 +34,7 @@ class Tracer:
         self._rng = random.Random()
         self._active_spans: dict[str, Span] = {}
         self._completed_spans: dict[str, list[Span]] = {}
+        self._ended_spans: dict[str, Span] = {}
         self._pid = os.getpid()
 
     @classmethod
@@ -136,14 +137,13 @@ class Tracer:
                 )
 
             if parent_span is None:
-                for spans in self._completed_spans.values():
-                    for span in spans:
-                        if span.span_id == context.span_id:
-                            from .exceptions import CannotCreateChildSpanError
+                ended_parent = self._ended_spans.get(context.span_id)
+                if ended_parent is not None:
+                    from .exceptions import CannotCreateChildSpanError
 
-                            raise CannotCreateChildSpanError(
-                                f"cannot create child span for already ended span '{span.name}'"
-                            )
+                    raise CannotCreateChildSpanError(
+                        f"cannot create child span for already ended span '{ended_parent.name}'"
+                    )
 
         span_id = self._generate_new_span_id()
 
@@ -167,6 +167,8 @@ class Tracer:
             if span.span_id in self._active_spans:
                 del self._active_spans[span.span_id]
 
+            self._ended_spans[span.span_id] = span
+
             if span.sampled:
                 if span.trace_id not in self._completed_spans:
                     self._completed_spans[span.trace_id] = []
@@ -182,11 +184,7 @@ class Tracer:
             if span is not None:
                 return span
 
-            for spans in self._completed_spans.values():
-                for s in spans:
-                    if s.span_id == span_id:
-                        return s
-        return None
+            return self._ended_spans.get(span_id)
 
     def get_trace_spans(self, trace_id: str) -> list[Span]:
         with self._lock:
@@ -210,6 +208,7 @@ class Tracer:
         with self._lock:
             self._active_spans.clear()
             self._completed_spans.clear()
+            self._ended_spans.clear()
             self._trace_id_counter = 0
             self._span_id_counter = 0
 

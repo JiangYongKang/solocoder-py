@@ -207,6 +207,7 @@ assert len(result.degraded_components) == 2
 assert result.degraded_components[0].component_id == "database"
 assert result.degraded_components[1].component_id == "api"
 assert result.components["api"].readiness.cascaded_from == "database"
+assert result.components["api"].readiness.root_cause == "database"  # 两层级联中 root_cause 与 cascaded_from 相同
 ```
 
 ### 三层依赖链的级联传播

@@ -1,0 +1,4 @@
+当前 tracing 分布式追踪的 start_span_from_context 父 Span 校验仍存在一个覆盖缺口需要修复：
+1. end_span 方法在处理未采样 Span 时仅将其从 _active_spans 中删除，不加入 _completed_spans，导致未采样已结束 Span 从 Tracer 内部跟踪中完全消失。当用这类已结束但未采样的父 Span 的 TraceContext 调用 start_span_from_context 时，_active_spans 和 _completed_spans 中均找不到该 Span，校验直接通过并允许为其创建子 Span。需要确保无论采样与否，所有已结束 Span 的父 Span 校验都能被正确执行。
+2. 现有测试用例全部使用采样率 1.0 的 tracer fixture，缺少对未采样已结束父 Span 的 context 传播场景覆盖。需要补充测试用例验证采样率为 0 时，已结束的父 Span 通过 start_span_from_context 创建子 Span 的行为。
+3. 重新运行 `poetry run pytest tests/tracing/ -q`，需要让所有测试通过。

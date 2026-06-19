@@ -1,0 +1,3 @@
+当前 health 健康检查聚合器的 README 文档仍存在一处遗漏需要补充：
+1. README.md 中级联依赖检测的两层示例（database 依赖 api 场景）只对 api 组件的 cascaded_from 做了断言，没有同步补充 root_cause 字段的验证断言。三层依赖链示例已正确展示了 root_cause 的用法，但两层示例的遗漏会让开发者误以为 root_cause 只在深度依赖链中才有意义。需要在两层示例中也加入 root_cause 的验证，确保文档中的每一个级联场景示例都完整展示该字段。
+2. 重新运行 `poetry run pytest tests/health/ -q`，需要让所有测试通过。

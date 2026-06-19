@@ -202,10 +202,14 @@ class TestKahnEdgeCases:
 
         graph = build_10_discrete_nodes()
         kahn = KahnTopologicalSort(graph)
-        gen = kahn.enumerate_all_topological_orders()
 
         gc.collect()
         tracemalloc.reset_peak()
+
+        gen = kahn.enumerate_all_topological_orders()
+
+        gc.collect()
+        post_create_peak = tracemalloc.get_traced_memory()[1]
 
         batch_1_memory_peak = None
         batch_2_memory_peak = None
@@ -225,6 +229,12 @@ class TestKahnEdgeCases:
         assert count == 50000
         assert batch_1_memory_peak is not None
         assert batch_2_memory_peak is not None
+
+        mb = 1024 * 1024
+        assert post_create_peak < 5 * mb, (
+            f"enumerate_all_topological_orders() allocated {post_create_peak / mb:.1f} MB "
+            f"before any iteration — non-lazy implementation suspected"
+        )
 
         growth_ratio = batch_2_memory_peak / max(batch_1_memory_peak, 1)
         assert growth_ratio < 3.0

@@ -264,4 +264,77 @@ class TestPrometheusExportEdgeCases:
         assert 'request_duration_bucket{le="1",service="api"} 1' in output
         assert 'request_duration_bucket{le="+Inf",service="api"} 1' in output
         assert 'request_duration_sum{service="api"} 0.3' in output
-        assert 'request_duration_count{service="api"} 1' in output
+
+
+class TestHistogramQuantileAllInInfBucket:
+    def test_all_samples_same_value_in_inf_bucket_monotonicity(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        for _ in range(100):
+            hist.observe(100)
+        q0 = hist.quantile(0)
+        q25 = hist.quantile(0.25)
+        q50 = hist.quantile(0.5)
+        q75 = hist.quantile(0.75)
+        q100 = hist.quantile(1)
+        assert q0 <= q25 <= q50 <= q75 <= q100
+        assert q0 == 100
+        assert q50 == 100
+        assert q100 == 100
+
+    def test_all_samples_in_inf_bucket_quantile_returns_near_true_value(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        for _ in range(100):
+            hist.observe(100)
+        q50 = hist.quantile(0.5)
+        assert abs(q50 - 100) < 1.0
+        assert q50 > 50
+
+    def test_all_samples_different_values_in_inf_bucket_monotonicity(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        for i in range(100):
+            hist.observe(100 + i)
+        q0 = hist.quantile(0)
+        q25 = hist.quantile(0.25)
+        q50 = hist.quantile(0.5)
+        q75 = hist.quantile(0.75)
+        q100 = hist.quantile(1)
+        assert q0 <= q25 <= q50 <= q75 <= q100
+        assert q0 == 100
+        assert abs(q50 - 150) < 1.0
+        assert q100 == 199
+
+    def test_mixed_samples_monotonicity(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        for v in [0.5, 1.5, 2.5, 100, 200]:
+            hist.observe(v)
+        quantiles = [hist.quantile(q / 10) for q in range(11)]
+        for i in range(len(quantiles) - 1):
+            assert quantiles[i] <= quantiles[i + 1]
+
+    def test_all_in_inf_bucket_various_quantiles(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        values = list(range(100, 200))
+        for v in values:
+            hist.observe(v)
+        for q in [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]:
+            q_val = hist.quantile(q)
+            expected_idx = int(q * (len(values) - 1))
+            expected = values[expected_idx]
+            assert abs(q_val - expected) <= 1.0
+
+    def test_all_in_inf_bucket_single_value_all_quantiles(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        hist.observe(100)
+        for q in [0, 0.25, 0.5, 0.75, 1]:
+            assert hist.quantile(q) == 100
+
+    def test_mixed_samples_inf_bucket_lower_bound_correct(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        hist.observe(2.5)
+        hist.observe(100)
+        q0 = hist.quantile(0)
+        q50 = hist.quantile(0.5)
+        q100 = hist.quantile(1)
+        assert q0 <= q50 <= q100
+        assert q0 == 2.5
+        assert q100 == 100

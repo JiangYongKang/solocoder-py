@@ -193,6 +193,80 @@ class TestCannotCreateChildSpanError:
         with pytest.raises(CannotCreateChildSpanError, match="span2"):
             tracer.start_span_from_context("child-of-span2", context)
 
+    def test_create_child_from_context_for_unsampled_ended_parent_raises(self, tracer_no_sampling):
+        parent = tracer_no_sampling.start_span("parent")
+        assert parent.sampled is False
+        context = parent.context
+        tracer_no_sampling.end_span(parent)
+
+        with pytest.raises(CannotCreateChildSpanError, match="already ended span"):
+            tracer_no_sampling.start_span_from_context("child", context)
+
+    def test_create_child_from_context_for_unsampled_active_parent_succeeds(self, tracer_no_sampling):
+        parent = tracer_no_sampling.start_span("parent")
+        assert parent.sampled is False
+        context = parent.context
+
+        child = tracer_no_sampling.start_span_from_context("child", context)
+        assert child.parent_span_id == parent.span_id
+        assert child.trace_id == parent.trace_id
+        assert child.sampled is False
+
+        tracer_no_sampling.end_span(child)
+        tracer_no_sampling.end_span(parent)
+
+    def test_unsampled_ended_span_not_in_completed_but_in_ended(self, tracer_no_sampling):
+        span = tracer_no_sampling.start_span("test")
+        tracer_no_sampling.end_span(span)
+
+        assert tracer_no_sampling.completed_trace_count == 0
+        assert tracer_no_sampling.get_trace_spans(span.trace_id) == []
+        assert tracer_no_sampling.get_span(span.span_id) is span
+
+    def test_unsampled_spans_tracked_in_ended_spans(self, tracer_no_sampling):
+        for i in range(10):
+            span = tracer_no_sampling.start_span(f"span-{i}")
+            tracer_no_sampling.end_span(span)
+
+            found = tracer_no_sampling.get_span(span.span_id)
+            assert found is not None
+            assert found.sampled is False
+
+        assert tracer_no_sampling.completed_trace_count == 0
+
+    def test_clear_also_clears_ended_spans(self, tracer_no_sampling):
+        span = tracer_no_sampling.start_span("test")
+        tracer_no_sampling.end_span(span)
+
+        assert tracer_no_sampling.get_span(span.span_id) is span
+
+        tracer_no_sampling.clear()
+
+        assert tracer_no_sampling.get_span(span.span_id) is None
+        assert tracer_no_sampling.active_span_count == 0
+        assert tracer_no_sampling.completed_trace_count == 0
+
+    def test_mixed_sampling_ended_spans_all_tracked(self, tracer_half_sampling):
+        sampled_ended = []
+        unsampled_ended = []
+
+        for i in range(50):
+            span = tracer_half_sampling.start_span(f"span-{i}")
+            tracer_half_sampling.end_span(span)
+
+            found = tracer_half_sampling.get_span(span.span_id)
+            assert found is span
+
+            if span.sampled:
+                sampled_ended.append(span)
+            else:
+                unsampled_ended.append(span)
+
+        assert len(sampled_ended) + len(unsampled_ended) == 50
+        assert len(unsampled_ended) > 0
+        assert len(sampled_ended) > 0
+        assert tracer_half_sampling.completed_trace_count == len(sampled_ended)
+
 
 class TestSpanNotStartedError:
     def test_query_duration_on_unended_span_raises(self, tracer):

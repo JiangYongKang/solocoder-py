@@ -1,0 +1,3 @@
+当前 Kahn 算法拓扑排序的惰性枚举内存测试仍存在问题需要修复：
+1. test_10_discrete_nodes_enumerate_lazy_memory 测试中的 `tracemalloc.reset_peak()` 调用放在了 `enumerate_all_topological_orders()` 执行之后。如果该方法内部预先物化了全量结果再包装为迭代器返回，那部分内存分配发生在 reset_peak 之前，不会被计入后续的峰值比较。需要确保峰值测量的时间窗口能覆盖到枚举方法的执行过程，使测试能真正区分惰性与非惰性实现。
+2. 重新运行 `poetry run pytest tests/kahn/ -q`，需要让所有测试通过。
