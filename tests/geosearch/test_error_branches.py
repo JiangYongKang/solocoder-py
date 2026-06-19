@@ -53,7 +53,7 @@ class TestInvalidLatitude:
         with pytest.raises(InvalidLatitudeError):
             GeoPoint(math.inf, 0.0)
 
-    def test_engine_search_validates_coordinates_despite_geopoint_construction(self, beijing_center):
+    def test_engine_search_validates_coordinates_despite_geopoint_construction(self):
         class MockInvalidLatGeoPoint:
             @property
             def latitude(self):

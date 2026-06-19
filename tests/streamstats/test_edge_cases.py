@@ -290,7 +290,7 @@ class TestExtremeBatchRatioMerge:
         merged = large_s.copy()
         merged.merge(small_s)
 
-        _assert_moments_close(merged, exact, m2_rtol=1e-13, m3_rtol=1e-9, m4_rtol=1e-12)
+        _assert_moments_close(merged, exact, m2_rtol=1e-13, m3_rtol=1e-12, m4_rtol=1e-12)
 
     def test_100k_to_2_symmetric_outliers(self):
         mpmath = pytest.importorskip("mpmath")
@@ -310,7 +310,7 @@ class TestExtremeBatchRatioMerge:
         merged = large_s.copy()
         merged.merge(small_s)
 
-        _assert_moments_close(merged, exact, m2_rtol=1e-13, m3_rtol=1e-9, m4_rtol=1e-12)
+        _assert_moments_close(merged, exact, m2_rtol=1e-13, m3_rtol=1e-12, m4_rtol=1e-12)
 
     def test_100k_to_1_extreme_delta(self):
         mpmath = pytest.importorskip("mpmath")
@@ -330,7 +330,7 @@ class TestExtremeBatchRatioMerge:
         merged = large_s.copy()
         merged.merge(small_s)
 
-        _assert_moments_close(merged, exact, m2_rtol=1e-13, m3_rtol=1e-9, m4_rtol=1e-12)
+        _assert_moments_close(merged, exact, m2_rtol=1e-13, m3_rtol=1e-12, m4_rtol=1e-12)
 
     def test_1M_to_1_extreme_delta(self):
         mpmath = pytest.importorskip("mpmath")

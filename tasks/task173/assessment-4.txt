@@ -1,0 +1,7 @@
+﻿产物不满意：
+1. test_get_delta_result_single_timestamp 测试在首版编写中错误断言 get_delta_result 对单个时间戳返回 None，运行 pytest 后发现断言失败才修正为断言返回有效 DeltaResult。从 delta.py 源码可见 compute_deltas 函数对长度为 1 的时间戳列表明确返回 base_timestamp 设为时间戳值的 DeltaResult，而非 None。模型在编写该测试前未查阅源码行为，凭边界直觉假设空或单元素场景应返回 None，导致测试经历了一轮不必要的编写失败修正循环。修正后的测试正确覆盖了单时间戳场景下 base_timestamp 正确设置、first_delta 为 None、差分列表为空的完整行为，产物无遗留缺陷。
+2. 新增的四个 value_count 损坏头部测试（value_count 分别为 0、1、2 搭配 simple8b_length 为 8 或 64）正确使用了 struct.pack 构造符合 HEADER_FORMAT 的 24 字节二进制头部，并在末尾追加与 simple8b_length 等长的哑数据以避开 _parse_header 中的总长度检查。每个测试的 pytest.raises match 模式与 decompressor.py 中抛出的 CorruptedDataError 错误消息模板一致，执行流能准确命中 value_count 不超过 2 且 simple8b_length 不为 0 的校验分支。测试构造与业务逻辑匹配，直接验证了提示词要求覆盖的头部字段损坏组合，产物正确无误。
+
+过程不满意：
+1. 模型在编写 test_get_delta_result_single_timestamp 时未先阅读 delta.py 中 compute_deltas 的源码实现和 compressor.py 中 get_delta_result 方法的逻辑，而是凭主观假设编写了错误断言。虽然模型通过运行 pytest 发现了失败并修正了测试，但这一行为属于先编码后验证的试错模式。正确做法是在编写测试前先阅读被测方法及其依赖函数的源码，明确实际行为后再设计断言，避免不必要的编写-失败-修正循环。
+2. 模型在审视 compressor.py 和 decompressor.py 后直接创建 TodoList 并开始添加测试代码，但未先阅读 delta.py 中的 compute_deltas 函数源码来理解边界输入的实际返回值。这导致对单时间戳场景的错误假设未能在一开始就被发现。正确做法是在规划阶段全面阅读被测代码链——包括 get_delta_result 方法调用链下游的 compute_deltas 函数——确保对接口契约的理解与源码一致后再编写测试。此外模型运行 pytest 的命令参数中仍出现 undefined 尾部字符串，与第三轮标注中指出的工具参数构造问题相同，表明该工具使用不稳定性在多轮对话中持续存在。

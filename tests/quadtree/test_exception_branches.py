@@ -218,15 +218,15 @@ class TestOutOfBoundsErrorMessage:
         assert "110" in error_msg
 
     def test_partial_outside_rectangle_error_shows_global_boundary(self):
-        boundary = Rectangle(x=0, y=0, width=100, height=100)
+        boundary = Rectangle(x=0, y=0, width=150, height=150)
         qt = Quadtree(boundary, max_capacity=4)
 
         with pytest.raises(OutOfBoundsError) as exc_info:
-            qt.insert(Rectangle(x=50, y=50, width=100, height=100))
+            qt.insert(Rectangle(x=80, y=80, width=100, height=100))
 
         error_msg = str(exc_info.value)
         assert "quadtree boundary" in error_msg
-        assert "100" in error_msg
+        assert "150" in error_msg
 
 
 class TestBoundaryConsistency:

@@ -1,0 +1,3 @@
+在当前项目点在多边形内判定引擎的实现中，仍存在以下问题需要修复：
+
+1. Polygon 类中的 winding_order 属性以及 is_counterclockwise、is_clockwise、reverse 三个方法在 engine.py 的判定逻辑中仍然未被使用。engine.py 中带孔多边形的判定核心逻辑（contains_holed 方法）仍旧只调用 _ray_casting 使用奇偶规则计数，完全没有利用顶点绕序信息来驱动位置判定。当前的绕序方法仅在外围数据校验层（PolygonWithHoles 的 _validate_winding_order 和 normalize）做了消费，但引擎判定逻辑本身仍然以纯射线交点计数作为唯一判定依据，绕序信息在判定中处于闲置状态。

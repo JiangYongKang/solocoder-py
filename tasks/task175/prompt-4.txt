@@ -1,0 +1,5 @@
+在当前项目 Geohash 编解码器的测试中，仍存在以下问题需要修复：
+
+1. test_edge_cases.py 的 test_diagonal_crosses_antimeridian 方法中仍然存在 if 条件分支用于控制对角线邻胞断言，与消除条件断言反模式的修复目标不一致。当被修复的 6 个方法均已去除了 if-else 分支后，该方法中的 if 条件分支成为了修复范围中残留的未处理项。
+
+2. 新增的非边界互补测试中存在结构不够精确的断言语句。test_east_neighbor_not_at_antimeridian 和 test_west_neighbor_not_at_antimeridian 两个方法中使用了 OR 逻辑连接的复合断言（`assert A or B`），OR 结构降低了断言的精确性，两个条件应各自独立验证而不是用一个 OR 合并。

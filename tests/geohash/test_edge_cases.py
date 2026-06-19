@@ -210,7 +210,7 @@ class TestAntimeridianCrossing:
         assert neighbors.east is not None
         east_bbox = decode_bbox(neighbors.east)
         assert east_bbox.min_lon < 0
-        assert east_bbox.max_lon < 0 or east_bbox.max_lon > 180
+        assert east_bbox.max_lon < 0
 
     def test_east_neighbor_not_at_antimeridian(self):
         geohash = encode(0.0, 120.0, precision=6)
@@ -221,7 +221,8 @@ class TestAntimeridianCrossing:
         assert neighbors.east is not None
         east_bbox = decode_bbox(neighbors.east)
         assert east_bbox.min_lon > bbox.min_lon
-        assert east_bbox.max_lon < 180.0 or east_bbox.min_lon < 0
+        assert east_bbox.max_lon < 180.0
+        assert east_bbox.min_lon > 0
 
     def test_west_neighbor_crosses_antimeridian(self):
         geohash = encode(0.0, -179.999, precision=6)
@@ -243,7 +244,8 @@ class TestAntimeridianCrossing:
         assert neighbors.west is not None
         west_bbox = decode_bbox(neighbors.west)
         assert west_bbox.min_lon < bbox.min_lon
-        assert west_bbox.min_lon > -180.0 or west_bbox.max_lon > 0
+        assert west_bbox.min_lon > -180.0
+        assert west_bbox.max_lon < 0
 
     def test_antimeridian_adjacency(self):
         geohash_east = encode(0.0, 179.9999, precision=4)
@@ -262,14 +264,16 @@ class TestAntimeridianCrossing:
         assert neighbors.east is not None
         east_bbox = decode_bbox(neighbors.east)
         assert east_bbox.min_lon < 0
-        assert neighbors.north_east is not None or neighbors.south_east is not None
 
-        if neighbors.north_east is not None:
-            ne_bbox = decode_bbox(neighbors.north_east)
-            assert abs(ne_bbox.min_lon - east_bbox.min_lon) < 1e-10
-        if neighbors.south_east is not None:
-            se_bbox = decode_bbox(neighbors.south_east)
-            assert abs(se_bbox.min_lon - east_bbox.min_lon) < 1e-10
+        assert neighbors.north_east is not None
+        ne_bbox = decode_bbox(neighbors.north_east)
+        assert abs(ne_bbox.min_lon - east_bbox.min_lon) < 1e-10
+        assert ne_bbox.min_lat > east_bbox.min_lat
+
+        assert neighbors.south_east is not None
+        se_bbox = decode_bbox(neighbors.south_east)
+        assert abs(se_bbox.min_lon - east_bbox.min_lon) < 1e-10
+        assert se_bbox.max_lat < east_bbox.max_lat
 
 
 class TestBoundaryExactValues:

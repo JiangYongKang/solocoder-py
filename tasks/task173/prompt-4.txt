@@ -1,0 +1,5 @@
+在当前项目时间戳二阶差分压缩器的实现中，仍存在以下问题需要修复：
+
+1. decompressor.py 新增了 value_count 不超过 2 时 simple8b_length 必须为 0 的头部损坏校验，但测试集中缺少针对该校验路径的专项测试用例。现有 corrupted header 测试（如 test_corrupted_simple8b_length_not_multiple_of_8、test_corrupted_simple8b_length_very_large）均使用 value_count 为 100 或 10 来构造损坏头部，未覆盖 value_count 等于 2 且 simple8b_length 等于 8 这种头部字段实际可能出现的损坏组合，新增的校验代码路径仅靠已有测试的旁路覆盖而未被直接验证。
+
+2. compressor.py 新增了 get_delta_result 公共方法用于替代对 _last_delta_result 私有属性的直访，但未为该公共方法编写独立的单元测试。测试集中缺少对压缩前调用返回 None、压缩后返回正确 DeltaResult、重复调用不会触发二次 compute_deltas 等关键行为的直接验证。

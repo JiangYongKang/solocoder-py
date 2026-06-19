@@ -379,3 +379,152 @@ class TestErrorCases:
         decompressor.set_input_data(corrupted)
         with pytest.raises(CorruptedDataError, match="not a multiple of 8"):
             decompressor.read_all()
+
+    def test_corrupted_value_count_0_with_simple8b_length(self):
+        header = struct.pack("<q q I I", 0, 0, 0, 8)
+        corrupted = header + b"\x00" * 8
+
+        decompressor = TsDeltaDecompressor()
+        decompressor.set_input_data(corrupted)
+        with pytest.raises(CorruptedDataError, match="value_count=0.*expected 0"):
+            decompressor.read_all()
+
+    def test_corrupted_value_count_1_with_simple8b_length(self):
+        header = struct.pack("<q q I I", 1000, 0, 1, 8)
+        corrupted = header + b"\x00" * 8
+
+        decompressor = TsDeltaDecompressor()
+        decompressor.set_input_data(corrupted)
+        with pytest.raises(CorruptedDataError, match="value_count=1.*expected 0"):
+            decompressor.read_all()
+
+    def test_corrupted_value_count_2_with_simple8b_length(self):
+        header = struct.pack("<q q I I", 1000, 1000, 2, 8)
+        corrupted = header + b"\x00" * 8
+
+        decompressor = TsDeltaDecompressor()
+        decompressor.set_input_data(corrupted)
+        with pytest.raises(CorruptedDataError, match="value_count=2.*expected 0"):
+            decompressor.read_all()
+
+    def test_corrupted_value_count_2_with_large_simple8b_length(self):
+        header = struct.pack("<q q I I", 1000, 1000, 2, 64)
+        corrupted = header + b"\x00" * 64
+
+        decompressor = TsDeltaDecompressor()
+        decompressor.set_input_data(corrupted)
+        with pytest.raises(CorruptedDataError, match="value_count=2.*expected 0"):
+            decompressor.read_all()
+
+
+class TestGetDeltaResult:
+    def test_get_delta_result_empty_compressor_returns_none(self):
+        compressor = TsDeltaCompressor()
+        result = compressor.get_delta_result()
+        assert result is None
+
+    def test_get_delta_result_before_compression_triggers_compress(self):
+        compressor = TsDeltaCompressor()
+        base = 1718841600000
+        timestamps = [base, base + 1000, base + 2000, base + 3000]
+        compressor.write_all(timestamps)
+
+        delta_result = compressor.get_delta_result()
+
+        assert delta_result is not None
+        assert delta_result.base_timestamp == base
+        assert delta_result.first_delta == 1000
+        assert delta_result.first_order_deltas == [1000, 1000, 1000]
+        assert delta_result.second_order_deltas == [0, 0]
+
+    def test_get_delta_result_after_compression_returns_same(self):
+        compressor = TsDeltaCompressor()
+        base = 1718841600000
+        timestamps = [base + i * 500 for i in range(10)]
+        compressor.write_all(timestamps)
+
+        compressed_data = compressor.get_compressed_data()
+        delta_result_after = compressor.get_delta_result()
+
+        assert delta_result_after is not None
+        assert delta_result_after.base_timestamp == base
+        assert len(delta_result_after.first_order_deltas) == 9
+        assert len(delta_result_after.second_order_deltas) == 8
+        assert all(d == 0 for d in delta_result_after.second_order_deltas)
+
+    def test_get_delta_result_two_timestamps_returns_none_for_second_order(self):
+        compressor = TsDeltaCompressor()
+        timestamps = [1000, 2000]
+        compressor.write_all(timestamps)
+
+        delta_result = compressor.get_delta_result()
+
+        assert delta_result is not None
+        assert delta_result.base_timestamp == 1000
+        assert delta_result.first_delta == 1000
+        assert delta_result.first_order_deltas == [1000]
+        assert delta_result.second_order_deltas == []
+
+    def test_get_delta_result_single_timestamp(self):
+        compressor = TsDeltaCompressor()
+        compressor.write_all([1000])
+
+        result = compressor.get_delta_result()
+        assert result is not None
+        assert result.base_timestamp == 1000
+        assert result.first_delta is None
+        assert result.first_order_deltas == []
+        assert result.second_order_deltas == []
+
+    def test_get_delta_result_no_duplicate_compute_deltas(self):
+        call_count = 0
+        original_compute_deltas = compute_deltas
+
+        def counting_compute_deltas(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return original_compute_deltas(*args, **kwargs)
+
+        import solocoder_py.tsdelta.compressor as compressor_mod
+        original = compressor_mod.compute_deltas
+        compressor_mod.compute_deltas = counting_compute_deltas
+
+        try:
+            compressor = TsDeltaCompressor()
+            base = 1718841600000
+            timestamps = [base + i * 1000 for i in range(100)]
+            compressor.write_all(timestamps)
+
+            _ = compressor.get_delta_result()
+            first_call_count = call_count
+
+            _ = compressor.get_delta_result()
+            second_call_count = call_count
+
+            assert second_call_count == first_call_count == 1
+        finally:
+            compressor_mod.compute_deltas = original
+
+    def test_get_delta_result_reset_clears_cached(self):
+        compressor = TsDeltaCompressor()
+        timestamps = [1000, 2000, 3000]
+        compressor.write_all(timestamps)
+
+        _ = compressor.get_delta_result()
+        compressor.reset()
+
+        result = compressor.get_delta_result()
+        assert result is None
+
+    def test_get_delta_result_after_write_new_data(self):
+        compressor = TsDeltaCompressor()
+        compressor.write_all([1000, 2000, 3000])
+        delta1 = compressor.get_delta_result()
+        assert delta1.base_timestamp == 1000
+
+        compressor.reset()
+        compressor.write_all([5000, 6000, 7000, 8000])
+        delta2 = compressor.get_delta_result()
+        assert delta2.base_timestamp == 5000
+        assert len(delta2.first_order_deltas) == 3
+        assert len(delta2.second_order_deltas) == 2

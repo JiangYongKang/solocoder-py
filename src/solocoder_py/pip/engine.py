@@ -141,19 +141,70 @@ class RayCastingEngine:
         if self._is_on_holed_boundary(polygon, point):
             return PointLocation.ON_BOUNDARY
 
-        outer_result = self._ray_casting(polygon.outer_ring, point)
-        if not outer_result:
-            return PointLocation.OUTSIDE
+        if polygon.outer_ring.winding_order <= 0:
+            raise InvalidPolygonError(
+                "Outer ring must have positive winding order (counterclockwise)"
+            )
+        for i, inner_ring in enumerate(polygon.inner_rings):
+            if inner_ring.winding_order >= 0:
+                raise InvalidPolygonError(
+                    f"Inner ring {i} must have negative winding order (clockwise)"
+                )
 
-        hole_count = 0
+        total_winding = self._signed_ray_casting(polygon.outer_ring, point)
         for inner_ring in polygon.inner_rings:
-            if self._ray_casting(inner_ring, point):
-                hole_count += 1
+            total_winding += self._signed_ray_casting(inner_ring, point)
 
-        if hole_count % 2 == 1:
-            return PointLocation.OUTSIDE
+        if total_winding != 0:
+            return PointLocation.INSIDE
+        return PointLocation.OUTSIDE
 
-        return PointLocation.INSIDE
+    def _signed_ray_casting(self, polygon: Polygon, point: Point) -> int:
+        n = polygon.vertex_count
+        px, py = point.x, point.y
+        winding = 0
+
+        for i in range(n):
+            v1, v2 = polygon.get_edge(i)
+
+            v1x, v1y = v1.x, v1.y
+            v2x, v2y = v2.x, v2.y
+
+            v1_above = v1y > py + self._epsilon
+            v2_above = v2y > py + self._epsilon
+
+            v1_on = abs(v1y - py) <= self._epsilon
+            v2_on = abs(v2y - py) <= self._epsilon
+
+            if v1_on and v2_on:
+                continue
+
+            if v1_above == v2_above and not v1_on and not v2_on:
+                continue
+
+            if v1_on:
+                prev_v, _ = polygon.get_edge((i - 1 + n) % n)
+                prev_y = prev_v.y
+                prev_above = prev_y > py + self._epsilon
+                if prev_above != v2_above:
+                    if self._intersection_x_gt_px(v1x, v1y, v2x, v2y, px, py):
+                        if v2_above:
+                            winding += 1
+                        else:
+                            winding -= 1
+                continue
+
+            if v2_on:
+                continue
+
+            if v1_above != v2_above:
+                if self._intersection_x_gt_px(v1x, v1y, v2x, v2y, px, py):
+                    if v2_above:
+                        winding += 1
+                    else:
+                        winding -= 1
+
+        return winding
 
     def is_inside_holed(self, polygon: PolygonWithHoles, point: Point) -> bool:
         result = self.contains_holed(polygon, point)

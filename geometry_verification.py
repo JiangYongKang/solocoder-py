@@ -158,10 +158,11 @@ def verify_butterfly_polygon():
 
 def verify_holed_polygon():
     """
-    带孔多边形: 外环(0,0)-(10,0)-(10,10)-(0,10)，内环(3,3)-(7,3)-(7,7)-(3,7)
+    带孔多边形: 外环(0,0)-(10,0)-(10,10)-(0,10) 逆时针，内环(3,3)-(3,7)-(7,7)-(7,3) 顺时针
+    环绕数算法: 外环贡献+1，内环贡献-1，总和!=0则在内部
     """
     print("\n" + "=" * 60)
-    print("带孔多边形几何验算")
+    print("带孔多边形几何验算（环绕数算法）")
     print("=" * 60)
 
     outer_edges = [
@@ -172,14 +173,15 @@ def verify_holed_polygon():
     ]
 
     inner_edges = [
-        ((3, 3), (7, 3)),
-        ((7, 3), (7, 7)),
-        ((7, 7), (3, 7)),
-        ((3, 7), (3, 3)),
+        ((3, 3), (3, 7)),
+        ((3, 7), (7, 7)),
+        ((7, 7), (7, 3)),
+        ((7, 3), (3, 3)),
     ]
 
-    def ray_cast(edges, px, py):
+    def signed_ray_cast(edges, px, py):
         count = 0
+        winding = 0
         n = len(edges)
         for i, ((x1, y1), (x2, y2)) in enumerate(edges):
             v1_above = y1 > py
@@ -199,6 +201,10 @@ def verify_holed_polygon():
                     x_intersect = x1 + t * (x2 - x1)
                     if x_intersect > px:
                         count += 1
+                        if v2_above:
+                            winding += 1
+                        else:
+                            winding -= 1
                 continue
             if v2_on:
                 continue
@@ -207,7 +213,11 @@ def verify_holed_polygon():
             x_intersect = x1 + t * (x2 - x1)
             if x_intersect > px:
                 count += 1
-        return count % 2 == 1
+                if v2_above:
+                    winding += 1
+                else:
+                    winding -= 1
+        return count % 2 == 1, winding
 
     test_cases = [
         ((5, 9), "外环内、内环外", "INSIDE"),
@@ -217,14 +227,16 @@ def verify_holed_polygon():
     ]
 
     for (px, py), desc, expected in test_cases:
-        outer_inside = ray_cast(outer_edges, px, py)
-        inner_inside = ray_cast(inner_edges, px, py)
-        result = "INSIDE" if (outer_inside and not inner_inside) else "OUTSIDE"
+        outer_parity, outer_winding = signed_ray_cast(outer_edges, px, py)
+        inner_parity, inner_winding = signed_ray_cast(inner_edges, px, py)
+        total_winding = outer_winding + inner_winding
+        result = "INSIDE" if total_winding != 0 else "OUTSIDE"
         status = "OK" if result == expected else "FAIL"
         print(f"点 ({px}, {py}) - {desc}")
-        print(f"  外环判定: {'INSIDE' if outer_inside else 'OUTSIDE'}")
-        print(f"  内环判定: {'INSIDE' if inner_inside else 'OUTSIDE'}")
-        print(f"  联合判定: {result} {status} (预期 {expected})")
+        print(f"  外环: 奇偶={outer_parity}, 环绕数={outer_winding}")
+        print(f"  内环: 奇偶={inner_parity}, 环绕数={inner_winding}")
+        print(f"  总环绕数={total_winding}, 判定={result} {status} (预期 {expected})")
+        print(f"  说明: 外环逆时针(+), 内环顺时针(-), 环绕数!=0=INSIDE")
 
 
 if __name__ == "__main__":

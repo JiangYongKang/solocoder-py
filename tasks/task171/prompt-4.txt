@@ -1,0 +1,3 @@
+在当前项目霍夫曼编解码器的测试中，仍存在以下问题需要修复：
+
+1. test_edge_cases.py 的 test_reset_decoder 测试中对原 decoder 实例执行了三次 reset，其中第三次 reset 后仅校验了内部字段（`_buffer`、`_output`、`_finished`）的空值状态，随后立即创建了新的 decoder2 实例用于解码另一个码表。第三次 reset 后的原 decoder 实例的解码能力是否被正确恢复并未得到验证，这与之前"reset 后状态的完整性未被验证"属于同一类问题——只确认 reset 清空了内部字段，但没有确认 reset 后解码器是否仍能正确解码。

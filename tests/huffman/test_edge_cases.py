@@ -199,7 +199,6 @@ class TestEncoderDecoderEdgeCases:
 
     def test_reset_decoder(self):
         encoded1 = encode("AAAAA")
-        encoded2 = encode("BBBBB")
 
         decoder = HuffmanDecoder(encoded1.code_table)
         decoder.write(encoded1.bit_string)
@@ -210,7 +209,6 @@ class TestEncoderDecoderEdgeCases:
         assert decoder._buffer == ""
         assert decoder._output == []
         assert decoder._finished is False
-
         decoder.write(encoded1.bit_string)
         result2 = decoder.finish(expected_length=5)
         assert "".join(result2) == "AAAAA"
@@ -219,7 +217,6 @@ class TestEncoderDecoderEdgeCases:
         assert decoder._buffer == ""
         assert decoder._output == []
         assert decoder._finished is False
-
         decoder.write(encoded1.bit_string)
         result3 = decoder.finish(expected_length=5)
         assert "".join(result3) == "AAAAA"
@@ -228,8 +225,8 @@ class TestEncoderDecoderEdgeCases:
         assert decoder._buffer == ""
         assert decoder._output == []
         assert decoder._finished is False
+        decoder.write(encoded1.bit_string)
+        result4 = decoder.finish(expected_length=5)
+        assert "".join(result4) == "AAAAA"
 
-        decoder2 = HuffmanDecoder(encoded2.code_table)
-        decoder2.write(encoded2.bit_string)
-        result4 = decoder2.finish(expected_length=5)
-        assert "".join(result4) == "BBBBB"
+        assert result1 == result2 == result3 == result4
