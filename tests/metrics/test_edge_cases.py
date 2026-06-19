@@ -338,3 +338,91 @@ class TestHistogramQuantileAllInInfBucket:
         assert q0 <= q50 <= q100
         assert q0 == 2.5
         assert q100 == 100
+
+
+class TestHistogramQuantileMonotonicity:
+    def test_fine_grained_monotonicity_mixed_distribution(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3, 5, 10])
+        for v in [0.5, 0.8, 1.5, 1.8, 2.5, 4.0, 6.0, 8.0, 12.0, 15.0]:
+            hist.observe(v)
+        prev = float("-inf")
+        steps = 1000
+        for i in range(steps + 1):
+            q = i / steps
+            val = hist.quantile(q)
+            assert val >= prev, f"quantile({q}) = {val} < previous {prev}"
+            prev = val
+
+    def test_fine_grained_monotonicity_all_in_first_bucket(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        for i in range(100):
+            hist.observe(0.1 + i * 0.009)
+        prev = float("-inf")
+        steps = 1000
+        for i in range(steps + 1):
+            q = i / steps
+            val = hist.quantile(q)
+            assert val >= prev, f"quantile({q}) = {val} < previous {prev}"
+            prev = val
+
+    def test_fine_grained_monotonicity_all_in_inf_bucket(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        for i in range(100):
+            hist.observe(100 + i)
+        prev = float("-inf")
+        steps = 1000
+        for i in range(steps + 1):
+            q = i / steps
+            val = hist.quantile(q)
+            assert val >= prev, f"quantile({q}) = {val} < previous {prev}"
+            prev = val
+
+    def test_fine_grained_monotonicity_sample_below_first_bucket(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        hist.observe(0.5)
+        for _ in range(100):
+            hist.observe(1.5)
+            hist.observe(2.5)
+        prev = float("-inf")
+        steps = 1000
+        for i in range(steps + 1):
+            q = i / steps
+            val = hist.quantile(q)
+            assert val >= prev, f"quantile({q}) = {val} < previous {prev}"
+            prev = val
+
+    def test_quantile_0_and_near_0_monotonic(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        for _ in range(10000):
+            hist.observe(0.5)
+        q0 = hist.quantile(0)
+        q_near0 = hist.quantile(0.0001)
+        assert q_near0 >= q0
+
+    def test_quantile_1_and_near_1_monotonic(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        for _ in range(10000):
+            hist.observe(100)
+        q_near1 = hist.quantile(0.9999)
+        q1 = hist.quantile(1)
+        assert q1 >= q_near1
+
+    def test_single_sample_all_quantiles_equal(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3])
+        hist.observe(42.0)
+        steps = 100
+        for i in range(steps + 1):
+            q = i / steps
+            assert hist.quantile(q) == 42.0
+
+    def test_monotonicity_with_empty_buckets(self, registry):
+        hist = registry.create_histogram("latency", [1, 2, 3, 10, 20, 30])
+        hist.observe(0.5)
+        hist.observe(25.0)
+        prev = float("-inf")
+        steps = 1000
+        for i in range(steps + 1):
+            q = i / steps
+            val = hist.quantile(q)
+            assert val >= prev, f"quantile({q}) = {val} < previous {prev}"
+            prev = val
