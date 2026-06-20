@@ -1,5 +1,5 @@
 产物不满意：
-本轮修复的三个问题均得到正确解决，产品无实质性缺陷。_find_longest_match 方法中 `dist + remaining if False else remaining` 的死代码已删除，仅保留有效的 `max_possible = min(remaining, max_len)`。_write_literal_block 方法中冗余的 `length - 1 > 0x7F` 校验已移除，不再存在永不触发的死分支。test_corrupted_control_marker_length_overflow 测试用例改用 LZ77Config(min_match_length=3, max_match_length=100) 显式构造触发条件，替代了原有依赖默认配置的条件跳过逻辑，长度溢出错误检测路径现已正常执行。全部 66 个测试用例通过，无跳过项。
+本轮修复的三个问题均得到正确解决，产品无实质性缺陷。死代码和冗余校验已移除，test_corrupted_control_marker_length_overflow 改用 LZ77Config 显式构造触发条件，长度溢出错误检测路径现已正常执行。全部 66 个测试用例通过，无跳过项。
 
 过程不满意：
-模型在收到提示词后的第一步操作就是调用 todo_write 创建子任务计划，随后才开始读取 compressor.py 确认代码现状。提示词虽然描述了缺陷位置，但模型仍应先验证代码与提示词描述是否一致再制定执行计划，而非跳过分析直接规划。更严重的是模型的第二步和第三步操作对 compressor.py 连续执行了两次 view_files 读取同一文件内容，属于无意义的重复操作，降低了推理效率。正确做法是先一次性读取全部关联代码、确认修复范围与提示词一致，再制定计划并实施一次性修改。此外，提示词只要求修复 test_corrupted_control_marker_length_overflow 一个测试用例，模型顺带将 test_length_exceeds_max 也一并修改为使用自定义配置，虽然修改方向正确且改掉了同类缺陷，但模型在最终总结中没有区分提示词要求与自发扩展的边界。
+模型收到提示词后第一步就创建子任务计划，之后才开始读取 compressor.py 确认代码现状。应先验证代码与提示词描述是否一致再制定计划，而非跳过分析直接规划。更严重的是第二、第三步连续两次读取同一文件内容，属于无意义的重复操作。正确做法是先一次性读取全部关联代码、确认范围后再实施修改。此外提示词只要求修复一个测试用例，模型顺带将另一个也一并修改了，虽方向正确但总结中没有区分提示词要求与自发扩展的边界。

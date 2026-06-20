@@ -1,6 +1,6 @@
 产物不满意：
-1. decompressor.py 的 _parse_header 方法新增了 value_count 不超过 2 时 simple8b_length 必须为 0 的校验并抛出 CorruptedDataError，修复逻辑本身正确，且将校验从 _decode_simple8b 前移到头部解析阶段做提前拦截的设计也比提示词建议的修补位置更合理。但没有为该损坏场景编写专门的测试用例。现有 corrupted header 测试如 test_corrupted_simple8b_length_not_multiple_of_8 和 test_corrupted_simple8b_length_very_large 均使用 value_count 等于 100 或 10 构造损坏头部，未覆盖 value_count 等于 2 且 simple8b_length 等于 8 这种提示词中明确指出的头字段损坏模式，导致新增校验路径仅靠已有用例的旁路覆盖通过而未被直接验证。
-2. compressor.py 的 compress_timestamps 函数已将直访 compressor._last_delta_result 私有属性改为调用 get_delta_result 公共方法，封装模式与已有的 get_stats 方法一致，解耦设计正确。但未为新增的公共方法编写独立测试，未验证压缩前返回 None、压缩后返回正确 DeltaResult、重复调用不会触发二次 compute_deltas 调用等关键行为。虽然 test_standalone_functions 和 test_compress_timestamps_no_duplicate_compute_deltas 作为集成用例间接覆盖了该方法，但缺少对 get_delta_result 本身的单元级验证。
+1. decompressor.py 的 _parse_header 新增了 value_count<=2 时 simple8b_length 必须为 0 的校验，修复逻辑正确，提前到头部解析拦截比提示词建议更合理。但没有为该损坏场景编写专门的测试用例，现有测试使用的 value_count 均为 100 或 10，未覆盖 value_count=2 且 simple8b_length=8 这种明确指出的头部损坏模式，新增校验路径仅靠已有用例旁路覆盖通过而未被直接验证。
+2. compressor.py 的 compress_timestamps 已将直访私有属性改为调用 get_delta_result 公共方法，解耦设计正确。但未为新增的公共方法编写独立测试，未验证压缩前返回 None、压缩后返回正确 DeltaResult、重复调用不触发二次计算等关键行为。虽然有集成用例间接覆盖，但缺少对 get_delta_result 本身的单元级验证。
 过程不满意：
-1. 模型在查看 compressor.py 和 decompressor.py 后直接创建 TodoList 并开始修改代码，没有先通读 tests/tsdelta/test_compressor.py 了解现有测试覆盖范围。这导致完成两处修复后仅运行已有 166 个测试确认全部通过就判定修复完成，却未意识到两种修复都引入了新的代码路径而测试集中缺少对 value_count 不超过 2 损坏头部场景和 get_delta_result 方法的直接覆盖。正确做法是先检查现有 corrupted header 测试是否已包含 value_count 不超过 2 的用例，以及是否有对公共 getter 方法的单元测试，缺失则应在修复后补充。
-2. 模型运行 pytest 的命令参数尾部出现了 undefined 字样（`python -m pytest tests/tsdelta/ -v undefined`），虽然测试仍能正常执行且全部通过，但表明工具调用时参数构造存在拼接错误。如果该 undefined 在前述分析的测试覆盖盲区场景下触发了一个非预期的测试选择行为导致跳过某些测试，后果会更严重。属于工具使用过程中的不稳定因子。
+1. 模型在查看 compressor.py 和 decompressor.py 后直接创建 TodoList 并开始修改代码，没有先通读测试文件了解现有覆盖范围。完成修复后仅运行已有测试确认通过就判定完成，未意识到两处修复都引入了新代码路径而测试缺少对 value_count<=2 损坏头部和 get_delta_result 方法的覆盖。应先检查现有测试是否已覆盖这些场景，缺失则在修复后补充。
+2. 模型运行 pytest 的命令参数尾部出现了 undefined 字样，虽然测试仍正常执行且通过，但表明工具调用时参数构造存在拼接错误。如果该错误在测试覆盖盲区场景下触发了非预期行为导致跳过某些测试，后果会更严重，属于工具使用过程中的不稳定因子。
