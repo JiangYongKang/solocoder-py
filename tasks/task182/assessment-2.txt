@@ -1,0 +1,9 @@
+产物不满意：
+1. 在构造 EWMA 时传入了非 None 的 initial_value 且 warmup_period 大于零的场景下，corrected_value 属性直接返回原始值 _s 与 raw_value 完全一致，不执行任何偏差校正计算。这导致当用户调用 corrected_value 期望获取偏差校正后的 EWMA 时实际得到的是未校正的原始值，该属性沦为 raw_value 的别名丧失了独立语义价值。根因是模型在 corrected_value 属性中也抄了 value 的 `if self._initial_value is None and` 条件来跳过校正，但 corrected_value 的 README 文档明确描述为"始终应用偏差校正后的值"，一个初始值的设置不应让校正能力全局失效。正确做法是在 corrected_value 中计算带初始值衰减修正的校正值，即 `(S_t - (1-α)^t * initial_value) / (1 - (1-α)^t)`，而非一刀切返回原始值。
+
+过程不满意：
+1. 模型在 session-cot-2 中接收提示词后第一步直接用 todo_write 创建了 4 项子任务计划，之后才开始阅读 ewma.py 现有代码。正确做法是先通过阅读目标文件理解当前实现与缺陷根因，再基于理解制定修复计划，而非在信息不完整的情况下先规划任务粒度再执行。
+
+2. 模型在修复过程中连续三次读取 tests/ewma/test_ewma.py（思考过程中第 88 行、第 96 行、第 109 行），每次读取之间并未获得新信息却重复查看同一个文件，属于冗余的信息收集行为。正确做法是在初次打开测试文件时一次性完整阅读，规划好所有需新增的测试用例的位置与内容，然后一次性编辑，而不是零散地读一次改一点。
+
+3. 模型执行测试验证时使用了 `python -m pytest tests/ewma/ -v` 而非项目中标准的 `poetry run pytest tests/ewma/ -v`。在 poetry 管理的项目中不通过 poetry 运行测试可能误用系统级的 Python 环境而绕过项目的虚拟环境与路径配置，虽然在本次场景中测试碰巧通过了，但这是基础工具使用规范的缺失。正确做法是在修改代码前先阅读 pyproject.toml 了解项目构建工具与测试配置，然后用正确命令运行测试。

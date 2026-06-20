@@ -13,16 +13,24 @@ from solocoder_py.reservoir import (
 
 class TestConstructionErrors:
     def test_negative_capacity_raises(self):
-        with pytest.raises(InvalidCapacityError, match="non-negative"):
+        with pytest.raises(InvalidCapacityError, match="positive"):
             ReservoirSampler(capacity=-1)
 
     def test_negative_capacity_weighted_raises(self):
-        with pytest.raises(InvalidCapacityError, match="non-negative"):
+        with pytest.raises(InvalidCapacityError, match="positive"):
             WeightedReservoirSampler(capacity=-1)
 
     def test_large_negative_capacity_raises(self):
         with pytest.raises(InvalidCapacityError):
             ReservoirSampler(capacity=-9999)
+
+    def test_zero_capacity_raises(self):
+        with pytest.raises(InvalidCapacityError, match="positive"):
+            ReservoirSampler(capacity=0)
+
+    def test_zero_capacity_weighted_raises(self):
+        with pytest.raises(InvalidCapacityError, match="positive"):
+            WeightedReservoirSampler(capacity=0)
 
     def test_non_integer_capacity_raises(self):
         with pytest.raises(InvalidCapacityError, match="integer"):
@@ -103,36 +111,3 @@ class TestClosedSamplerErrors:
         r2 = weighted_sampler_k5.close()
         assert sorted(r1) == sorted(r2)
         assert weighted_sampler_k5.closed is True
-
-
-class TestKZeroEdgeBehaviors:
-    def test_k0_feed_does_not_store(self):
-        sampler = ReservoirSampler(capacity=0)
-        for i in range(100):
-            sampler.feed(i)
-        assert sampler.samples() == []
-        assert sampler.total_processed == 100
-
-    def test_k0_weighted_feed_does_not_store(self):
-        sampler = WeightedReservoirSampler(capacity=0)
-        for i in range(100):
-            sampler.feed(i, float(i + 1))
-        assert sampler.samples() == []
-        assert sampler.total_processed == 100
-
-    def test_k0_close_returns_empty(self):
-        sampler = ReservoirSampler(capacity=0)
-        sampler.feed_many([1, 2, 3])
-        result = sampler.close()
-        assert result == []
-
-    def test_k0_feed_after_close_raises(self):
-        sampler = ReservoirSampler(capacity=0)
-        sampler.close()
-        with pytest.raises(SamplerClosedError):
-            sampler.feed(1)
-
-    def test_k0_contains_always_false(self):
-        sampler = ReservoirSampler(capacity=0)
-        sampler.feed(42)
-        assert 42 not in sampler

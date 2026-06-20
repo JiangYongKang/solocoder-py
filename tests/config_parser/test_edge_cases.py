@@ -218,7 +218,7 @@ class TestWhitespaceHandling:
     def test_mixed_whitespace_lines(self):
         text = '''
    [section]   
-      key   =   value   
+      key   =   "value"   
 '''
         config = parse_toml(text)
         assert config["section"]["key"] == "value"

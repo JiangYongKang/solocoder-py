@@ -8,6 +8,7 @@ from solocoder_py.minhash import (
     MinHash,
     MinHashError,
     NonHashableElementError,
+    UnserializableElementError,
 )
 
 
@@ -48,6 +49,18 @@ class TestInitExceptions:
         ):
             MinHash(num_hash_functions=None)
 
+    def test_seed_string_raises_invalid_config(self):
+        with pytest.raises(InvalidConfigError, match="seed must be an integer"):
+            MinHash(seed="42")
+
+    def test_seed_none_raises_invalid_config(self):
+        with pytest.raises(InvalidConfigError, match="seed must be an integer"):
+            MinHash(seed=None)
+
+    def test_seed_float_raises_invalid_config(self):
+        with pytest.raises(InvalidConfigError, match="seed must be an integer"):
+            MinHash(seed=42.5)
+
     def test_invalid_config_is_minhash_error(self):
         try:
             MinHash(num_hash_functions=0)
@@ -73,10 +86,19 @@ class TestNonHashableElementExceptions:
         with pytest.raises(NonHashableElementError, match="is not hashable"):
             mh.add({1, 2, 3})
 
-    def test_adding_lambda_raises_non_hashable(self):
+    def test_adding_lambda_raises_unserializable(self):
         mh = MinHash(num_hash_functions=64, seed=42)
-        with pytest.raises(NonHashableElementError, match="is not hashable"):
+        with pytest.raises(UnserializableElementError, match="cannot be serialized"):
             mh.add(lambda x: x)
+
+    def test_unserializable_error_is_minhash_error(self):
+        mh = MinHash(num_hash_functions=64, seed=42)
+        try:
+            mh.add(lambda x: x)
+        except MinHashError:
+            pass
+        else:
+            pytest.fail("Expected MinHashError")
 
     def test_non_hashable_in_init_elements(self):
         with pytest.raises(NonHashableElementError, match="is not hashable"):
@@ -210,6 +232,10 @@ class TestExceptionHierarchy:
 
     def test_non_hashable_element_error_hierarchy(self):
         assert issubclass(NonHashableElementError, MinHashError)
+        assert issubclass(MinHashError, Exception)
+
+    def test_unserializable_element_error_hierarchy(self):
+        assert issubclass(UnserializableElementError, MinHashError)
         assert issubclass(MinHashError, Exception)
 
 

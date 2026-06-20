@@ -1,5 +1,4 @@
 import copy
-import json
 from typing import Any
 
 from .exceptions import (
@@ -41,18 +40,6 @@ def _deep_merge(desired: dict, reported: dict) -> dict:
     return result
 
 
-def _flatten(obj: Any, prefix: str = "") -> list[tuple[str, Any]]:
-    items: list[tuple[str, Any]] = []
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            new_prefix = f"{prefix}.{key}" if prefix else key
-            if isinstance(value, dict):
-                items.extend(_flatten(value, new_prefix))
-            else:
-                items.append((new_prefix, value))
-    return items
-
-
 def _compute_diff(desired: dict, reported: dict, prefix: str = "") -> ShadowDiff:
     desired_only: list[FieldDiff] = []
     reported_only: list[FieldDiff] = []
@@ -69,18 +56,24 @@ def _compute_diff(desired: dict, reported: dict, prefix: str = "") -> ShadowDiff
             d_val = desired[key]
             if isinstance(d_val, dict):
                 sub = _compute_diff(d_val, {}, path)
-                desired_only.extend(sub.desired_only)
-                reported_only.extend(sub.reported_only)
-                value_diff.extend(sub.value_diff)
+                if sub.has_differences:
+                    desired_only.extend(sub.desired_only)
+                    reported_only.extend(sub.reported_only)
+                    value_diff.extend(sub.value_diff)
+                else:
+                    desired_only.append(FieldDiff(path=path, desired_value=d_val, reported_value=None))
             else:
                 desired_only.append(FieldDiff(path=path, desired_value=d_val, reported_value=None))
         elif in_reported and not in_desired:
             r_val = reported[key]
             if isinstance(r_val, dict):
                 sub = _compute_diff({}, r_val, path)
-                desired_only.extend(sub.desired_only)
-                reported_only.extend(sub.reported_only)
-                value_diff.extend(sub.value_diff)
+                if sub.has_differences:
+                    desired_only.extend(sub.desired_only)
+                    reported_only.extend(sub.reported_only)
+                    value_diff.extend(sub.value_diff)
+                else:
+                    reported_only.append(FieldDiff(path=path, desired_value=None, reported_value=r_val))
             else:
                 reported_only.append(FieldDiff(path=path, desired_value=None, reported_value=r_val))
         else:

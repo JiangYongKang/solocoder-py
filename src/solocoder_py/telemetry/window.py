@@ -14,11 +14,9 @@ class OrderWindow:
     def __init__(
         self,
         config: WindowConfig,
-        on_accept: Optional[Callable[[list[dict[str, Any]]], None]] = None,
         on_late: Optional[Callable[[dict[str, Any]], None]] = None,
     ) -> None:
         self._config = config
-        self._on_accept = on_accept
         self._on_late = on_late
 
         self._window: list[dict[str, Any]] = []
@@ -52,6 +50,7 @@ class OrderWindow:
             ts = self._extract_timestamp(record)
             if ts is None:
                 late.append(record)
+                self._late_data.append(record)
                 self._handle_late(record)
                 continue
 
@@ -62,10 +61,6 @@ class OrderWindow:
                 late.append(record)
                 self._late_data.append(record)
                 self._handle_late(record)
-
-        sorted_window = self._get_sorted_window()
-        if self._on_accept and sorted_window:
-            self._on_accept(sorted_window)
 
         return accepted, late
 
@@ -102,9 +97,6 @@ class OrderWindow:
         self._timestamps.insert(idx, ts)
         self._window.insert(idx, record)
 
-    def _get_sorted_window(self) -> list[dict[str, Any]]:
-        return list(self._window)
-
     def _handle_late(self, record: dict[str, Any]) -> None:
         strategy = self._config.late_data_strategy
         if strategy == LateDataStrategy.LOG:
@@ -116,13 +108,15 @@ class OrderWindow:
         elif strategy == LateDataStrategy.CALLBACK:
             if self._on_late is not None:
                 self._on_late(record)
-            elif self._config.on_late_data is not None:
-                self._config.on_late_data(record)
 
-    def flush(self) -> list[dict[str, Any]]:
+    def drain(self) -> list[dict[str, Any]]:
         result = list(self._window)
         self._window.clear()
         self._timestamps.clear()
+        return result
+
+    def flush(self) -> list[dict[str, Any]]:
+        result = self.drain()
         self._high_watermark = None
         return result
 

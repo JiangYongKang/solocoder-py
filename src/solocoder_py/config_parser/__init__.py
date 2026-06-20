@@ -19,13 +19,15 @@ from .parser import ConfigParser
 
 
 def parse_toml(text: str) -> Config:
-    parser = ConfigParser()
+    parser = ConfigParser(strict=True)
     root = parser.parse(text)
     return Config(root)
 
 
 def parse_ini(text: str) -> Config:
-    return parse_toml(text)
+    parser = ConfigParser(strict=False)
+    root = parser.parse(text)
+    return Config(root)
 
 
 __all__ = [

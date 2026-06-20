@@ -11,22 +11,31 @@ class Node:
 
     @property
     def is_element(self) -> bool:
-        return isinstance(self, Element)
+        raise NotImplementedError
 
     @property
     def is_text(self) -> bool:
-        return isinstance(self, Text)
+        raise NotImplementedError
 
     def __iter__(self) -> Iterator[Node]:
-        if isinstance(self, Element):
-            return iter(self.children)
-        return iter([])
+        raise NotImplementedError
 
 
 class Text(Node):
     def __init__(self, content: str, parent: Optional["Element"] = None) -> None:
         super().__init__(parent)
         self.content = content
+
+    @property
+    def is_element(self) -> bool:
+        return False
+
+    @property
+    def is_text(self) -> bool:
+        return True
+
+    def __iter__(self) -> Iterator[Node]:
+        return iter([])
 
     def __repr__(self) -> str:
         return f"Text({self.content!r})"
@@ -49,6 +58,17 @@ class Element(Node):
         self.attributes: Dict[str, str] = attributes or {}
         self.children: List[Node] = []
         self._namespaces: Dict[str, str] = {}
+
+    @property
+    def is_element(self) -> bool:
+        return True
+
+    @property
+    def is_text(self) -> bool:
+        return False
+
+    def __iter__(self) -> Iterator[Node]:
+        return iter(self.children)
 
     @property
     def namespace_uri(self) -> Optional[str]:

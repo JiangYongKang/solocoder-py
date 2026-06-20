@@ -32,7 +32,7 @@ class TestInOrderData:
         accepted, late = window.process(records)
         assert len(accepted) == 3
         assert len(late) == 0
-        sorted_data = window.flush()
+        sorted_data = window.drain()
         timestamps = [r["timestamp"] for r in sorted_data]
         assert timestamps == [100.0, 200.0, 300.0]
 
@@ -50,7 +50,7 @@ class TestWithinWindowOutOfOrder:
         accepted, late = window.process(records)
         assert len(accepted) == 3
         assert len(late) == 0
-        sorted_data = window.flush()
+        sorted_data = window.drain()
         timestamps = [r["timestamp"] for r in sorted_data]
         assert timestamps == [100.0, 105.0, 120.0]
 
@@ -79,7 +79,7 @@ class TestWithinWindowOutOfOrder:
         accepted, late = window.process(records)
         assert len(accepted) == 4
         assert len(late) == 0
-        sorted_data = window.flush()
+        sorted_data = window.drain()
         timestamps = [r["timestamp"] for r in sorted_data]
         assert timestamps == [100.0, 105.0, 110.0, 115.0]
 
@@ -225,8 +225,8 @@ class TestMissingTimestamp:
         assert len(late) == 1
 
 
-class TestFlushAndReset:
-    def test_flush_returns_sorted_data(self):
+class TestDrainAndFlush:
+    def test_drain_returns_sorted_data(self):
         config = WindowConfig(tolerance_seconds=30.0, timestamp_field="timestamp")
         window = OrderWindow(config)
 
@@ -236,11 +236,70 @@ class TestFlushAndReset:
             {"timestamp": 120.0, "value": "c"},
         ]
         window.process(records)
-        sorted_data = window.flush()
+        sorted_data = window.drain()
         timestamps = [r["timestamp"] for r in sorted_data]
         assert timestamps == [100.0, 110.0, 120.0]
 
-    def test_flush_clears_window(self):
+    def test_drain_preserves_high_watermark(self):
+        config = WindowConfig(tolerance_seconds=30.0, timestamp_field="timestamp")
+        window = OrderWindow(config)
+
+        records = [
+            {"timestamp": 100.0, "value": "a"},
+            {"timestamp": 150.0, "value": "b"},
+        ]
+        window.process(records)
+        assert window.high_watermark == 150.0
+
+        window.drain()
+        assert window.window_size == 0
+        assert window.high_watermark == 150.0
+
+    def test_drain_allows_cross_batch_out_of_order(self):
+        config = WindowConfig(
+            tolerance_seconds=30.0,
+            timestamp_field="timestamp",
+            late_data_strategy=LateDataStrategy.DISCARD,
+        )
+        window = OrderWindow(config)
+
+        window.process([
+            {"timestamp": 100.0, "value": "a1"},
+            {"timestamp": 200.0, "value": "a2"},
+        ])
+        window.drain()
+        assert window.high_watermark == 200.0
+
+        accepted, late = window.process([
+            {"timestamp": 180.0, "value": "b1"},
+        ])
+        assert len(accepted) == 1
+        assert len(late) == 0
+        assert accepted[0]["value"] == "b1"
+
+    def test_drain_late_data_beyond_tolerance_still_late(self):
+        config = WindowConfig(
+            tolerance_seconds=30.0,
+            timestamp_field="timestamp",
+            late_data_strategy=LateDataStrategy.DISCARD,
+        )
+        window = OrderWindow(config)
+
+        window.process([
+            {"timestamp": 100.0, "value": "a1"},
+            {"timestamp": 200.0, "value": "a2"},
+        ])
+        window.drain()
+        assert window.high_watermark == 200.0
+
+        accepted, late = window.process([
+            {"timestamp": 100.0, "value": "b1"},
+        ])
+        assert len(accepted) == 0
+        assert len(late) == 1
+        assert late[0]["value"] == "b1"
+
+    def test_flush_clears_everything_including_watermark(self):
         config = WindowConfig(tolerance_seconds=30.0, timestamp_field="timestamp")
         window = OrderWindow(config)
 
@@ -286,3 +345,16 @@ class TestHighWatermark:
         config = WindowConfig(tolerance_seconds=30.0, timestamp_field="timestamp")
         window = OrderWindow(config)
         assert window.high_watermark is None
+
+    def test_high_watermark_is_monotonic(self):
+        config = WindowConfig(tolerance_seconds=30.0, timestamp_field="timestamp")
+        window = OrderWindow(config)
+
+        window.process([{"timestamp": 100.0, "value": "a"}])
+        assert window.high_watermark == 100.0
+
+        window.process([{"timestamp": 50.0, "value": "b"}])
+        assert window.high_watermark == 100.0
+
+        window.process([{"timestamp": 150.0, "value": "c"}])
+        assert window.high_watermark == 150.0

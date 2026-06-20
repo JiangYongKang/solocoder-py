@@ -142,6 +142,61 @@ class TestEWMANormalFlows:
         assert approx_equal(ewma.value, expected)
         assert ewma.count == 1
 
+    def test_initial_value_with_warmup_no_bias_correction(self):
+        ewma = EWMA(alpha=0.5, warmup_period=10, initial_value=100.0)
+        assert ewma.count == 0
+        assert approx_equal(ewma.value, 100.0)
+
+        result = ewma.update(50.0)
+        expected_raw = 0.5 * 50.0 + 0.5 * 100.0
+        assert approx_equal(result, expected_raw)
+        assert approx_equal(ewma.value, expected_raw)
+        assert approx_equal(ewma.raw_value, expected_raw)
+        assert approx_equal(ewma.corrected_value, expected_raw)
+        assert ewma.in_warmup is True
+        assert ewma.count == 1
+
+    def test_initial_value_with_warmup_multiple_steps(self):
+        alpha = 0.3
+        warmup = 5
+        initial = 100.0
+        ewma = EWMA(alpha=alpha, warmup_period=warmup, initial_value=initial)
+
+        s = initial
+        values = [80.0, 90.0, 70.0, 85.0, 95.0, 100.0]
+        for i, x in enumerate(values):
+            s = alpha * x + (1.0 - alpha) * s
+            ewma.update(x)
+            assert approx_equal(ewma.value, s)
+            assert approx_equal(ewma.raw_value, s)
+            assert approx_equal(ewma.corrected_value, s)
+            if i + 1 < warmup:
+                assert ewma.in_warmup is True
+            else:
+                assert ewma.in_warmup is (i + 1 <= warmup)
+
+    def test_initial_value_zero_with_warmup(self):
+        ewma = EWMA(alpha=0.5, warmup_period=5, initial_value=0.0)
+        ewma.update(10.0)
+        expected_raw = 0.5 * 10.0 + 0.5 * 0.0
+        assert approx_equal(ewma.value, expected_raw)
+        assert approx_equal(ewma.raw_value, expected_raw)
+        assert ewma.in_warmup is True
+
+    def test_no_initial_value_with_warmup_has_correction(self):
+        alpha = 0.5
+        warmup = 5
+        ewma = EWMA(alpha=alpha, warmup_period=warmup)
+
+        ewma.update(10.0)
+        raw = ewma.raw_value
+        corrected = ewma.value
+        assert approx_equal(raw, 10.0)
+        correction = 1.0 - (1.0 - alpha) ** 1
+        assert approx_equal(corrected, raw / correction)
+        assert raw != corrected
+        assert ewma.in_warmup is True
+
     def test_raw_value_property(self):
         alpha = 0.3
         warmup = 5
@@ -442,6 +497,29 @@ class TestEWMAErrorBranches:
         ewma = EWMA(alpha=0.5)
         with pytest.raises(EWMAError):
             ewma.update("not a number")
+
+    def test_bool_input_true_rejected(self):
+        ewma = EWMA(alpha=0.5)
+        with pytest.raises(EWMAError):
+            ewma.update(True)
+
+    def test_bool_input_false_rejected(self):
+        ewma = EWMA(alpha=0.5)
+        with pytest.raises(EWMAError):
+            ewma.update(False)
+
+    def test_bool_input_does_not_pollute_state(self):
+        ewma = EWMA(alpha=0.5)
+        ewma.update(10.0)
+        count_before = ewma.count
+        value_before = ewma.value
+
+        with pytest.raises(EWMAError):
+            ewma.update(True)
+
+        assert ewma.count == count_before
+        assert approx_equal(ewma.value, value_before)
+        assert ewma.contaminated is False
 
     def test_warmup_exceeds_reasonable_range_valid(self):
         ewma = EWMA(alpha=0.5, warmup_period=100000)

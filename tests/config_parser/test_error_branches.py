@@ -42,6 +42,14 @@ class TestSyntaxErrors:
         with pytest.raises(InvalidNumberError):
             parse_toml("key = 0xZZ")
 
+    def test_toml_strict_rejects_bare_string(self):
+        with pytest.raises(InvalidValueTypeError):
+            parse_toml("key = bare_string")
+
+    def test_toml_strict_rejects_unquoted_value_with_special_chars(self):
+        with pytest.raises(InvalidValueTypeError):
+            parse_toml("key = hello world")
+
 
 class TestDuplicateKeyAndTable:
     def test_duplicate_key_in_root(self):

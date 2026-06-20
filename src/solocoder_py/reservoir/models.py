@@ -25,7 +25,11 @@ class WeightedItem:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, WeightedItem):
             return NotImplemented
-        return self.key == other.key
+        return (
+            self.value == other.value
+            and self.weight == other.weight
+            and self.key == other.key
+        )
 
 
 @dataclass

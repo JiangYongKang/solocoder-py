@@ -17,8 +17,8 @@ class ReservoirSampler:
     def __init__(self, capacity: int, seed: Optional[int] = None) -> None:
         if not isinstance(capacity, int):
             raise InvalidCapacityError("capacity must be an integer")
-        if capacity < 0:
-            raise InvalidCapacityError("capacity must be non-negative")
+        if capacity <= 0:
+            raise InvalidCapacityError("capacity must be positive")
         self._capacity = capacity
         self._reservoir: list[Any] = []
         self._total_processed = 0
@@ -86,8 +86,8 @@ class WeightedReservoirSampler:
     def __init__(self, capacity: int, seed: Optional[int] = None) -> None:
         if not isinstance(capacity, int):
             raise InvalidCapacityError("capacity must be an integer")
-        if capacity < 0:
-            raise InvalidCapacityError("capacity must be non-negative")
+        if capacity <= 0:
+            raise InvalidCapacityError("capacity must be positive")
         self._capacity = capacity
         self._heap: list[WeightedItem] = []
         self._total_processed = 0

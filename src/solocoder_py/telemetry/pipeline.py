@@ -102,7 +102,7 @@ class TelemetryPipeline:
     def _process_batch(self, result: FlushResult) -> Optional[ProcessedBatch]:
         normalized = self._normalizer.normalize_batch(result.batch)
         accepted, late = self._order_window.process(normalized)
-        sorted_data = self._order_window.flush()
+        sorted_data = self._order_window.drain()
 
         batch = ProcessedBatch(
             data=sorted_data,

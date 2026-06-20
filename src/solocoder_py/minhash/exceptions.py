@@ -15,3 +15,7 @@ class IncompatibleSignatureError(MinHashError):
 
 class NonHashableElementError(MinHashError):
     pass
+
+
+class UnserializableElementError(MinHashError):
+    pass

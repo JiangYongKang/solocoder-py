@@ -43,6 +43,7 @@ def percent_decode(data: str, errors: str = "replace") -> str:
         if ch == "%":
             if i + 2 >= length:
                 if errors == "ignore":
+                    result.append(ord("%"))
                     i += 1
                     continue
                 elif errors == "replace":

@@ -1,0 +1,7 @@
+产物不满意：
+1. minhash.py 构造方法对 seed 的类型校验用了 isinstance(seed, int)，Python 中 bool 是 int 子类，MinHash(seed=True) 会绕过类型检查直接通过校验。虽布尔值运算不导致崩溃，但 True 和 False 语义上不是有意义的种子值。与提示词要求防止传入非整数类型的意图不完全一致。根因是类型检查未排除 bool，应在 isinstance 之后追加 not isinstance(seed, bool) 做精确排除。
+2. test_normal_flows.py 新增 TestIsCompatible 测试中 test_compatible_seeds_with_same_modulus 等三个方法用不同 seed 值验证相同取模等价行为，缺少参数化设计。且 test_large_positive_seed_normalized 构造的 seed 已超 MAX_SEED 两倍，未独立验证不同取模周期正确性。应使用 parametrize 合并为一个参数化用例。
+
+过程不满意：
+1. 模型在对话开始的第一时间就创建了 4 项 TodoList，之后才读取 minhash.py 和 exceptions.py 的代码内容。因未先分析现有代码的三个问题点及其关联性，初始计划停留在提示词字面转述层面。问题 2 的 seed 校验与问题 3 的归一化比较高度耦合，应在一个步骤中统一处理而非拆成两个独立 Todo。正确做法是先阅读全部源文件分析代码根因和关联，再制定合并优化的执行计划。
+2. 模型在 test_normal_flows.py 编写 test_negative_seed_normalized 测试时，初始版本将负种子 -100 的等价正种子错误设为 max_seed - 99，运行 pytest 发现失败后才意识到 -100 % _MAX_SEED 等于 _MAX_SEED - 100，然后回退修改期望值。这属于试错式测试编写模式，未先验算取模等价性就写入错误断言。正确做法是编写测试前先验证数学等式，确保期望值基于推导而非猜测。

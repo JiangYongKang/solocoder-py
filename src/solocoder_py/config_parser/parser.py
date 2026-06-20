@@ -17,11 +17,12 @@ from .models import TomlTable
 
 
 class ConfigParser:
-    def __init__(self) -> None:
+    def __init__(self, strict: bool = True) -> None:
         self._root = TomlTable()
         self._current_table = self._root
         self._current_table_path: Tuple[str, ...] = ()
         self._pending_comments: List[str] = []
+        self._strict = strict
 
     def parse(self, text: str) -> TomlTable:
         self._root = TomlTable()
@@ -271,7 +272,8 @@ class ConfigParser:
     ) -> None:
         key = self._parse_key(key_part, line_num)
         if key in self._current_table:
-            raise DuplicateKeyError(line_num, key)
+            if self._strict:
+                raise DuplicateKeyError(line_num, key)
         self._current_table[key] = value
         if self._pending_comments:
             self._current_table.set_comment(key, "\n".join(self._pending_comments))
@@ -319,6 +321,9 @@ class ConfigParser:
 
         if self._looks_like_number(text):
             return self._parse_number(text, line_num)
+
+        if self._strict:
+            raise InvalidValueTypeError(line_num, text)
 
         return text
 

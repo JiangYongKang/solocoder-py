@@ -168,6 +168,55 @@ class TestPipelineOrderWindow:
         assert len(batch.late_data) == 1
         assert batch.late_data[0]["v"] == "c"
 
+    def test_cross_batch_out_of_order_within_window_accepted(self, manual_clock):
+        pipeline = TelemetryPipeline(
+            buffer_config=BufferConfig(batch_size=2, timeout_seconds=100.0),
+            schema_config=SchemaConfig(field_mapping={}),
+            window_config=WindowConfig(tolerance_seconds=30.0),
+            clock=manual_clock,
+        )
+
+        pipeline.ingest({"timestamp": 100.0, "v": "a1"})
+        pipeline.ingest({"timestamp": 200.0, "v": "a2"})
+        assert len(pipeline.processed_batches) == 1
+        batch1 = pipeline.processed_batches[0]
+        assert len(batch1.late_data) == 0
+        assert pipeline.order_window.high_watermark == 200.0
+
+        pipeline.ingest({"timestamp": 180.0, "v": "b1"})
+        pipeline.ingest({"timestamp": 210.0, "v": "b2"})
+        assert len(pipeline.processed_batches) == 2
+        batch2 = pipeline.processed_batches[1]
+        assert len(batch2.late_data) == 0
+        assert batch2.data[0]["v"] == "b1"
+        assert len(batch2.data) == 2
+
+    def test_cross_batch_late_beyond_window_rejected(self, manual_clock):
+        late_records = []
+        pipeline = TelemetryPipeline(
+            buffer_config=BufferConfig(batch_size=2, timeout_seconds=100.0),
+            schema_config=SchemaConfig(field_mapping={}),
+            window_config=WindowConfig(
+                tolerance_seconds=30.0,
+                late_data_strategy=LateDataStrategy.CALLBACK,
+            ),
+            on_late=late_records.append,
+            clock=manual_clock,
+        )
+
+        pipeline.ingest({"timestamp": 100.0, "v": "a1"})
+        pipeline.ingest({"timestamp": 200.0, "v": "a2"})
+        assert pipeline.order_window.high_watermark == 200.0
+
+        pipeline.ingest({"timestamp": 50.0, "v": "b1"})
+        pipeline.ingest({"timestamp": 210.0, "v": "b2"})
+        assert len(pipeline.processed_batches) == 2
+        batch2 = pipeline.processed_batches[1]
+        assert len(batch2.late_data) == 1
+        assert batch2.late_data[0]["v"] == "b1"
+        assert len(late_records) == 1
+        assert late_records[0]["v"] == "b1"
+
 
 class TestPipelineManualFlush:
     def test_manual_flush(self, manual_clock):

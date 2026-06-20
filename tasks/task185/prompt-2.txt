@@ -1,0 +1,5 @@
+你实现的 XML 树解析器存在以下问题需要修复：
+1. entities.py 模块顶层定义了三个已编译的正则表达式，但 decode_entities 函数完全没有使用它们，属于死代码，且 import re 也成为无效导入。
+2. models.py 中 Node 基类的 __iter__ 方法用 isinstance 判断子类类型来决定迭代行为，当将来扩展新的节点类型时必须同步修改基类分支，违反了修改封闭原则。
+3. xpath.py 中 _check_predicates 方法的 step 参数类型注解与实际调用时传入的类型不一致。
+4. parser.py 的 _parse_element 方法直接将 element.children 赋值为列表，绕过了 Element 类定义的 add_child 方法。

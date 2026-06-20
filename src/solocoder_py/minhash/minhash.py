@@ -9,6 +9,7 @@ from .exceptions import (
     IncompatibleSignatureError,
     InvalidConfigError,
     NonHashableElementError,
+    UnserializableElementError,
 )
 
 
@@ -22,8 +23,8 @@ def _serialize(element: Any) -> bytes:
     try:
         return pickle.dumps(element)
     except (pickle.PicklingError, TypeError, AttributeError) as e:
-        raise NonHashableElementError(
-            f"Element {element!r} is not hashable: {e}"
+        raise UnserializableElementError(
+            f"Element {element!r} cannot be serialized: {e}"
         ) from e
 
 
@@ -55,11 +56,14 @@ class MinHash:
             raise InvalidConfigError(
                 "num_hash_functions must be a positive integer"
             )
+        if not isinstance(seed, int):
+            raise InvalidConfigError("seed must be an integer")
 
         self._num_hash_functions = num_hash_functions
         self._seed = seed
+        self._normalized_seed = seed % self._MAX_SEED
         self._hash_fns: list[Callable[[bytes], int]] = [
-            _make_hash_fn((seed + i) % self._MAX_SEED)
+            _make_hash_fn((self._normalized_seed + i) % self._MAX_SEED)
             for i in range(num_hash_functions)
         ]
         self._signature: list[int] = [
@@ -116,7 +120,7 @@ class MinHash:
             return False
         return (
             self._num_hash_functions == other._num_hash_functions
-            and self._seed == other._seed
+            and self._normalized_seed == other._normalized_seed
         )
 
     def _check_compatible(self, other: "MinHash") -> None:
@@ -128,8 +132,8 @@ class MinHash:
         if not self.is_compatible(other):
             raise IncompatibleSignatureError(
                 f"Signatures are incompatible: "
-                f"self has h={self._num_hash_functions}, seed={self._seed}; "
-                f"other has h={other._num_hash_functions}, seed={other._seed}"
+                f"self has h={self._num_hash_functions}, seed={self._seed} (normalized: {self._normalized_seed}); "
+                f"other has h={other._num_hash_functions}, seed={other._seed} (normalized: {other._normalized_seed})"
             )
 
     def jaccard(self, other: "MinHash") -> float:

@@ -130,4 +130,5 @@ class UrlBuilder:
             path=path,
             query=self._query_params.to_string(),
             fragment=self._fragment,
+            has_authority=self._host is not None,
         )

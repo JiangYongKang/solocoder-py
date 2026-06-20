@@ -84,21 +84,34 @@ result = normalizer.normalize({
 
 处理逻辑：
 
-1. 维护高水位线（已见最大时间戳）
+1. 维护高水位线（已见最大时间戳）—— 跨批次持久保留
 2. 新数据时间戳 >= 高水位线时，更新水位线并接受
 3. 新数据时间戳 < 高水位线但差值 <= 容错窗口时，接受并按时间戳重排序
 4. 新数据时间戳 < 高水位线且差值 > 容错窗口时，标记为迟到数据
 
+### drain() vs flush()
+
+- **`drain()`**：取出当前窗口内已排序的数据，**保留**高水位线。适用于 Pipeline 跨批次乱序容错的场景。
+- **`flush()`**：取出数据并清空全部状态（含高水位线）。适用于窗口独立使用、需要完全重置的场景。
+- **`reset()`**：清空所有内部状态（缓冲区 + 水位线 + 迟到记录）。
+
+### 迟到回调
+
+`OrderWindow` 通过构造参数 `on_late` 提供迟到数据回调，配合 `late_data_strategy=CALLBACK` 使用。回调路径单一，无冗余配置。
+
 ```python
 from solocoder_py.telemetry import OrderWindow, WindowConfig, LateDataStrategy
+
+def handle_late(record):
+    print(f"Late: {record}")
 
 config = WindowConfig(
     tolerance_seconds=30.0,
     timestamp_field="timestamp",
-    late_data_strategy=LateDataStrategy.LOG,
+    late_data_strategy=LateDataStrategy.CALLBACK,
 )
 
-window = OrderWindow(config)
+window = OrderWindow(config, on_late=handle_late)
 
 accepted, late = window.process([
     {"timestamp": 100.0, "value": "a"},
@@ -106,7 +119,7 @@ accepted, late = window.process([
     {"timestamp": 105.0, "value": "c"},  # 窗口内乱序，被接受并重排
 ])
 
-sorted_data = window.flush()  # 按时间戳排序输出
+sorted_data = window.drain()  # 取出排序数据，高水位线保留
 ```
 
 `tolerance_seconds=0` 时仅接受严格非递减时间戳的数据。

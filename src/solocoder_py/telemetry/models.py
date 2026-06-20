@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from .exceptions import (
     InvalidBufferConfigError,
@@ -45,7 +45,6 @@ class WindowConfig:
     tolerance_seconds: float = 30.0
     timestamp_field: str = "timestamp"
     late_data_strategy: LateDataStrategy = LateDataStrategy.LOG
-    on_late_data: Optional[Callable[[dict[str, Any]], None]] = None
 
     def __post_init__(self) -> None:
         if self.tolerance_seconds < 0:

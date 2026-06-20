@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Dict
 
 from .exceptions import InvalidEntityError
@@ -13,11 +12,6 @@ PREDEFINED_ENTITIES: Dict[str, str] = {
     "quot": '"',
     "apos": "'",
 }
-
-
-_NAMED_ENTITY_RE = re.compile(r"&([a-zA-Z_][a-zA-Z0-9_]*);")
-_NUMERIC_DECIMAL_RE = re.compile(r"&#(\d+);")
-_NUMERIC_HEX_RE = re.compile(r"&#x([0-9a-fA-F]+);")
 
 
 def decode_entities(text: str) -> str:

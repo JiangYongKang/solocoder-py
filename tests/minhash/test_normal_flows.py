@@ -257,6 +257,51 @@ class TestIsCompatible:
         mh = MinHash(num_hash_functions=64, seed=42)
         assert not mh.is_compatible("not a minhash")
 
+    def test_compatible_seeds_with_same_modulus(self):
+        max_seed = 2**32 - 1
+        mh1 = MinHash(num_hash_functions=64, seed=42)
+        mh2 = MinHash(num_hash_functions=64, seed=42 + max_seed)
+        assert mh1.is_compatible(mh2)
+        assert mh2.is_compatible(mh1)
+
+    def test_same_modulus_seeds_produce_same_signature(self):
+        max_seed = 2**32 - 1
+        elements = [f"elem_{i}" for i in range(30)]
+        mh1 = MinHash.from_set(elements, num_hash_functions=64, seed=42)
+        mh2 = MinHash.from_set(elements, num_hash_functions=64, seed=42 + max_seed)
+        assert mh1.signature == mh2.signature
+
+    def test_same_modulus_seeds_jaccard_equals_one(self):
+        max_seed = 2**32 - 1
+        elements = [f"item_{i}" for i in range(50)]
+        mh1 = MinHash.from_set(elements, num_hash_functions=64, seed=42)
+        mh2 = MinHash.from_set(elements, num_hash_functions=64, seed=42 + max_seed)
+        assert mh1.jaccard(mh2) == pytest.approx(1.0)
+
+    def test_negative_seed_normalized(self):
+        max_seed = 2**32 - 1
+        elements = [f"elem_{i}" for i in range(20)]
+        mh1 = MinHash.from_set(elements, num_hash_functions=64, seed=-100)
+        mh2 = MinHash.from_set(elements, num_hash_functions=64, seed=max_seed - 100)
+        assert mh1.is_compatible(mh2)
+        assert mh1.signature == mh2.signature
+
+    def test_seed_plus_max_seed_is_compatible(self):
+        max_seed = 2**32 - 1
+        elements = [f"elem_{i}" for i in range(20)]
+        mh1 = MinHash.from_set(elements, num_hash_functions=64, seed=12345)
+        mh2 = MinHash.from_set(elements, num_hash_functions=64, seed=12345 + max_seed)
+        assert mh1.is_compatible(mh2)
+        assert mh1.signature == mh2.signature
+
+    def test_large_positive_seed_normalized(self):
+        max_seed = 2**32 - 1
+        elements = [f"elem_{i}" for i in range(20)]
+        mh1 = MinHash.from_set(elements, num_hash_functions=64, seed=42)
+        mh2 = MinHash.from_set(elements, num_hash_functions=64, seed=42 + 2 * max_seed)
+        assert mh1.is_compatible(mh2)
+        assert mh1.signature == mh2.signature
+
 
 class TestEquality:
     def test_equal_same_signature(self):

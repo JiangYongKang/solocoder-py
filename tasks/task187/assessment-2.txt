@@ -1,0 +1,9 @@
+产物不满意：
+1. parser.py 的 UrlComponents.authority 属性引入 has_authority 标志后，解析 file:///path/to/file 时返回空字符串而非 None。外部代码若通过 `if authority is not None` 判断权限存在性会因空字符串产生误判。根因是修改 authority 时只考虑了 rebuild 兼容性忽略了属性语义约定，应在 has_authority 为 True 且 host 非空时才构建 authority 字符串。
+
+过程不满意：
+1. 模型在收到提示词后的第一步操作就是通过 todo_write 创建了 5 项子任务计划，然后才开始用 view_files 查看 percent.py 的代码内容。这与第一轮标注 assessment-1.txt 中明确指出的"应在先理解项目骨架和需求细节后再制定执行计划"的问题完全一致，模型没有从上一轮的评估反馈中吸取教训。正确的做法是先读取相关源文件理解当前实现和 BUG 的根因，再制定针对性的修复计划。
+
+2. 模型在对 parser.py 的修改中直接使用 Write 工具完整重写了整个文件，而非使用 edit_file_search_replace 做针对性的逐处修改。三个独立的 BUG 修复（validate_scheme_strict 双模式支持、has_authority 标志引入及 rebuild 重写、scheme 小写规范化）被混在单次全量重写中完成，与第一轮标注中指出的 parser.py 整文件重写问题如出一辙。这种做法增加了无意中改变不相关逻辑的风险，也不利于后续的代码审查和变更追溯。
+
+3. 模型在 pytest 全部 100 个测试通过后仍然创建了 test_fixes.py 临时文件并用 python test_fixes.py 手动验证四个修复的效果，执行完后又将临时文件删除。这种额外的临时脚本验证是多余的徒劳操作，已有的 pytest 测试套件包含 100 个测试用例已能充分覆盖修复的正确性。模型在第一次尝试用 python -c 内联脚本验证时因语法问题执行失败，随后才转而创建临时文件，反映出模型对 Python 命令行内联脚本的掌握不到位，合理做法是直接信任 pytest 的测试结果而无需额外的临时验证。

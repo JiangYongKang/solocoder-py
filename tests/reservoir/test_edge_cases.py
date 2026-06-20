@@ -7,6 +7,7 @@ import pytest
 from solocoder_py.reservoir import (
     ReservoirSampler,
     WeightedReservoirSampler,
+    WeightedItem,
 )
 
 
@@ -26,18 +27,6 @@ class TestReservoirSamplerEdgeCases:
         avg = sum(counts) / len(counts)
         assert abs(avg - expected) / expected < 0.05
 
-    def test_k_equals_0_empty_reservoir(self, sampler_k0):
-        sampler_k0.feed_many([1, 2, 3, 4, 5])
-        assert sampler_k0.sample_count == 0
-        assert sampler_k0.total_processed == 5
-        assert sampler_k0.samples() == []
-        assert len(sampler_k0) == 0
-
-    def test_k_equals_0_iter_is_empty(self, sampler_k0):
-        sampler_k0.feed(42)
-        items = list(sampler_k0)
-        assert items == []
-
     def test_empty_data_stream(self, sampler_k5):
         assert sampler_k5.sample_count == 0
         assert sampler_k5.total_processed == 0
@@ -47,12 +36,6 @@ class TestReservoirSamplerEdgeCases:
         result = sampler_k5.close()
         assert result == []
         assert sampler_k5.closed is True
-
-    def test_empty_data_stream_k0(self, sampler_k0):
-        assert sampler_k0.sample_count == 0
-        assert sampler_k0.total_processed == 0
-        result = sampler_k0.close()
-        assert result == []
 
     def test_all_same_items_stream(self, sampler_k5):
         sampler_k5.feed_many([7] * 100)
@@ -124,12 +107,6 @@ class TestWeightedSamplerEdgeCases:
             expected_ratio = w / total_weight
             actual_ratio = counter[item] / trials
             assert abs(actual_ratio - expected_ratio) < 0.03
-
-    def test_k_equals_0_weighted_empty(self, weighted_sampler_k0):
-        weighted_sampler_k0.feed_many([(1, 1.0), (2, 2.0)])
-        assert weighted_sampler_k0.sample_count == 0
-        assert weighted_sampler_k0.total_processed == 2
-        assert weighted_sampler_k0.samples() == []
 
     def test_empty_stream_weighted(self, weighted_sampler_k5):
         assert weighted_sampler_k5.sample_count == 0
@@ -213,3 +190,47 @@ class TestWeightedSamplerEdgeCases:
         assert len(samples) == k
         for s in samples:
             assert 0 <= s < n
+
+
+class TestWeightedItemEquality:
+    def test_same_all_fields_are_equal(self):
+        a = WeightedItem(value="x", weight=2.0, key=0.5)
+        b = WeightedItem(value="x", weight=2.0, key=0.5)
+        assert a == b
+
+    def test_different_value_not_equal(self):
+        a = WeightedItem(value="x", weight=2.0, key=0.5)
+        b = WeightedItem(value="y", weight=2.0, key=0.5)
+        assert a != b
+
+    def test_different_weight_not_equal(self):
+        a = WeightedItem(value="x", weight=2.0, key=0.5)
+        b = WeightedItem(value="x", weight=3.0, key=0.5)
+        assert a != b
+
+    def test_different_key_not_equal(self):
+        a = WeightedItem(value="x", weight=2.0, key=0.5)
+        b = WeightedItem(value="x", weight=2.0, key=0.7)
+        assert a != b
+
+    def test_same_key_but_different_value_not_equal(self):
+        a = WeightedItem(value=1, weight=1.0, key=0.9)
+        b = WeightedItem(value=2, weight=1.0, key=0.9)
+        assert a != b
+
+    def test_not_equal_to_non_weighted_item(self):
+        a = WeightedItem(value="x", weight=2.0, key=0.5)
+        assert a != "x"
+        assert a != None
+        assert a != {"value": "x", "weight": 2.0, "key": 0.5}
+
+    def test_heap_comparison_based_on_key_only(self):
+        items = [
+            WeightedItem(value="a", weight=1.0, key=0.3),
+            WeightedItem(value="b", weight=99.0, key=0.1),
+            WeightedItem(value="c", weight=0.5, key=0.2),
+        ]
+        items.sort()
+        assert items[0].key == 0.1
+        assert items[1].key == 0.2
+        assert items[2].key == 0.3

@@ -5,6 +5,7 @@ from .exceptions import (
     InvalidConfigError,
     MinHashError,
     NonHashableElementError,
+    UnserializableElementError,
 )
 from .minhash import MinHash, jaccard_similarity
 
@@ -14,5 +15,6 @@ __all__ = [
     "InvalidConfigError",
     "IncompatibleSignatureError",
     "NonHashableElementError",
+    "UnserializableElementError",
     "jaccard_similarity",
 ]

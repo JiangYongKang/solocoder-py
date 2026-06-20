@@ -54,7 +54,7 @@ class EWMA:
     @staticmethod
     def _validate_input(value: float) -> str:
         if isinstance(value, bool):
-            return "valid"
+            raise EWMAError(f"Invalid input type: bool is not allowed, use int or float")
         if not isinstance(value, (int, float)):
             raise EWMAError(f"Invalid input type: {type(value)}")
         v = float(value)
@@ -140,7 +140,7 @@ class EWMA:
         if self._count == 0 and self._initial_value is None:
             return None
 
-        if self.in_warmup:
+        if self._initial_value is None and self.in_warmup:
             correction = 1.0 - self._correction_factor_power
             if correction == 0.0:
                 return self._s
@@ -155,7 +155,7 @@ class EWMA:
         if self._count == 0 and self._initial_value is None:
             return None
 
-        if self._warmup_period > 0:
+        if self._initial_value is None and self._warmup_period > 0:
             correction = 1.0 - self._correction_factor_power
             if correction == 0.0:
                 return self._s

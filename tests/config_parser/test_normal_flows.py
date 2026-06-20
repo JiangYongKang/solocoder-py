@@ -305,9 +305,8 @@ key = 2
 key = first
 key = second
 '''
-        from solocoder_py.config_parser import DuplicateKeyError
-        with pytest.raises(DuplicateKeyError):
-            parse_ini(text)
+        config = parse_ini(text)
+        assert config["section"]["key"] == "second"
 
     def test_parse_ini_global_keys(self):
         text = '''global_key = "global_value"
@@ -317,6 +316,34 @@ section_key = "section_value"
         config = parse_ini(text)
         assert config["global_key"] == "global_value"
         assert config["section"]["section_key"] == "section_value"
+
+    def test_parse_ini_bare_strings_allowed(self):
+        text = '''
+[section]
+key1 = hello
+key2 = world peace
+'''
+        config = parse_ini(text)
+        assert config["section"]["key1"] == "hello"
+        assert config["section"]["key2"] == "world peace"
+
+    def test_parse_ini_duplicate_key_overwrite_multiple_times(self):
+        text = '''
+[section]
+key = first
+key = second
+key = third
+'''
+        config = parse_ini(text)
+        assert config["section"]["key"] == "third"
+
+    def test_parse_ini_duplicate_key_in_root_overwrite(self):
+        text = '''
+global = a
+global = b
+'''
+        config = parse_ini(text)
+        assert config["global"] == "b"
 
 
 class TestTypeConversion:

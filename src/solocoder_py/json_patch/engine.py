@@ -4,7 +4,7 @@ import copy
 from typing import Any
 
 from .exceptions import (
-    AddOutOfBoundsError,
+    JsonPatchError,
     PatchOperationError,
     PatchTestFailedError,
     PathNotFoundError,
@@ -28,7 +28,6 @@ def _values_equal(a: Any, b: Any) -> bool:
 
 
 def apply(doc: Any, operations: list[dict[str, Any]]) -> Any:
-    original = copy.deepcopy(doc)
     current = copy.deepcopy(doc)
     for op in operations:
         current = _apply_one(current, op)
@@ -41,7 +40,7 @@ def apply_atomic(doc: Any, operations: list[dict[str, Any]]) -> Any:
     try:
         for op in operations:
             current = _apply_one(current, op)
-    except PatchOperationError:
+    except JsonPatchError:
         return original
     return current
 
@@ -79,30 +78,7 @@ def _apply_one(doc: Any, op: dict[str, Any]) -> Any:
 
 
 def _op_add(doc: Any, path: str, value: Any) -> Any:
-    try:
-        return ptr.add_value(doc, path, value)
-    except AddOutOfBoundsError:
-        raise
-    except PathNotFoundError:
-        tokens = ptr.parse(path)
-        if not tokens:
-            return copy.deepcopy(value)
-        parent_path_tokens = tokens[:-1]
-        last_token = tokens[-1]
-        if parent_path_tokens:
-            try:
-                parent = ptr.get(doc, "/" + "/".join(ptr._escape(t) for t in parent_path_tokens))
-            except PathNotFoundError:
-                raise PathNotFoundError(
-                    f"Parent path does not exist for add at {path!r}"
-                )
-        else:
-            parent = doc
-        if isinstance(parent, dict):
-            return ptr.add_value(doc, path, value)
-        raise PathNotFoundError(
-            f"Cannot add to non-existent path {path!r}"
-        )
+    return ptr.add_value(doc, path, value)
 
 
 def _op_remove(doc: Any, path: str) -> Any:

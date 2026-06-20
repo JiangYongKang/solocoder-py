@@ -1,0 +1,5 @@
+你实现的 URL 解析器存在以下问题需要修复：
+1. 百分号解码在 errors="ignore" 模式下处理不完整编码（如 hello%）时会丢弃百分号本身，输出 hello 而非 hello%。同样 hello%2 会输出 hello2。
+2. UrlParser 构造方法接受 validate_scheme_strict 参数但 parse 方法从未读取该参数的值，无论传入 True 还是 False 行为完全一样。
+3. 对 file:///path/to/file 这类 URL 解析后再 rebuild 会丢失 // 前缀，得到 file:/path/to/file。
+4. parser 不对 scheme 做小写规范化，与 URL Builder 对 scheme 的处理行为不一致。

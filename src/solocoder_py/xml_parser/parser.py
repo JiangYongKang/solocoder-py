@@ -227,8 +227,7 @@ class XMLParser:
         if is_self_closing:
             return element
 
-        children = self._parse_children(element)
-        element.children = children
+        self._parse_children(element)
 
         self._skip_whitespace()
 
@@ -271,14 +270,12 @@ class XMLParser:
                     f"Namespace prefix '{element.prefix}' is not declared"
                 )
 
-    def _parse_children(self, parent: Element) -> List[object]:
-        children: List[object] = []
-
+    def _parse_children(self, parent: Element) -> None:
         while self._pos < self._len:
             if self._peek() != "<":
                 text = self._parse_text_content()
                 if text:
-                    children.append(Text(text, parent=parent))
+                    parent.add_child(Text(text))
                 continue
 
             if self._match("<!--"):
@@ -287,7 +284,7 @@ class XMLParser:
 
             if self._match("<![CDATA["):
                 content = self._parse_cdata()
-                children.append(Text(content, parent=parent))
+                parent.add_child(Text(content))
                 continue
 
             if self._match("<?"):
@@ -304,9 +301,7 @@ class XMLParser:
                 )
 
             child = self._parse_element(parent)
-            children.append(child)
-
-        return children
+            parent.add_child(child)
 
     def _parse_text_content(self) -> str:
         start = self._pos

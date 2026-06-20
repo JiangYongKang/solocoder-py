@@ -192,6 +192,52 @@ class TestDiff:
         paths = {d.path for d in diff.value_diff}
         assert paths == {"a", "b"}
 
+    def test_diff_desired_nested_empty_dict(self, shadow):
+        shadow.set_desired({"a": {"b": {}}}, expected_version=1)
+        shadow.set_reported({}, expected_version=2)
+        diff = shadow.diff()
+        assert diff.has_differences
+        assert len(diff.desired_only) == 1
+        assert diff.desired_only[0].path == "a.b"
+        assert diff.desired_only[0].desired_value == {}
+
+    def test_diff_reported_nested_empty_dict(self, shadow):
+        shadow.set_desired({}, expected_version=1)
+        shadow.set_reported({"a": {"b": {}}}, expected_version=2)
+        diff = shadow.diff()
+        assert diff.has_differences
+        assert len(diff.reported_only) == 1
+        assert diff.reported_only[0].path == "a.b"
+        assert diff.reported_only[0].reported_value == {}
+
+    def test_diff_desired_deeply_nested_empty_dicts(self, shadow):
+        shadow.set_desired({"x": {"y": {"z": {}}}}, expected_version=1)
+        shadow.set_reported({}, expected_version=2)
+        diff = shadow.diff()
+        assert diff.has_differences
+        assert len(diff.desired_only) == 1
+        assert diff.desired_only[0].path == "x.y.z"
+        assert diff.desired_only[0].desired_value == {}
+
+    def test_diff_desired_empty_dict_at_leaf(self, shadow):
+        shadow.set_desired({"a": {}}, expected_version=1)
+        shadow.set_reported({}, expected_version=2)
+        diff = shadow.diff()
+        assert diff.has_differences
+        assert len(diff.desired_only) == 1
+        assert diff.desired_only[0].path == "a"
+        assert diff.desired_only[0].desired_value == {}
+
+    def test_diff_mixed_empty_and_non_empty_nested(self, shadow):
+        shadow.set_desired({"a": {"b": {}, "c": 1}}, expected_version=1)
+        shadow.set_reported({}, expected_version=2)
+        diff = shadow.diff()
+        assert diff.has_differences
+        assert len(diff.desired_only) == 2
+        paths = {d.path for d in diff.desired_only}
+        assert "a.b" in paths
+        assert "a.c" in paths
+
 
 class TestVersionSync:
     def test_initial_version_is_1(self, shadow):

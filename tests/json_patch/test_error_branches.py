@@ -46,6 +46,24 @@ class TestTestFailureRollback:
         with pytest.raises(PatchTestFailedError):
             apply(doc, [{"op": "test", "path": "/missing", "value": 1}])
 
+    def test_atomic_rollback_on_invalid_pointer(self):
+        doc = {"foo": 1}
+        ops = [
+            {"op": "add", "path": "/bar", "value": 2},
+            {"op": "add", "path": "badpointer", "value": 3},
+        ]
+        result = apply_atomic(doc, ops)
+        assert result == {"foo": 1}
+
+    def test_atomic_rollback_on_invalid_from_pointer(self):
+        doc = {"foo": 1}
+        ops = [
+            {"op": "add", "path": "/bar", "value": 2},
+            {"op": "copy", "from": "badfrom", "path": "/baz"},
+        ]
+        result = apply_atomic(doc, ops)
+        assert result == {"foo": 1}
+
 
 class TestRemoveNonexistentPath:
     def test_remove_missing_key(self):

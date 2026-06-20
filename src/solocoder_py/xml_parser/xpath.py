@@ -126,21 +126,22 @@ class XPathTokenizer:
 
 
 class XPathStep:
-    pass
+    def __init__(self) -> None:
+        self.predicates: List[Union[AttributePredicate, PositionPredicate]] = []
 
 
 class NameStep(XPathStep):
     def __init__(self, name: str, is_wildcard: bool = False) -> None:
+        super().__init__()
         self.name = name
         self.is_wildcard = is_wildcard
-        self.predicates: List[Union[AttributePredicate, PositionPredicate]] = []
 
 
 class DescendantStep(XPathStep):
     def __init__(self, name: str, is_wildcard: bool = False) -> None:
+        super().__init__()
         self.name = name
         self.is_wildcard = is_wildcard
-        self.predicates: List[Union[AttributePredicate, PositionPredicate]] = []
 
 
 class RootStep(XPathStep):
@@ -397,7 +398,7 @@ class XPathEvaluator:
         return result
 
     def _check_predicates(
-        self, step: NameStep, element: Element, position: int
+        self, step: XPathStep, element: Element, position: int
     ) -> bool:
         for predicate in step.predicates:
             if isinstance(predicate, PositionPredicate):
