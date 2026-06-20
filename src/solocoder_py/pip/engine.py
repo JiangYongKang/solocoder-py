@@ -71,94 +71,6 @@ class RayCastingEngine:
 
         return True
 
-    def _ray_casting(self, polygon: Polygon, point: Point) -> bool:
-        n = polygon.vertex_count
-        px, py = point.x, point.y
-        count = 0
-
-        for i in range(n):
-            v1, v2 = polygon.get_edge(i)
-
-            v1x, v1y = v1.x, v1.y
-            v2x, v2y = v2.x, v2.y
-
-            v1_above = v1y > py + self._epsilon
-            v2_above = v2y > py + self._epsilon
-
-            v1_on = abs(v1y - py) <= self._epsilon
-            v2_on = abs(v2y - py) <= self._epsilon
-
-            if v1_on and v2_on:
-                continue
-
-            if v1_above == v2_above and not v1_on and not v2_on:
-                continue
-
-            if v1_on:
-                prev_v, _ = polygon.get_edge((i - 1 + n) % n)
-                prev_y = prev_v.y
-                prev_above = prev_y > py + self._epsilon
-                if prev_above != v2_above:
-                    if self._intersection_x_gt_px(v1x, v1y, v2x, v2y, px, py):
-                        count += 1
-                continue
-
-            if v2_on:
-                continue
-
-            if v1_above != v2_above:
-                if self._intersection_x_gt_px(v1x, v1y, v2x, v2y, px, py):
-                    count += 1
-
-        return count % 2 == 1
-
-    def _intersection_x_gt_px(
-        self,
-        v1x: float,
-        v1y: float,
-        v2x: float,
-        v2y: float,
-        px: float,
-        py: float,
-    ) -> bool:
-        t = (py - v1y) / (v2y - v1y)
-        x_intersect = v1x + t * (v2x - v1x)
-        return px < x_intersect - self._epsilon
-
-    def contains_many(self, polygon: Polygon, points: List[Point]) -> List[PointLocation]:
-        return [self.contains(polygon, p) for p in points]
-
-    def contains_holed(
-        self, polygon: PolygonWithHoles, point: Point
-    ) -> PointLocation:
-        if not isinstance(polygon, PolygonWithHoles):
-            raise InvalidPolygonError(
-                f"Expected PolygonWithHoles, got {type(polygon)}"
-            )
-        if not isinstance(point, Point):
-            raise InvalidPointError(f"Expected Point, got {type(point)}")
-
-        if self._is_on_holed_boundary(polygon, point):
-            return PointLocation.ON_BOUNDARY
-
-        if polygon.outer_ring.winding_order <= 0:
-            raise InvalidPolygonError(
-                "Outer ring must have positive winding order (counterclockwise)"
-            )
-        for i, inner_ring in enumerate(polygon.inner_rings):
-            if inner_ring.winding_order >= 0:
-                raise InvalidPolygonError(
-                    f"Inner ring {i} must have negative winding order (clockwise)"
-                )
-
-        total_winding = self._signed_ray_casting(polygon.outer_ring, point)
-        for inner_ring in polygon.inner_rings:
-            total_winding += self._signed_ray_casting(inner_ring, point)
-
-        if total_winding != 0:
-            return PointLocation.INSIDE
-        return PointLocation.OUTSIDE
-
     def _signed_ray_casting(self, polygon: Polygon, point: Point) -> int:
         n = polygon.vertex_count
         px, py = point.x, point.y
@@ -205,6 +117,48 @@ class RayCastingEngine:
                         winding -= 1
 
         return winding
+
+    def _ray_casting(self, polygon: Polygon, point: Point) -> bool:
+        return abs(self._signed_ray_casting(polygon, point)) % 2 == 1
+
+    def _intersection_x_gt_px(
+        self,
+        v1x: float,
+        v1y: float,
+        v2x: float,
+        v2y: float,
+        px: float,
+        py: float,
+    ) -> bool:
+        t = (py - v1y) / (v2y - v1y)
+        x_intersect = v1x + t * (v2x - v1x)
+        return px < x_intersect - self._epsilon
+
+    def contains_many(self, polygon: Polygon, points: List[Point]) -> List[PointLocation]:
+        return [self.contains(polygon, p) for p in points]
+
+    def contains_holed(
+        self, polygon: PolygonWithHoles, point: Point
+    ) -> PointLocation:
+        if not isinstance(polygon, PolygonWithHoles):
+            raise InvalidPolygonError(
+                f"Expected PolygonWithHoles, got {type(polygon)}"
+            )
+        if not isinstance(point, Point):
+            raise InvalidPointError(f"Expected Point, got {type(point)}")
+
+        if self._is_on_holed_boundary(polygon, point):
+            return PointLocation.ON_BOUNDARY
+
+        polygon.normalize()
+
+        total_winding = self._signed_ray_casting(polygon.outer_ring, point)
+        for inner_ring in polygon.inner_rings:
+            total_winding += self._signed_ray_casting(inner_ring, point)
+
+        if total_winding != 0:
+            return PointLocation.INSIDE
+        return PointLocation.OUTSIDE
 
     def is_inside_holed(self, polygon: PolygonWithHoles, point: Point) -> bool:
         result = self.contains_holed(polygon, point)

@@ -222,7 +222,7 @@ class TestAntimeridianCrossing:
         east_bbox = decode_bbox(neighbors.east)
         assert east_bbox.min_lon > bbox.min_lon
         assert east_bbox.max_lon < 180.0
-        assert east_bbox.min_lon > 0
+        assert east_bbox.min_lon >= 0
 
     def test_west_neighbor_crosses_antimeridian(self):
         geohash = encode(0.0, -179.999, precision=6)
@@ -245,7 +245,7 @@ class TestAntimeridianCrossing:
         west_bbox = decode_bbox(neighbors.west)
         assert west_bbox.min_lon < bbox.min_lon
         assert west_bbox.min_lon > -180.0
-        assert west_bbox.max_lon < 0
+        assert west_bbox.max_lon <= 0
 
     def test_antimeridian_adjacency(self):
         geohash_east = encode(0.0, 179.9999, precision=4)

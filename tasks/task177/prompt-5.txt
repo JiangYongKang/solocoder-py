@@ -1,0 +1,7 @@
+在当前项目点在多边形内判定引擎的实现中，仍存在以下问题需要修复：
+
+1. engine.py 中新增的 _signed_ray_casting 方法与已有的 _ray_casting 方法在边遍历、顶点在射线上处理、epsilon 浮点比较、水平边跳过、交点横坐标计算等几何处理逻辑上高度重复，两段代码的差异仅在于计数方式（有符号累加与奇偶翻转）。如果将来边界条件处理需要修复，两个重复副本必须同步修改，一旦遗漏一处就会产生不一致的判定行为。
+
+2. engine.py 的 contains_holed 方法中新增了跑序方向的硬性校验，要求外环 winding_order 大于零且内环 winding_order 小于零，不满足时直接抛出 InvalidPolygonError。但如果调用方通过 PolygonWithHoles 构造函数直接创建了跑序不符合预期的带孔多边形且未主动调用 normalize，引擎会直接拒绝判定而非自动纠正跑序，与 PolygonWithHoles.from_tuples 路径已有的自动规范化行为不一致。
+
+3. 项目根目录下的 geometry_verification.py 被修改用于验证环绕数算法正确性，但该文件不在 src/solocoder_py/pip/ 包内。按照本项目的包隔离要求，所有代码变更应仅限当前任务对应的 pip 包，环绕数验算逻辑应以单元测试形式放入 tests/pip/ 目录或以文档形式嵌入 pip 包的 README.md 中。

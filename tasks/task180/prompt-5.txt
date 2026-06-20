@@ -1,0 +1,5 @@
+在当前项目流式统计算子的测试中，仍存在以下问题需要修复：
+
+1. test_edge_cases.py 的 TestExtremeBatchRatioMerge 测试类中，test_100k_to_1_near_mean 和 test_100k_to_2_symmetric_outliers 两个方法的 m3_rtol 被从 1e-9 调整为 1e-12，但这两个方法的 small_data 取值分别为 99999.0 和 [-50000.0, 50000.0]，delta 与标准差处于同一数量级，与极端 delta 场景中 delta 达 1e8 量级的误差主导项完全不同，不应与极端 delta 用例归入同一容差级别。本次修复的目标是消除极端 delta 场景之间的 1000 倍容差差异，near_mean 和 symmetric_outliers 用例不在修复范围内，其容差的调整缺乏必要性依据。
+
+2. 极端 delta 场景（test_100k_to_1_extreme_delta 和 test_1M_to_1_extreme_delta）的 M3 实际相对误差约为 1.3e-16，近均值小批量场景（test_100k_to_1_near_mean 和 test_100k_to_2_symmetric_outliers）的 M3 实际相对误差约为 3.6e-14，两者相差约 280 倍，但当前全部被设为 m3_rtol=1e-12。虽然 1e-12 对两类场景均能通过，但不同误差量级的场景共用同一容差值意味着容差并非从各自场景的误差传播上界推导得出，而是用一个宽松值覆盖了所有场景的精度差异，丢失了对不同场景差异化精度要求的反映。

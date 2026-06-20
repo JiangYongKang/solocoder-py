@@ -1,0 +1,5 @@
+在当前项目 Geohash 编解码器的测试中，仍存在以下问题需要修复：
+
+1. test_edge_cases.py 的 test_east_neighbor_not_at_antimeridian 方法中对东邻胞经度范围的独立断言 `assert east_bbox.min_lon > 0` 使用了严格不等式，但原 OR 断言中 min_lon < 0 为 False 的逻辑否定是 min_lon >= 0，严格大于排除了 min_lon 恰好等于 0 的合法边界取值。
+
+2. test_edge_cases.py 的 test_west_neighbor_not_at_antimeridian 方法中对西邻胞经度范围的独立断言 `assert west_bbox.max_lon < 0` 同样使用了严格不等式，原 OR 断言中 max_lon > 0 为 False 的逻辑否定是 max_lon <= 0，严格小于排除了 max_lon 恰好等于 0 的合法边界取值。这两个断言在当前测试坐标下恰好通过，但从单一运行时样本反推断言条件会导致断言比必要条件更严格，当测试坐标变化或被测实现调整时就可能误报失败。

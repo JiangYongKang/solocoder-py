@@ -26,11 +26,33 @@
 
 表示多边形，由有序顶点序列定义，首尾相连形成闭合环。
 
-- `vertices: List[Point] - 多边形顶点列表
+- `vertices: List[Point]` - 多边形顶点列表
 
-- `vertex_count: int - 顶点数量
+- `vertex_count: int` - 顶点数量
+
+- `winding_order: float` - 带符号面积，表示顶点环绕方向
+
+- `is_counterclockwise() -> bool` - 判断是否为逆时针方向
+
+- `is_clockwise() -> bool` - 判断是否为顺时针方向
+
+- `reverse()` - 反转顶点顺序
 
 - `from_tuples(vertices)` - 从元组列表构造多边形
+
+### PolygonWithHoles
+
+表示带孔多边形，由一个外环和若干内环组成。
+
+- `outer_ring: Polygon` - 外环（逆时针）
+
+- `inner_rings: List[Polygon]` - 内环列表（顺时针）
+
+- `hole_count: int` - 孔洞数量
+
+- `normalize()` - 自动规范化环的绕序方向
+
+- `from_tuples(outer_ring, inner_rings)` - 从元组列表构造
 
 ### RayCastingEngine
 
@@ -52,9 +74,25 @@
 
   判断点是否在多边形边界上
 
-- `contains_many(polygon, points) -> List[PointLocation]
+- `contains_many(polygon, points) -> List[PointLocation]`
 
   批量判定多个点
+
+- `contains_holed(polygon, point) -> PointLocation`
+
+  判定点相对于带孔多边形的位置（环绕数算法）
+
+- `is_inside_holed(polygon, point) -> bool`
+
+  判断点是否在带孔多边形内部（含边界）
+
+- `is_outside_holed(polygon, point) -> bool`
+
+  判断点是否在带孔多边形外部
+
+- `is_on_holed_boundary(polygon, point) -> bool`
+
+  判断点是否在带孔多边形边界上
 
 ### PointLocation (Enum
 
@@ -175,6 +213,37 @@
 - 点在边上的检测会正确识别共线情况
 
 - 射线法对共线边的处理不影响最终奇偶性判定
+
+### 环绕数算法（带孔多边形）
+
+对于带孔多边形，引擎使用**有符号环绕数算法**替代纯奇偶计数：
+
+- **逆时针外环**：点在内部时环绕数贡献 **+1**
+
+- **顺时针内环**：点在内部时环绕数贡献 **-1**
+
+- **判定规则**：总环绕数 **≠ 0** 表示点在实体区域内
+
+```
+┌───────────────────┐  ← 外环（逆时针，+1）
+│                   │
+│   ┌───────────┐   │
+│   │    孔洞   │   │
+│   └───────────┘   │
+│                   │
+└───────────────────┘
+
+  外环内、孔洞外：总环绕数 = 1 → INSIDE
+  孔洞内：        总环绕数 = 0 → OUTSIDE
+```
+
+带孔多边形约定：
+
+- 外环顶点按**逆时针**顺序排列（正面积）
+
+- 内环顶点按**顺时针**顺序排列（负面积）
+
+- `from_tuples()` 和 `normalize()` 会自动修正环的绕序方向
 
 ## 使用示例
 ---------
