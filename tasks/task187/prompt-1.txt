@@ -1,0 +1,8 @@
+在当前 Python 项目中实现 URL 解析与构建器（RFC 3986），使用内存数据结构存储 URL 各组件。
+1. 实现 URL 组件解析：将一个完整的 URL 字符串按 RFC 3986 规范解析为 scheme、authority（含 userinfo、host、port）、path、query、fragment 各个组件。解析后的各个组件可以通过对应的方法独立获取。未出现的可选组件返回 None。
+2. 实现 Scheme 校验：解析 URL 时校验 scheme 是否合法（以字母开头，后跟字母、数字、加号、减号或句点的组合）。非法 scheme 的 URL 应拒绝解析。提供已知 scheme 的注册列表和校验方法。
+3. 实现查询参数增删改：将 URL 的 query 部分解析为键值对列表（注意查询参数允许多个同名键）。提供 add_param(key, value)、remove_param(key)、set_param(key, value)（替换所有同名键）、get_param(key) 等方法。操作后可以重新构建完整 URL 字符串。
+4. 实现百分号编解码：提供独立的编码方法（对非保留字符外的字节进行百分号编码，遵循 percent-encoding 规则）和解码方法（将百分号编码序列解码为原始字节再转为字符串，处理异常编码序列时应有合理行为）。编解码需正确处理 UTF-8 多字节字符场景。
+5. 实现 URL 构建器：提供一个 Builder 模式，允许逐个设置 scheme、host、port、path 段、查询参数、fragment 等组件，最后构建出完整的 URL 字符串。路径拼接时自动处理多余的斜杠。
+6. 代码实现需要放在 src/solocoder_py/url_parser/ 包下，然后为该模块编写完整的单元测试，覆盖正常流程（标准 URL 的各组件解析正确、查询参数增删改后重新构建的正确性、百分号编解码的往返一致、Builder 构建器逐步拼装 URL、包含非 ASCII 字符的 IRI 式 URL 的编码处理、IPv6 地址主机的解析）、边界条件（无 query 无 fragment 的最简 URL、仅 scheme 和 host 的 URL、端口号为默认端口时是否需要省略、空路径与根路径 / 的区别、多层嵌套路径的规范化）和异常分支（非法 scheme 格式拒绝、百分号编码不完整（如后跟非十六进制字符）的处理、空字符串输入的处理、host 缺失的 URL 处理、端口号非数字的处理、包含空格等非法字符的 URL 解析行为）。测试代码放在 tests/url_parser/ 下。
+7. 在该模块包内编写 README.md，说明模块功能、核心类的职责、RFC 3986 URL 组件结构图、百分号编解码规则、Builder 使用模式以及使用示例。

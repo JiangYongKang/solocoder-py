@@ -1,0 +1,8 @@
+产物不满意：
+1. engine.py 的 apply_atomic 只捕获 PatchOperationError，InvalidPointerError 继承自 JsonPointerError 不在其子类树中。路径缺少前导斜杠时 parse 抛出 InvalidPointerError 穿透 try-except 不触发回滚。提示词要求路径格式错误时回滚，根因是 InvalidPointerError 未纳入 PatchOperationError 子树，应改为捕获 JsonPatchError。
+2. engine.py 的 _op_add 方法存在死代码：add_value 首次调用因中间层键不存在抛出 PathNotFoundError 后，异常分支在确认父节点为 dict 时执行 retry 调用 ptr.add_value 重试，但两次调用参数完全相同。首次因中间键不存在而失败，第二次必然在相同位置再次抛出同一异常，该重试路径永远不会成功。这是无效防御代码，应直接抛出父路径不存在错误。
+3. engine.py 的 apply 方法第一行 `original = copy.deepcopy(doc)` 创建的深拷贝副本在函数体中从未被任何代码引用或使用。apply 本身不具备回滚能力也不需要原始文档副本，该深拷贝消耗了无意义的内存和 CPU 资源，是从 apply_atomic 拷贝代码时未清理的冗余残留。
+
+过程不满意：
+1. 模型在探索完项目结构并制定 TodoList 后，未对 set_value 与 add_value 的核心语义差异做前置设计就直接编码。pointer.py 的 _set_in 最初对数组使用了 insert 语义而非替换，engine.py 的 copy 和 move 也错误调用了 set_value 而非 add_value，导致首次测试 5 个失败。这暴露了编码前未先设计清楚替换现有元素与插入新元素在数组上下文中的行为边界，应先写出伪代码或对照表再实现。
+2. 首次测试失败后模型在单轮内同时修改 pointer.py、engine.py 和三个测试文件五处代码，测试与生产代码混修。test_roundtrip_escaping 的预期值最初写成了错误转义序列，暴露对 RFC 6901 中 ~0 和 ~1 转义顺序掌握不准。修复时未先单独验证 pointer.py 转义逻辑本身正确性就直接改测试使其通过，掩盖了问题根源分析。正确做法是先锁定生产代码问题、验证修复、再修正测试中错误预期。
