@@ -1,0 +1,7 @@
+在当前 Python 项目中实现 Promise/Future 组合子库，使用内存数据结构管理异步任务的链式调用与聚合。
+1. 实现 then/compose/catch 链式调用：Future/Promise 对象表示一个尚未完成的计算。then 方法接收一个回调函数，当前 Future 成功完成时调用回调并将结果传入，返回一个新的 Future（链式调用）。compose 方法类似 then 但回调函数本身返回一个 Future，自动展平嵌套的 Future。catch 方法接收异常处理回调，当链中任一环节抛出异常时捕获并处理，返回新的 Future 允许异常恢复后继续链式调用。
+2. 实现 allSettled 聚合：提供 all 静态方法，接收多个 Future 对象，返回一个聚合 Future。all 在所有子 Future 全部成功完成时以结果列表完成；任意一个失败则立即以该异常失败。allSettled 静态方法在所有子 Future 全部完成（无论成功或失败）时以结果状态列表完成，每个条目标识成功/失败及其值/异常。
+3. 实现超时竞速：提供 race 静态方法，接收多个 Future 对象，返回一个聚合 Future，当任意一个子 Future 完成（成功或失败）时立即以该结果完成，其余子 Future 的结果被忽略。提供 with_timeout 方法，接收一个超时时间（秒），返回一个新的 Future，如果在超时时间内原 Future 未完成则以超时异常失败。
+4. 实现 Future 的创建与解析：提供创建已解析 Future（成功值或异常值）的便捷方法 resolve(value) 和 reject(exception)，返回一个立即完成的 Future。Future 应支持同步回调式的完成机制（非依赖异步事件循环），通过内部回调队列在完成时依次触发 then/catch 注册的回调。
+5. 代码实现需要放在 src/solocoder_py/futures/ 包下，然后为该模块编写完整的单元测试，覆盖正常流程（then 链式传递值、then 链中某步返回值的传递、compose 展平嵌套 Future、catch 捕获异常并恢复为正常值、allSettled 等待所有完成并返回状态列表、race 在第一个完成后立即返回、with_timeout 在超时前完成正常返回、resolve 和 reject 创建的立即完成 Future）、边界条件（空的 then/catch 链（未注册回调）后访问结果、all 传入空列表的聚合结果、空 race 列表的行为、Future 完成后才注册回调的立即执行、同一 Future 上多次注册 then 回调的执行顺序）和异常分支（then 回调中抛异常不设 catch 的传播、catch 后又抛异常且无后续 catch 的传播、all 中任一子 Future 失败的立即失败、with_timeout 超时后原 Future 才完成的行为（结果应被忽略）、allSettled 中某个子 Future 本身为异常 Future 的处理）。测试代码放在 tests/futures/ 下。
+6. 在该模块包内编写 README.md，说明模块功能、核心类的职责、Future/Promise 链式调用的语义、then/compose/catch 的区别与使用场景、all/allSettled/race/with_timeout 组合子的行为、同步回调完成机制（非异步事件循环）以及使用示例。

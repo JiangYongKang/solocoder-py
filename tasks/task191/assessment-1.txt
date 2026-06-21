@@ -1,0 +1,7 @@
+产物不满意：
+1. 当对一个尚未通过 dequeue 出队的命令调用 mark_delivered 或 mark_timeout 时，models.py 中 Command 类的这两个方法缺少前置状态校验，允许从 PENDING 状态直接跳转到 DELIVERED 或 TIMEOUT 终态。提示词定义的状态流转要求命令先出队变为 SENT 再确认送达或超时，这种非法跳转导致命令从未被实际投递却被标记为已送达，后续 dequeue 会静默跳过该命令，破坏了投递流程的完整性。根因是状态转换方法只防止了终态互转而未限制入口状态必须为 SENT。正确做法是在 mark_delivered 和 mark_timeout 中增加当前状态不为 SENT 时的拒绝检查。
+2. 当调用 list_by_status 按状态批量查询命令时，cmd_queue.py 的该方法遍历命令时调用了 _check_expired，将过期的 PENDING 命令直接修改为 TIMEOUT 状态。提示词明确将过期检查限定在"出队时惰性触发"，这个查询接口却产生了写副作用，连续两次调用 list_by_status(PENDING) 可能返回不同结果，违反了查询操作的只读语义和幂等性。根因是模型把 _check_expired 耦合到了所有命令访问路径中，模糊了查询与修改的边界。解决方案是移除 list_by_status 中的 _check_expired 调用，如需体现过期应通过 is_expired 属性判断而不修改命令的状态字段。
+
+过程不满意：
+1. 模型在刚收到提示词后的第一个实质性操作是直接使用 todo_write 创建了 5 项子任务计划，而此时尚未阅读项目目录结构、pyproject.toml 配置和现有模块的代码风格。虽然最终实现通过了所有测试，但这种"先计划后分析"颠倒了正确流程，计划是在信息不充分的条件下制定的，后期未出现因计划偏差导致的返工更多是巧合。正确做法是先浏览项目结构、阅读 pyproject.toml 了解构建约定、查看现有模块的代码组织方式，再基于充分信息制定子任务计划。
+2. 模型在完成代码和测试编写后验证正确性时，使用了 "python -m pytest tests/cmd_queue/ -v" 而非项目约定的 "poetry run pytest tests/cmd_queue/ -v"。虽然本次 40 个测试全部通过，但这种忽略项目构建工具约定的做法存在风险，如果项目依赖了仅在 Poetry 虚拟环境中安装的包，非 Poetry 环境下的 pytest 可能运行在系统 Python 下导致测试结果不可靠。正确做法是在开发前阅读 pyproject.toml 确认项目使用 Poetry 管理依赖，然后用 poetry run pytest 确保测试在正确的虚拟环境中执行。
