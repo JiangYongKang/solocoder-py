@@ -1,0 +1,9 @@
+你实现的设备注册与证书签发模块存在一些缺陷需要修复：
+
+1. submit_csr 方法在设备状态为已吊销时抛出的异常类型是 DeviceNotRegisteredError，但这个异常名称意味着设备从未注册过，与实际业务状态不符。对于"设备已注册但被吊销"这种应拒绝 CSR 的场景，需要能与"设备从未注册"在异常类型上区分开。
+
+2. get_device 和 query_certificates_by_device 两个方法直接返回了内部存储对象的引用，调用方拿到返回对象后可以绕过 service 层直接修改内部数据。需要对返回数据做不可变处理。
+
+3. Certificate 的 is_expired 方法已定义了有效期判断逻辑，但 service 层所有查询和操作方法都没有调用它，导致证书在自然过期后查询仍显示为有效状态，有效期字段失去了业务约束力。
+
+4. 重新运行 poetry run pytest tests/device_cert/ -v 验证修复后所有测试仍然通过。

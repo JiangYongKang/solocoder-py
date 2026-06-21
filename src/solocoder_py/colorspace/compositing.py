@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from .models import RGB, _clamp
 
 
@@ -31,8 +33,15 @@ def alpha_composite_over(foreground: RGB, background: RGB) -> RGB:
     return alpha_composite(foreground, background)
 
 
-def blend_normal(foreground: RGB, background: RGB, fg_alpha: float = 1.0) -> RGB:
-    alpha = _clamp(fg_alpha, 0.0, 1.0)
+def blend_normal(
+    foreground: RGB,
+    background: RGB,
+    fg_alpha: Optional[float] = None,
+) -> RGB:
+    if fg_alpha is None:
+        alpha = _clamp(foreground.alpha, 0.0, 1.0)
+    else:
+        alpha = _clamp(fg_alpha, 0.0, 1.0)
     fg = RGB(foreground.r, foreground.g, foreground.b, alpha=alpha)
     return alpha_composite(fg, background)
 

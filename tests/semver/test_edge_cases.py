@@ -69,30 +69,6 @@ class TestPrereleaseNumericIdentifiers:
         assert v0 < v_alpha
 
 
-class TestSimplifiedFormParsing:
-    def test_single_number_parses(self, parse_version):
-        v = parse_version("1")
-        assert v.major == 1
-        assert v.minor == 0
-        assert v.patch == 0
-
-    def test_single_zero(self, parse_version):
-        v = parse_version("0")
-        assert v.major == 0
-        assert v.minor == 0
-        assert v.patch == 0
-
-    def test_single_large_number(self, parse_version):
-        v = parse_version("42")
-        assert v.major == 42
-        assert v.minor == 0
-        assert v.patch == 0
-
-    def test_simplified_str_representation(self, parse_version):
-        v = parse_version("5")
-        assert str(v) == "5.0.0"
-
-
 class TestLargeVersionNumbers:
     def test_very_large_major(self, parse_version):
         v = parse_version("999999999999.0.0")

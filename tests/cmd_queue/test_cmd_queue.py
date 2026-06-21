@@ -3,6 +3,7 @@ import time
 import pytest
 
 from solocoder_py.cmd_queue import (
+    CmdQueueError,
     Command,
     CommandNotFoundError,
     CommandQueue,
@@ -153,6 +154,24 @@ class TestStatusTransition:
         status = cmd_queue.get_status("cmd-1")
         assert status == CommandStatus.TIMEOUT
 
+    def test_mark_delivered_pending_raises(self, cmd_queue: CommandQueue):
+        cmd_queue.enqueue("test", command_id="cmd-1")
+
+        with pytest.raises(CmdQueueError):
+            cmd_queue.mark_delivered("cmd-1")
+
+        status = cmd_queue.get_status("cmd-1")
+        assert status == CommandStatus.PENDING
+
+    def test_mark_timeout_pending_raises(self, cmd_queue: CommandQueue):
+        cmd_queue.enqueue("test", command_id="cmd-1")
+
+        with pytest.raises(CmdQueueError):
+            cmd_queue.mark_timeout("cmd-1")
+
+        status = cmd_queue.get_status("cmd-1")
+        assert status == CommandStatus.PENDING
+
 
 class TestBatchQuery:
     def test_list_by_status_pending(self, cmd_queue: CommandQueue):
@@ -205,6 +224,18 @@ class TestBatchQuery:
         result = cmd_queue.list_by_status(CommandStatus.PENDING)
         assert result == []
 
+    def test_list_by_status_no_side_effects(self, cmd_queue: CommandQueue):
+        cmd_queue.enqueue("a", command_id="a", ttl=0)
+
+        first = cmd_queue.list_by_status(CommandStatus.PENDING)
+        assert len(first) == 1
+
+        second = cmd_queue.list_by_status(CommandStatus.PENDING)
+        assert len(second) == 1
+
+        third = cmd_queue.list_by_status(CommandStatus.TIMEOUT)
+        assert len(third) == 0
+
 
 class TestTtlNormal:
     def test_ttl_not_expired_dequeue_normal(self, cmd_queue: CommandQueue):
@@ -227,19 +258,25 @@ class TestTtlNormal:
 
 
 class TestTtlBoundary:
-    def test_ttl_zero_expires_immediately(self, cmd_queue: CommandQueue):
+    def test_ttl_zero_expires_immediately_on_dequeue(self, cmd_queue: CommandQueue):
         cmd_queue.enqueue("test", command_id="cmd-1", ttl=0)
+
+        status_before = cmd_queue.get_status("cmd-1")
+        assert status_before == CommandStatus.PENDING
 
         cmd = cmd_queue.dequeue()
         assert cmd is None
 
-        status = cmd_queue.get_status("cmd-1")
-        assert status == CommandStatus.TIMEOUT
+        status_after = cmd_queue.get_status("cmd-1")
+        assert status_after == CommandStatus.TIMEOUT
 
-    def test_all_commands_expired(self, cmd_queue: CommandQueue):
+    def test_all_commands_expired_on_dequeue(self, cmd_queue: CommandQueue):
         cmd_queue.enqueue("a", command_id="a", ttl=0)
         cmd_queue.enqueue("b", command_id="b", ttl=0)
         cmd_queue.enqueue("c", command_id="c", ttl=0)
+
+        pending_before = cmd_queue.list_by_status(CommandStatus.PENDING)
+        assert len(pending_before) == 3
 
         assert cmd_queue.dequeue() is None
         assert cmd_queue.size() == 0
@@ -277,17 +314,33 @@ class TestTtlBoundary:
         timed_out_ids = {cmd.id for cmd in timed_out}
         assert timed_out_ids == {"a", "c"}
 
-    def test_get_status_triggers_expiry_check(self, cmd_queue: CommandQueue):
+    def test_get_status_does_not_trigger_expiry(self, cmd_queue: CommandQueue):
         cmd_queue.enqueue("test", command_id="cmd-1", ttl=0)
 
-        status = cmd_queue.get_status("cmd-1")
-        assert status == CommandStatus.TIMEOUT
+        status_1 = cmd_queue.get_status("cmd-1")
+        assert status_1 == CommandStatus.PENDING
 
-    def test_list_by_status_triggers_expiry_check(self, cmd_queue: CommandQueue):
+        status_2 = cmd_queue.get_status("cmd-1")
+        assert status_2 == CommandStatus.PENDING
+
+        cmd_queue.dequeue()
+
+        status_3 = cmd_queue.get_status("cmd-1")
+        assert status_3 == CommandStatus.TIMEOUT
+
+    def test_list_by_status_does_not_trigger_expiry(self, cmd_queue: CommandQueue):
         cmd_queue.enqueue("test", command_id="cmd-1", ttl=0)
 
-        pending = cmd_queue.list_by_status(CommandStatus.PENDING)
-        assert len(pending) == 0
+        pending_1 = cmd_queue.list_by_status(CommandStatus.PENDING)
+        assert len(pending_1) == 1
+
+        pending_2 = cmd_queue.list_by_status(CommandStatus.PENDING)
+        assert len(pending_2) == 1
+
+        cmd_queue.dequeue()
+
+        pending_3 = cmd_queue.list_by_status(CommandStatus.PENDING)
+        assert len(pending_3) == 0
 
         timed_out = cmd_queue.list_by_status(CommandStatus.TIMEOUT)
         assert len(timed_out) == 1
@@ -338,6 +391,46 @@ class TestExceptionBranches:
         with pytest.raises(InvalidTtlError):
             Command(id="test", payload="data", ttl=-5)
 
+    def test_mark_delivered_from_pending_directly_raises(self, cmd_queue: CommandQueue):
+        cmd_queue.enqueue("test", command_id="cmd-1")
+        with pytest.raises(CmdQueueError):
+            cmd_queue.mark_delivered("cmd-1")
+
+    def test_mark_timeout_from_pending_directly_raises(self, cmd_queue: CommandQueue):
+        cmd_queue.enqueue("test", command_id="cmd-1")
+        with pytest.raises(CmdQueueError):
+            cmd_queue.mark_timeout("cmd-1")
+
+
+class TestQueryNoSideEffects:
+    def test_get_command_pure_read(self, cmd_queue: CommandQueue):
+        cmd_queue.enqueue("a", command_id="a", ttl=0)
+
+        cmd1 = cmd_queue.get_command("a")
+        assert cmd1.status == CommandStatus.PENDING
+
+        cmd2 = cmd_queue.get_command("a")
+        assert cmd2.status == CommandStatus.PENDING
+
+    def test_get_status_pure_read(self, cmd_queue: CommandQueue):
+        cmd_queue.enqueue("a", command_id="a", ttl=0)
+
+        status_1 = cmd_queue.get_status("a")
+        status_2 = cmd_queue.get_status("a")
+        status_3 = cmd_queue.get_status("a")
+
+        assert status_1 == status_2 == status_3 == CommandStatus.PENDING
+
+    def test_list_by_status_pure_read(self, cmd_queue: CommandQueue):
+        cmd_queue.enqueue("a", command_id="a", ttl=0)
+        cmd_queue.enqueue("b", command_id="b", ttl=0)
+
+        for _ in range(5):
+            pending = cmd_queue.list_by_status(CommandStatus.PENDING)
+            assert len(pending) == 2
+            timed_out = cmd_queue.list_by_status(CommandStatus.TIMEOUT)
+            assert len(timed_out) == 0
+
 
 class TestQueueSize:
     def test_size_reflects_pending_only(self, cmd_queue: CommandQueue):
@@ -381,12 +474,15 @@ class TestClear:
 
 class TestTtlLazyExpiry:
     def test_expiry_checked_lazily_on_dequeue(self, cmd_queue: CommandQueue):
-        cmd = cmd_queue.enqueue("test", command_id="cmd-1", ttl=0.05)
+        cmd_queue.enqueue("test", command_id="cmd-1", ttl=0.05)
 
         initial_status = cmd_queue.get_status("cmd-1")
         assert initial_status == CommandStatus.PENDING
 
         time.sleep(0.1)
+
+        still_pending = cmd_queue.get_status("cmd-1")
+        assert still_pending == CommandStatus.PENDING
 
         result = cmd_queue.dequeue()
         assert result is None
@@ -400,6 +496,13 @@ class TestTtlLazyExpiry:
 
         time.sleep(0.1)
 
+        pending_before = cmd_queue.list_by_status(CommandStatus.PENDING)
+        assert len(pending_before) == 2
+
         cmd = cmd_queue.dequeue()
         assert cmd is not None
         assert cmd.id == "long"
+
+        timed_out = cmd_queue.list_by_status(CommandStatus.TIMEOUT)
+        assert len(timed_out) == 1
+        assert timed_out[0].id == "short"

@@ -30,8 +30,9 @@
 |---|---|
 | `InvalidPSKError` | 预共享密钥校验失败 |
 | `DuplicateDeviceError` | 设备标识重复注册 |
-| `DeviceNotFoundError` | 设备 ID 不存在 |
-| `DeviceNotRegisteredError` | 设备已吊销，无法提交 CSR |
+| `DeviceNotFoundError` | 设备 ID 不存在（从未注册过） |
+| `DeviceNotRegisteredError` | 预留异常类，语义同 DeviceNotFoundError |
+| `DeviceRevokedError` | 设备已注册但当前状态为已吊销，拒绝提交 CSR |
 | `CertificateNotFoundError` | 证书序列号不存在 |
 
 ## 设备注册流程（PSK 校验 → 生成设备 ID → 注册完成）
@@ -62,7 +63,7 @@
  │                                  │ 1. 验证设备 ID 存在
  │                                  │    ├── 不存在 → DeviceNotFoundError
  │                                  │ 2. 验证设备状态为 REGISTERED
- │                                  │    ├── 已吊销 → DeviceNotRegisteredError
+ │                                  │    ├── 已吊销 → DeviceRevokedError
  │                                  │ 3. 生成证书序列号
  │                                  │ 4. 使用 CA 证书签发设备证书
  │                                  │    （含序列号、颁发者、主题、有效期、公钥）
@@ -77,12 +78,20 @@
 - **按序列号吊销**：`revoke_certificate_by_serial(serial_number)` — 将指定证书标记为 `REVOKED`
 - **按设备吊销**：`revoke_certificates_by_device(device_id)` — 同时将设备状态和其所有证书标记为 `REVOKED`
 - **幂等处理**：对已吊销的证书再次吊销不会报错，状态保持 `REVOKED`
-- 已吊销设备无法再提交 CSR（抛出 `DeviceNotRegisteredError`）
+- 已吊销设备无法再提交 CSR（抛出 `DeviceRevokedError`）
+
+## 证书有效期约束
+
+- 证书模型内置 `is_expired()` 方法，可在任意时间点判断证书是否自然过期
+- Service 层所有查询接口在返回时均会自动评估有效期：若证书 `status` 未被主动吊销但 `now > not_after`，则返回时在副本上将状态推导为 `REVOKED`
+- 调用方可通过 `query_*` 方法的可选参数 `now=datetime(...)` 指定查询时刻进行模拟
+- 注意：推导状态仅作用于返回的副本，存储层内部 `status` 不变，保证主动吊销和自然过期两个维度互不干扰
 
 ## 查询接口
 
-- `query_certificates_by_device(device_id)` — 查询设备的所有证书（含已吊销）
-- `query_certificate_by_serial(serial_number)` — 按序列号查询单张证书详情
+- `query_certificates_by_device(device_id, now=None)` — 查询设备的所有证书（含已吊销、自然过期），返回数据为内部对象的副本
+- `query_certificate_by_serial(serial_number, now=None)` — 按序列号查询单张证书详情，返回数据为内部对象的副本
+- `get_device(device_id)` — 查询设备记录，返回内部对象的副本（防止外部修改内部状态）
 
 ## 使用示例
 

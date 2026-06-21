@@ -44,12 +44,6 @@ class RingBuffer(Generic[T]):
         with self._lock:
             return self._capacity - self._count
 
-    def _is_full(self) -> bool:
-        return self._count == self._capacity
-
-    def _is_empty(self) -> bool:
-        return self._count == 0
-
     def _advance_read(self, n: int = 1) -> None:
         self._read_ptr = (self._read_ptr + n) % self._capacity
 
@@ -62,8 +56,14 @@ class RingBuffer(Generic[T]):
         *,
         blocking: bool = False,
         timeout: Optional[float] = None,
+        raise_timeout: bool = False,
     ) -> int:
-        return self.write_batch([item], blocking=blocking, timeout=timeout)
+        return self.write_batch(
+            [item],
+            blocking=blocking,
+            timeout=timeout,
+            raise_timeout=raise_timeout,
+        )
 
     def write_batch(
         self,
@@ -71,6 +71,7 @@ class RingBuffer(Generic[T]):
         *,
         blocking: bool = False,
         timeout: Optional[float] = None,
+        raise_timeout: bool = False,
     ) -> int:
         if not items:
             return 0
@@ -85,7 +86,7 @@ class RingBuffer(Generic[T]):
                     self._write_items(items[:n_write])
                     return n_write
                 else:
-                    return self._blocking_write_batch(items, timeout)
+                    return self._blocking_write_batch(items, timeout, raise_timeout)
             else:
                 n_items = len(items)
                 n_write = min(n_items, self._capacity)
@@ -106,6 +107,7 @@ class RingBuffer(Generic[T]):
         self,
         items: Sequence[T],
         timeout: Optional[float],
+        raise_timeout: bool,
     ) -> int:
         deadline = time.monotonic() + timeout if timeout is not None else None
         total_written = 0
@@ -118,8 +120,16 @@ class RingBuffer(Generic[T]):
                 if deadline is not None:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        if raise_timeout and total_written == 0:
+                            raise TimeoutError(
+                                f"Write timed out after {timeout} seconds"
+                            )
                         return total_written
                 if not self._not_full.wait(timeout=remaining):
+                    if raise_timeout and total_written == 0:
+                        raise TimeoutError(
+                            f"Write timed out after {timeout} seconds"
+                        )
                     return total_written
                 continue
 
@@ -150,8 +160,14 @@ class RingBuffer(Generic[T]):
         *,
         blocking: bool = False,
         timeout: Optional[float] = None,
+        raise_timeout: bool = False,
     ) -> Optional[T]:
-        result = self.read_batch(1, blocking=blocking, timeout=timeout)
+        result = self.read_batch(
+            1,
+            blocking=blocking,
+            timeout=timeout,
+            raise_timeout=raise_timeout,
+        )
         if not result:
             return None
         return result[0]
@@ -162,6 +178,7 @@ class RingBuffer(Generic[T]):
         *,
         blocking: bool = False,
         timeout: Optional[float] = None,
+        raise_timeout: bool = False,
     ) -> List[T]:
         if max_count <= 0:
             return []
@@ -174,12 +191,13 @@ class RingBuffer(Generic[T]):
                     return []
                 return self._read_items(n_read)
             else:
-                return self._blocking_read_batch(max_count, timeout)
+                return self._blocking_read_batch(max_count, timeout, raise_timeout)
 
     def _blocking_read_batch(
         self,
         max_count: int,
         timeout: Optional[float],
+        raise_timeout: bool,
     ) -> List[T]:
         deadline = time.monotonic() + timeout if timeout is not None else None
 
@@ -188,8 +206,16 @@ class RingBuffer(Generic[T]):
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    if raise_timeout:
+                        raise TimeoutError(
+                            f"Read timed out after {timeout} seconds"
+                        )
                     return []
             if not self._not_empty.wait(timeout=remaining):
+                if raise_timeout:
+                    raise TimeoutError(
+                        f"Read timed out after {timeout} seconds"
+                    )
                 return []
 
         n_read = min(max_count, self._count)

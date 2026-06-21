@@ -1,0 +1,7 @@
+你实现的颜色空间转换器模块存在一些缺陷需要修复：
+
+1. blend_normal 函数的 fg_alpha 参数默认值为 1.0，当调用方不传这个参数时函数会丢弃前景色自身的 alpha 值，用完全不透明的 alpha 做合成。这导致对半透明前景色调用 blend_normal 时得到错误结果，且与 alpha_composite 的结果不一致。默认行为应该使用前景色自身的 alpha。
+
+2. compositing.py 中导出的 alpha_composite_over 和 blend_normal 两个公共函数没有任何对应的单元测试，需要为它们补充覆盖正常场景和边界条件的测试用例。
+
+3. 重新运行 poetry run pytest tests/colorspace/ -v 验证所有测试通过。

@@ -28,10 +28,10 @@
 - `write_mode`：写入模式（`WriteMode.OVERWRITE` 或 `WriteMode.NO_OVERWRITE`，只读）
 
 **核心方法**：
-- `write(item, *, blocking=False, timeout=None)`：写入单个元素，返回实际写入数量（0 或 1）
-- `write_batch(items, *, blocking=False, timeout=None)`：批量写入数据序列，返回实际写入数量
-- `read(*, blocking=False, timeout=None)`：读取单个元素，返回元素或 `None`
-- `read_batch(max_count, *, blocking=False, timeout=None)`：批量读取最多 `max_count` 个元素，返回实际读取的数据列表
+- `write(item, *, blocking=False, timeout=None, raise_timeout=False)`：写入单个元素，返回实际写入数量（0 或 1）
+- `write_batch(items, *, blocking=False, timeout=None, raise_timeout=False)`：批量写入数据序列，返回实际写入数量
+- `read(*, blocking=False, timeout=None, raise_timeout=False)`：读取单个元素，返回元素或 `None`
+- `read_batch(max_count, *, blocking=False, timeout=None, raise_timeout=False)`：批量读取最多 `max_count` 个元素，返回实际读取的数据列表
 - `available_to_read()`：查询当前可读数据量
 - `available_to_write()`：查询当前剩余可写空间
 - `clear()`：清空缓冲区所有数据
@@ -133,6 +133,26 @@ capacity = 5, 已写入 [1, 2, 3, 4, 5] (满)
 通过 `timeout` 参数（秒）配置阻塞等待的最长时间：
 - `timeout=None`：无限等待，直到条件满足
 - `timeout=0.5`：最多等待 0.5 秒，超时后返回已完成的部分或空结果
+
+### 超时异常抛出
+
+通过 `raise_timeout` 参数控制超时时的行为：
+- `raise_timeout=False`（默认）：超时后返回空结果或已完成的部分，不抛出异常
+- `raise_timeout=True`：超时时抛出 `TimeoutError` 异常
+  - **读操作**：空缓冲区超时直接抛出
+  - **写操作**：仅在未写入任何数据时抛出；已写入部分数据时返回已写入数量，不抛出
+
+**示例**：
+```python
+from solocoder_py.ringbuffer import RingBuffer, TimeoutError
+
+rb = RingBuffer[int](capacity=5)
+
+try:
+    data = rb.read(blocking=True, timeout=0.1, raise_timeout=True)
+except TimeoutError as e:
+    print(f"读取超时: {e}")  # 读取超时: Read timed out after 0.1 seconds
+```
 
 ## 批量操作的优势
 

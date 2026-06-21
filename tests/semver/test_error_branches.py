@@ -54,6 +54,18 @@ class TestIllegalVersionStrings:
         with pytest.raises(InvalidVersionError):
             parse_version(123)
 
+    def test_single_number_rejected(self, parse_version):
+        with pytest.raises(InvalidVersionError):
+            parse_version("1")
+
+    def test_single_zero_rejected(self, parse_version):
+        with pytest.raises(InvalidVersionError):
+            parse_version("0")
+
+    def test_single_large_number_rejected(self, parse_version):
+        with pytest.raises(InvalidVersionError):
+            parse_version("42")
+
 
 class TestPrereleaseLeadingZeros:
     def test_leading_zero_in_prerelease_numeric(self, parse_version):
@@ -149,3 +161,48 @@ class TestNegativeVersionNumbers:
     def test_non_integer_in_constructor(self):
         with pytest.raises(InvalidVersionError):
             SemverVersion(1.5, 0, 0)
+
+
+class TestConstructorPrereleaseValidation:
+    def test_leading_zero_prerelease_in_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, prerelease="01")
+
+    def test_leading_zero_in_dotted_prerelease_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, prerelease="alpha.01")
+
+    def test_empty_prerelease_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, prerelease="")
+
+    def test_empty_prerelease_identifier_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, prerelease="alpha..1")
+
+    def test_valid_prerelease_in_constructor(self):
+        v = SemverVersion(1, 0, 0, prerelease="alpha.1")
+        assert v.prerelease == "alpha.1"
+
+    def test_valid_zero_prerelease_in_constructor(self):
+        v = SemverVersion(1, 0, 0, prerelease="0")
+        assert v.prerelease == "0"
+
+    def test_valid_ten_prerelease_in_constructor(self):
+        v = SemverVersion(1, 0, 0, prerelease="10")
+        assert v.prerelease == "10"
+
+    def test_non_string_prerelease_in_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, prerelease=123)
+
+    def test_constructor_and_parse_consistent_valid(self):
+        v_constructor = SemverVersion(1, 0, 0, prerelease="alpha.1")
+        v_parse = SemverVersion.parse("1.0.0-alpha.1")
+        assert v_constructor == v_parse
+
+    def test_constructor_and_parse_consistent_invalid(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion.parse("1.0.0-01")
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, prerelease="01")

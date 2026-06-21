@@ -63,6 +63,11 @@ class Command:
             return False
         if self.status == CommandStatus.TIMEOUT:
             return False
+        if self.status != CommandStatus.SENT:
+            raise CmdQueueError(
+                f"Cannot mark command as DELIVERED from status {self.status}. "
+                f"Only SENT commands can be marked as DELIVERED."
+            )
         self.status = CommandStatus.DELIVERED
         self.delivered_at = time.time()
         return True
@@ -71,6 +76,22 @@ class Command:
         if self.status == CommandStatus.DELIVERED:
             return False
         if self.status == CommandStatus.TIMEOUT:
+            return False
+        if self.status != CommandStatus.SENT:
+            raise CmdQueueError(
+                f"Cannot mark command as TIMEOUT from status {self.status}. "
+                f"Only SENT commands can be marked as TIMEOUT."
+            )
+        self.status = CommandStatus.TIMEOUT
+        self.timed_out_at = time.time()
+        return True
+
+    def _mark_ttl_expired(self) -> bool:
+        if self.status == CommandStatus.DELIVERED:
+            return False
+        if self.status == CommandStatus.TIMEOUT:
+            return False
+        if self.status != CommandStatus.PENDING:
             return False
         self.status = CommandStatus.TIMEOUT
         self.timed_out_at = time.time()

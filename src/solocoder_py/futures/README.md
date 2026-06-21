@@ -395,8 +395,6 @@ print(f.value)  # 42
 | `compose(on_fulfilled)` | 注册成功回调（返回 Future），自动展平 |
 | `catch(on_rejected)` | 注册失败回调，返回新 Future |
 | `with_timeout(timeout)` | 添加超时限制 |
-| `_fulfill(value)` | 以成功值完成 Future（内部方法） |
-| `_reject(reason)` | 以异常失败 Future（内部方法） |
 | `is_settled` | 属性，判断是否已完成 |
 | `state` | 属性，当前状态 |
 | `value` | 属性，成功值（未完成或失败时抛异常） |

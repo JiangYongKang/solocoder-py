@@ -5,7 +5,7 @@ import inspect
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from .exceptions import NotAFunctionError, UnhashableArgumentError
@@ -15,7 +15,6 @@ from .exceptions import NotAFunctionError, UnhashableArgumentError
 class _CacheEntry:
     value: Any
     created_at: float
-    access_count: int = 0
 
 
 @dataclass
@@ -48,6 +47,7 @@ class _MemoizeWrapper:
         self._ttl = ttl
         self._capacity = capacity
         self._signature = inspect.signature(func)
+        self._func_qualname = func.__qualname__
 
         self._store: "OrderedDict[Any, _CacheEntry]" = OrderedDict()
         self._stats = _CacheStats()
@@ -96,13 +96,15 @@ class _MemoizeWrapper:
         self, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> tuple[Any, ...]:
         normalized = self._normalize_args(args, kwargs)
+        key_prefix: tuple[Any, ...] = (self._func_qualname,)
         try:
-            hash(normalized)
-            return normalized
+            full_key = key_prefix + normalized
+            hash(full_key)
+            return full_key
         except TypeError:
             pass
 
-        hashable_parts = []
+        hashable_parts = [self._func_qualname]
         for i, value in enumerate(normalized):
             try:
                 hash(value)
@@ -130,7 +132,6 @@ class _MemoizeWrapper:
                 entry = self._store[cache_key]
                 if not self._is_expired(entry):
                     self._store.move_to_end(cache_key)
-                    entry.access_count += 1
                     self._stats.hits += 1
                     return entry.value
                 else:
@@ -141,7 +142,6 @@ class _MemoizeWrapper:
             self._store[cache_key] = _CacheEntry(
                 value=result,
                 created_at=time.monotonic(),
-                access_count=1,
             )
             self._store.move_to_end(cache_key)
 

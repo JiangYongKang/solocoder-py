@@ -21,5 +21,9 @@ class DeviceNotRegisteredError(DeviceCertError):
     pass
 
 
+class DeviceRevokedError(DeviceCertError):
+    pass
+
+
 class CertificateNotFoundError(DeviceCertError):
     pass

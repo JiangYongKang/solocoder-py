@@ -118,7 +118,7 @@ class TestWeakRefCleanupOnPublish:
             results.append("extra")
 
         bus.subscribe("evt", extra_cb)
-        assert bus.subscriber_count("evt") == 4
+        assert bus.subscriber_count("evt") == 3
 
         bus.publish("evt", "data")
 

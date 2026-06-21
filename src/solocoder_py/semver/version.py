@@ -13,7 +13,22 @@ _SEMVER_PATTERN = re.compile(
     r"?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$"
 )
 
-_SIMPLIFIED_PATTERN = re.compile(r"^(0|[1-9]\d*)$")
+_PRERELEASE_ID_PATTERN = re.compile(r"^(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)$")
+
+
+def _validate_prerelease(prerelease: str) -> None:
+    if not isinstance(prerelease, str):
+        raise InvalidVersionError("Prerelease must be a string")
+    if not prerelease:
+        raise InvalidVersionError("Prerelease must not be empty")
+    for part in prerelease.split("."):
+        if not part:
+            raise InvalidVersionError(f"Empty prerelease identifier in '{prerelease}'")
+        if not _PRERELEASE_ID_PATTERN.match(part):
+            raise InvalidVersionError(
+                f"Invalid prerelease identifier '{part}' in '{prerelease}' "
+                "(numeric identifiers must not have leading zeros)"
+            )
 
 
 @total_ordering
@@ -39,6 +54,8 @@ class SemverVersion:
             raise InvalidVersionError("Version numbers must be integers")
         if major < 0 or minor < 0 or patch < 0:
             raise InvalidVersionError("Version numbers must be non-negative")
+        if prerelease is not None:
+            _validate_prerelease(prerelease)
         self.major = major
         self.minor = minor
         self.patch = patch
@@ -75,11 +92,6 @@ class SemverVersion:
             prerelease = match.group(4)
             build_metadata = match.group(5)
             return cls(major, minor, patch, prerelease, build_metadata)
-
-        simplified_match = _SIMPLIFIED_PATTERN.match(stripped)
-        if simplified_match:
-            major = int(simplified_match.group(1))
-            return cls(major, 0, 0)
 
         raise InvalidVersionError(f"Invalid semver string: '{version_str}'")
 

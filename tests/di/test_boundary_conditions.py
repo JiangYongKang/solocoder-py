@@ -133,3 +133,4 @@ class TestResolveFromRootContainer:
         instance2 = container.resolve(ScopedService)
         assert isinstance(instance1, ScopedService)
         assert isinstance(instance2, ScopedService)
+        assert instance1 is not instance2

@@ -8,6 +8,8 @@ from solocoder_py.colorspace import (
     HSV,
     RGB,
     alpha_composite,
+    alpha_composite_over,
+    blend_normal,
     check_contrast,
     contrast_ratio,
     meets_aa,
@@ -406,3 +408,132 @@ class TestWCAGContrast:
     def test_hex_mixed_case(self):
         h = HEX("#AbCdEf")
         assert h.value == "#abcdef"
+
+
+class TestAlphaCompositeOver:
+    def test_alpha_composite_over_equals_alpha_composite(self):
+        fg = RGB(255, 128, 64, alpha=0.7)
+        bg = RGB(32, 64, 128, alpha=1.0)
+        r1 = alpha_composite(fg, bg)
+        r2 = alpha_composite_over(fg, bg)
+        assert approx_equal(r1.r, r2.r)
+        assert approx_equal(r1.g, r2.g)
+        assert approx_equal(r1.b, r2.b)
+        assert approx_equal(r1.alpha, r2.alpha)
+
+    def test_alpha_composite_over_red_on_green(self):
+        fg = RGB(255, 0, 0, alpha=1.0)
+        bg = RGB(0, 255, 0, alpha=1.0)
+        result = alpha_composite_over(fg, bg)
+        assert approx_equal(result.r, 255)
+        assert approx_equal(result.g, 0)
+        assert approx_equal(result.b, 0)
+        assert approx_equal(result.alpha, 1.0)
+
+    def test_alpha_composite_over_semitransparent_white_black(self):
+        fg = RGB(255, 255, 255, alpha=0.5)
+        bg = RGB(0, 0, 0, alpha=1.0)
+        result = alpha_composite_over(fg, bg)
+        assert approx_equal(result.r, 127.5, tol=1)
+        assert approx_equal(result.g, 127.5, tol=1)
+        assert approx_equal(result.b, 127.5, tol=1)
+
+    def test_alpha_composite_over_transparent_foreground(self):
+        fg = RGB(255, 0, 0, alpha=0.0)
+        bg = RGB(0, 0, 255, alpha=1.0)
+        result = alpha_composite_over(fg, bg)
+        assert approx_equal(result.r, 0)
+        assert approx_equal(result.g, 0)
+        assert approx_equal(result.b, 255)
+
+    def test_alpha_composite_over_both_semitransparent(self):
+        fg = RGB(255, 0, 0, alpha=0.5)
+        bg = RGB(0, 0, 255, alpha=0.5)
+        result = alpha_composite_over(fg, bg)
+        expected_alpha = 0.5 + 0.5 * (1 - 0.5)
+        assert approx_equal(result.alpha, expected_alpha)
+
+
+class TestBlendNormal:
+    def test_blend_normal_default_uses_foreground_alpha(self):
+        fg = RGB(255, 255, 255, alpha=0.5)
+        bg = RGB(0, 0, 0, alpha=1.0)
+        result = blend_normal(fg, bg)
+        expected = alpha_composite(fg, bg)
+        assert approx_equal(result.r, expected.r, tol=1)
+        assert approx_equal(result.g, expected.g, tol=1)
+        assert approx_equal(result.b, expected.b, tol=1)
+        assert approx_equal(result.alpha, expected.alpha)
+
+    def test_blend_normal_default_half_transparent(self):
+        fg = RGB(255, 255, 255, alpha=0.5)
+        bg = RGB(0, 0, 0, alpha=1.0)
+        result = blend_normal(fg, bg)
+        assert approx_equal(result.r, 127.5, tol=1)
+        assert approx_equal(result.g, 127.5, tol=1)
+        assert approx_equal(result.b, 127.5, tol=1)
+
+    def test_blend_normal_default_fully_transparent(self):
+        fg = RGB(255, 0, 0, alpha=0.0)
+        bg = RGB(0, 255, 0, alpha=1.0)
+        result = blend_normal(fg, bg)
+        assert approx_equal(result.r, 0)
+        assert approx_equal(result.g, 255)
+        assert approx_equal(result.b, 0)
+
+    def test_blend_normal_default_opaque(self):
+        fg = RGB(255, 0, 0, alpha=1.0)
+        bg = RGB(0, 255, 0, alpha=1.0)
+        result = blend_normal(fg, bg)
+        assert approx_equal(result.r, 255)
+        assert approx_equal(result.g, 0)
+        assert approx_equal(result.b, 0)
+
+    def test_blend_normal_explicit_fg_alpha_override(self):
+        fg = RGB(255, 255, 255, alpha=1.0)
+        bg = RGB(0, 0, 0, alpha=1.0)
+        result = blend_normal(fg, bg, fg_alpha=0.5)
+        assert approx_equal(result.r, 127.5, tol=1)
+        assert approx_equal(result.g, 127.5, tol=1)
+        assert approx_equal(result.b, 127.5, tol=1)
+
+    def test_blend_normal_explicit_fg_alpha_zero(self):
+        fg = RGB(255, 0, 0, alpha=1.0)
+        bg = RGB(0, 0, 255, alpha=1.0)
+        result = blend_normal(fg, bg, fg_alpha=0.0)
+        assert approx_equal(result.r, 0)
+        assert approx_equal(result.g, 0)
+        assert approx_equal(result.b, 255)
+
+    def test_blend_normal_explicit_fg_alpha_one(self):
+        fg = RGB(255, 0, 0, alpha=0.0)
+        bg = RGB(0, 255, 0, alpha=1.0)
+        result = blend_normal(fg, bg, fg_alpha=1.0)
+        assert approx_equal(result.r, 255)
+        assert approx_equal(result.g, 0)
+        assert approx_equal(result.b, 0)
+
+    def test_blend_normal_fg_alpha_half(self):
+        fg = RGB(255, 0, 0, alpha=1.0)
+        bg = RGB(0, 0, 255, alpha=0.5)
+        result = blend_normal(fg, bg, fg_alpha=0.5)
+        expected_alpha = 0.5 + 0.5 * (1 - 0.5)
+        assert approx_equal(result.alpha, expected_alpha)
+        expected_r = (1.0 * 0.5 + 0 * 0.5 * 0.5) / expected_alpha
+        expected_b = (0 * 0.5 + 1.0 * 0.5 * 0.5) / expected_alpha
+        assert approx_equal(result.r, expected_r * 255, tol=1)
+        assert approx_equal(result.b, expected_b * 255, tol=1)
+
+    def test_blend_normal_consistent_with_alpha_composite_when_default(self):
+        cases = [
+            (RGB(255, 0, 0, alpha=0.3), RGB(0, 255, 0, alpha=1.0)),
+            (RGB(100, 150, 200, alpha=0.7), RGB(50, 50, 50, alpha=0.8)),
+            (RGB(0, 0, 0, alpha=1.0), RGB(255, 255, 255, alpha=1.0)),
+        ]
+        for fg, bg in cases:
+            r1 = blend_normal(fg, bg)
+            r2 = alpha_composite(fg, bg)
+            assert approx_equal(r1.r, r2.r, tol=1)
+            assert approx_equal(r1.g, r2.g, tol=1)
+            assert approx_equal(r1.b, r2.b, tol=1)
+            assert approx_equal(r1.alpha, r2.alpha, tol=1e-6)

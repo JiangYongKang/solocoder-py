@@ -17,6 +17,7 @@ class _Subscription:
         self._is_weak = inspect.ismethod(callback)
         self._weak_ref: Optional[weakref.ReferenceType] = None
         self._strong_ref: Optional[EventCallback] = None
+        self._once_fired: bool = False
 
         if self._is_weak:
             self._weak_ref = weakref.WeakMethod(callback)
@@ -36,6 +37,12 @@ class _Subscription:
         if cb is None:
             return False
         return cb == callback
+
+    def claim_once(self) -> bool:
+        if self.once and not self._once_fired:
+            self._once_fired = True
+            return True
+        return False
 
 
 class EventBus:
@@ -66,10 +73,14 @@ class EventBus:
             if event_type not in self._channels:
                 return
             subscribers = self._channels[event_type]
-            self._channels[event_type] = [
+            filtered = [
                 sub for sub in subscribers
                 if not sub.matches(callback)
             ]
+            if filtered:
+                self._channels[event_type] = filtered
+            else:
+                del self._channels[event_type]
 
     def once(self, event_type: str, callback: EventCallback) -> None:
         if not event_type:
@@ -94,23 +105,29 @@ class EventBus:
             subscribers = list(self._channels[event_type])
 
         indices_to_remove: List[int] = []
+        callbacks_to_invoke: List[EventCallback] = []
 
         for i, sub in enumerate(subscribers):
-            cb = sub.get_callback()
-            if cb is None:
-                indices_to_remove.append(i)
-                continue
+            with self._lock:
+                cb = sub.get_callback()
+                if cb is None:
+                    indices_to_remove.append(i)
+                    continue
+                if sub.once:
+                    if not sub.claim_once():
+                        continue
+                    indices_to_remove.append(i)
 
+            callbacks_to_invoke.append(cb)
+
+        for cb in callbacks_to_invoke:
             try:
                 cb(data)
-            except Exception as e:
+            except Exception:
                 logger.exception(
                     "Subscriber callback raised an exception for event type '%s'",
                     event_type,
                 )
-
-            if sub.once:
-                indices_to_remove.append(i)
 
         if indices_to_remove:
             with self._lock:
@@ -126,7 +143,11 @@ class EventBus:
         with self._lock:
             if event_type not in self._channels:
                 return 0
-            return len(self._channels[event_type])
+            count = 0
+            for sub in self._channels[event_type]:
+                if sub.is_alive():
+                    count += 1
+            return count
 
     def event_types(self) -> List[str]:
         with self._lock:

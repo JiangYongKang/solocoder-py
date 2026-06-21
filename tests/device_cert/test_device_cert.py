@@ -11,6 +11,7 @@ from solocoder_py.device_cert import (
     DeviceCertService,
     DeviceNotFoundError,
     DeviceNotRegisteredError,
+    DeviceRevokedError,
     DeviceRecord,
     DeviceStatus,
     DuplicateDeviceError,
@@ -222,7 +223,7 @@ class TestBoundaryConditions:
         service.revoke_certificates_by_device(reg.device_id)
 
         csr = CSR(device_id=reg.device_id, public_key_info="pubkey-new")
-        with pytest.raises(DeviceNotRegisteredError):
+        with pytest.raises(DeviceRevokedError):
             service.submit_csr(csr)
 
     def test_certificate_validity_boundary_at_not_after(self, make_service):
@@ -233,12 +234,30 @@ class TestBoundaryConditions:
         csr = CSR(device_id=reg.device_id, public_key_info="pubkey")
         result = service.submit_csr(csr, now=now)
 
-        cert = service.query_certificate_by_serial(result.serial_number)
-        assert cert.not_before == datetime(2025, 1, 1, 0, 0, 0)
-        assert cert.not_after == datetime(2025, 1, 2, 0, 0, 0)
+        cert_before = service.query_certificate_by_serial(
+            result.serial_number, now=datetime(2025, 1, 1, 23, 59, 59)
+        )
+        assert cert_before.status == CertificateStatus.VALID
 
-        assert cert.is_expired(now=datetime(2025, 1, 1, 23, 59, 59)) is False
-        assert cert.is_expired(now=datetime(2025, 1, 2, 0, 0, 1)) is True
+        cert_after = service.query_certificate_by_serial(
+            result.serial_number, now=datetime(2025, 1, 2, 0, 0, 1)
+        )
+        assert cert_after.status == CertificateStatus.REVOKED
+
+    def test_certificate_validity_model_boundary(self, make_service):
+        service = make_service(cert_validity_days=1)
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+
+        now = datetime(2025, 1, 1, 0, 0, 0)
+        csr = CSR(device_id=reg.device_id, public_key_info="pubkey")
+        result = service.submit_csr(csr, now=now)
+
+        cert_raw = service.query_certificate_by_serial(result.serial_number)
+        assert cert_raw.not_before == datetime(2025, 1, 1, 0, 0, 0)
+        assert cert_raw.not_after == datetime(2025, 1, 2, 0, 0, 0)
+
+        assert cert_raw.is_expired(now=datetime(2025, 1, 1, 23, 59, 59)) is False
+        assert cert_raw.is_expired(now=datetime(2025, 1, 2, 0, 0, 1)) is True
 
     def test_certificate_validity_minimum_one_day(self, make_service):
         service = make_service(cert_validity_days=1)
@@ -279,6 +298,32 @@ class TestBoundaryConditions:
 
         certs = service.query_certificates_by_device(reg.device_id)
         assert all(c.status == CertificateStatus.REVOKED for c in certs)
+
+    def test_expired_certificate_shows_revoked_status(self, make_service):
+        service = make_service(cert_validity_days=1)
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+
+        issue_time = datetime(2025, 1, 1, 0, 0, 0)
+        csr = CSR(device_id=reg.device_id, public_key_info="pubkey")
+        result = service.submit_csr(csr, now=issue_time)
+
+        query_time = datetime(2026, 1, 1, 0, 0, 0)
+        cert = service.query_certificate_by_serial(result.serial_number, now=query_time)
+        assert cert.status == CertificateStatus.REVOKED
+
+    def test_expired_certificate_in_by_device_query(self, make_service):
+        service = make_service(cert_validity_days=1)
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+
+        issue_time = datetime(2025, 1, 1, 0, 0, 0)
+        csr = CSR(device_id=reg.device_id, public_key_info="pubkey")
+        result = service.submit_csr(csr, now=issue_time)
+
+        query_time = datetime(2025, 1, 3, 0, 0, 0)
+        certs = service.query_certificates_by_device(reg.device_id, now=query_time)
+        assert len(certs) == 1
+        assert certs[0].status == CertificateStatus.REVOKED
+        assert certs[0].serial_number == result.serial_number
 
 
 class TestExceptionBranches:
@@ -351,6 +396,15 @@ class TestExceptionBranches:
         with pytest.raises(DeviceNotFoundError):
             service.get_device("dev-nonexistent")
 
+    def test_revoked_device_csr_not_device_not_found(self, make_service):
+        service = make_service()
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+        service.revoke_certificates_by_device(reg.device_id)
+
+        csr = CSR(device_id=reg.device_id, public_key_info="pubkey")
+        with pytest.raises(DeviceRevokedError):
+            service.submit_csr(csr)
+
 
 class TestExceptionHierarchy:
     def test_all_exceptions_inherit_from_device_cert_error(self):
@@ -360,6 +414,7 @@ class TestExceptionHierarchy:
         assert issubclass(DuplicateDeviceError, DeviceCertError)
         assert issubclass(DeviceNotFoundError, DeviceCertError)
         assert issubclass(DeviceNotRegisteredError, DeviceCertError)
+        assert issubclass(DeviceRevokedError, DeviceCertError)
         assert issubclass(CertificateNotFoundError, DeviceCertError)
 
 
@@ -424,6 +479,64 @@ class TestInMemoryStore:
         assert len(store) == 1
         service.register_device("sensor-02", "psk-beta-002")
         assert len(store) == 2
+
+
+class TestImmutability:
+    def test_get_device_returns_copy(self, make_service):
+        service = make_service()
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+
+        device1 = service.get_device(reg.device_id)
+        device2 = service.get_device(reg.device_id)
+
+        assert device1.device_id == device2.device_id
+        assert device1 is not device2
+
+    def test_modifying_returned_device_does_not_affect_internal_state(self, make_service):
+        service = make_service()
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+
+        device_copy = service.get_device(reg.device_id)
+        device_copy.status = DeviceStatus.REVOKED
+
+        device_again = service.get_device(reg.device_id)
+        assert device_again.status == DeviceStatus.REGISTERED
+
+    def test_query_certificate_by_serial_returns_copy(self, make_service):
+        service = make_service()
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+        csr = CSR(device_id=reg.device_id, public_key_info="pubkey")
+        result = service.submit_csr(csr)
+
+        cert1 = service.query_certificate_by_serial(result.serial_number)
+        cert2 = service.query_certificate_by_serial(result.serial_number)
+
+        assert cert1 is not cert2
+
+    def test_query_certificates_by_device_returns_copies(self, make_service):
+        service = make_service()
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+        csr = CSR(device_id=reg.device_id, public_key_info="pubkey")
+        service.submit_csr(csr)
+
+        certs1 = service.query_certificates_by_device(reg.device_id)
+        certs2 = service.query_certificates_by_device(reg.device_id)
+
+        assert certs1[0] is not certs2[0]
+
+    def test_modifying_returned_certificate_does_not_affect_internal_state(self, make_service):
+        service = make_service()
+        reg = service.register_device("sensor-01", "psk-alpha-001")
+        csr = CSR(device_id=reg.device_id, public_key_info="pubkey")
+        result = service.submit_csr(csr)
+
+        cert_copy = service.query_certificate_by_serial(result.serial_number)
+        cert_copy.public_key_info = "tampered-key"
+        cert_copy.serial_number = "SN-TAMPERED"
+
+        cert_again = service.query_certificate_by_serial(result.serial_number)
+        assert cert_again.public_key_info == "pubkey"
+        assert cert_again.serial_number == result.serial_number
 
 
 class TestDefaults:

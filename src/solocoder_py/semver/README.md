@@ -38,7 +38,6 @@ MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]
 1.2.3-alpha        → 含预发布标签
 1.2.3+build.42     → 含构建元数据
 1.2.3-rc.1+build.5 → 预发布 + 构建元数据
-1                  → 简约形式，等价于 1.0.0
 ```
 
 ## 预发布标签优先级规则

@@ -1,0 +1,7 @@
+你实现的依赖注入容器模块存在一些缺陷需要修复：
+
+1. Container.__init__ 中初始化了一个 _singleton_instances 字典，但这个字典在整个类中没有任何方法读写它。实际的 Singleton 实例缓存在 ServiceDescriptor 上，这个字典是架构调整后遗留的死代码，需要清理。
+
+2. test_resolve_scoped_from_root_creates_implicit_scope 测试用例只对返回值做了 isinstance 类型检查，没有验证两次调用返回实例的身份关系。由于当前实现中从根容器解析 Scoped 类型每次都会创建隐式作用域，实际行为等同于 Transient，但测试无法检测到这个行为是否正确。需要补充身份断言，明确验证同作用域或不同作用域下的实例隔离性。
+
+3. 重新运行 poetry run pytest tests/di/ -v 验证修复后所有测试仍然通过。

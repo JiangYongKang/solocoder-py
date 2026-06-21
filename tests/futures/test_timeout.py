@@ -41,14 +41,14 @@ class TestWithTimeout:
     def test_already_fulfilled_bypasses_timeout(self):
         f = Future.resolve(99)
         timed = f.with_timeout(0.05)
-        assert timed is f
+        assert timed is not f
         assert timed.value == 99
 
     def test_already_rejected_bypasses_timeout(self):
         err = RuntimeError("already failed")
         f = Future.reject(err)
         timed = f.with_timeout(0.05)
-        assert timed is f
+        assert timed is not f
         assert timed.state == FutureState.REJECTED
         assert timed.reason is err
 
@@ -60,6 +60,16 @@ class TestWithTimeout:
 
         assert timed.value == "done"
         assert f.state == FutureState.FULFILLED
+
+    def test_chaining_on_timed_future_does_not_pollute_original(self):
+        f = Future.resolve("original")
+        timed = f.with_timeout(1.0)
+        chained = timed.then(lambda x: x.upper())
+
+        assert timed is not f
+        assert chained.value == "ORIGINAL"
+        assert f.state == FutureState.FULFILLED
+        assert f.value == "original"
 
     def test_original_future_fails_before_timeout(self):
         f = Future()

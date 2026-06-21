@@ -5,6 +5,7 @@ from solocoder_py.ringbuffer import (
     WriteMode,
     InvalidCapacityError,
     RingBufferError,
+    TimeoutError,
 )
 
 
@@ -262,3 +263,101 @@ class TestClearWithBlockedOperations:
         assert write_result[0] == 1
         assert rb.available_to_read() == 1
         assert rb.read() == 3
+
+
+class TestTimeoutErrorRaise:
+    def test_blocking_read_timeout_raises(self, rb_no_overwrite: RingBuffer[int]):
+        import time
+
+        start = time.monotonic()
+        with pytest.raises(TimeoutError) as excinfo:
+            rb_no_overwrite.read(blocking=True, timeout=0.1, raise_timeout=True)
+        elapsed = time.monotonic() - start
+
+        assert "timed out" in str(excinfo.value)
+        assert 0.08 <= elapsed <= 0.15
+
+    def test_blocking_read_batch_timeout_raises(self, rb_no_overwrite: RingBuffer[int]):
+        import time
+
+        start = time.monotonic()
+        with pytest.raises(TimeoutError) as excinfo:
+            rb_no_overwrite.read_batch(3, blocking=True, timeout=0.1, raise_timeout=True)
+        elapsed = time.monotonic() - start
+
+        assert "timed out" in str(excinfo.value)
+        assert 0.08 <= elapsed <= 0.15
+
+    def test_blocking_read_timeout_no_raise_returns_none(self, rb_no_overwrite: RingBuffer[int]):
+        result = rb_no_overwrite.read(blocking=True, timeout=0.05, raise_timeout=False)
+        assert result is None
+
+    def test_blocking_write_timeout_raises(self):
+        import time
+
+        rb = RingBuffer[int](capacity=2, write_mode=WriteMode.NO_OVERWRITE)
+        rb.write_batch([1, 2])
+
+        start = time.monotonic()
+        with pytest.raises(TimeoutError) as excinfo:
+            rb.write(3, blocking=True, timeout=0.1, raise_timeout=True)
+        elapsed = time.monotonic() - start
+
+        assert "timed out" in str(excinfo.value)
+        assert 0.08 <= elapsed <= 0.15
+
+    def test_blocking_write_batch_timeout_raises(self):
+        import time
+
+        rb = RingBuffer[int](capacity=2, write_mode=WriteMode.NO_OVERWRITE)
+        rb.write_batch([1, 2])
+
+        start = time.monotonic()
+        with pytest.raises(TimeoutError) as excinfo:
+            rb.write_batch([3, 4], blocking=True, timeout=0.1, raise_timeout=True)
+        elapsed = time.monotonic() - start
+
+        assert "timed out" in str(excinfo.value)
+        assert 0.08 <= elapsed <= 0.15
+
+    def test_blocking_write_partial_success_no_raise(self):
+        import threading
+        import time
+
+        rb = RingBuffer[int](capacity=3, write_mode=WriteMode.NO_OVERWRITE)
+        rb.write_batch([1, 2, 3])
+
+        result = []
+        exc_raised = []
+
+        def writer():
+            try:
+                n = rb.write_batch([4, 5, 6], blocking=True, timeout=0.15, raise_timeout=True)
+                result.append(n)
+            except TimeoutError as e:
+                exc_raised.append(e)
+
+        t = threading.Thread(target=writer)
+        t.start()
+        time.sleep(0.05)
+
+        rb.read()
+        t.join(timeout=1.0)
+
+        assert len(result) == 1
+        assert result[0] == 1
+        assert len(exc_raised) == 0
+
+    def test_timeout_error_is_ring_buffer_error(self):
+        assert issubclass(TimeoutError, RingBufferError)
+
+    def test_read_timeout_raises_isinstance_check(self, rb_no_overwrite: RingBuffer[int]):
+        with pytest.raises(RingBufferError):
+            rb_no_overwrite.read(blocking=True, timeout=0.05, raise_timeout=True)
+
+    def test_write_timeout_raises_isinstance_check(self):
+        rb = RingBuffer[int](capacity=1, write_mode=WriteMode.NO_OVERWRITE)
+        rb.write(1)
+        with pytest.raises(RingBufferError):
+            rb.write(2, blocking=True, timeout=0.05, raise_timeout=True)
+

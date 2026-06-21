@@ -46,7 +46,7 @@ class CommandQueue:
 
     def _check_expired(self, command: Command) -> bool:
         if command.status == CommandStatus.PENDING and command.is_expired:
-            command.mark_timeout()
+            command._mark_ttl_expired()
             return True
         return False
 
@@ -76,9 +76,7 @@ class CommandQueue:
     def get_command(self, command_id: str) -> Command:
         if command_id not in self._commands:
             raise CommandNotFoundError(f"Command not found: {command_id}")
-        command = self._commands[command_id]
-        self._check_expired(command)
-        return command
+        return self._commands[command_id]
 
     def get_status(self, command_id: str) -> CommandStatus:
         command = self.get_command(command_id)
@@ -87,7 +85,6 @@ class CommandQueue:
     def list_by_status(self, status: CommandStatus) -> List[Command]:
         result: List[Command] = []
         for command in self._commands.values():
-            self._check_expired(command)
             if command.status == status:
                 result.append(command)
         return result

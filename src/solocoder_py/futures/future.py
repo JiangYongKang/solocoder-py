@@ -93,7 +93,7 @@ class Future:
         if link.on_fulfilled is not None:
             try:
                 result = link.on_fulfilled(value)
-                if isinstance(result, Future):
+                if link.flatten and isinstance(result, Future):
                     def _inner_fulfill(v: Any) -> None:
                         try:
                             link.future._fulfill(v)
@@ -110,6 +110,7 @@ class Future:
                         future=link.future,
                         on_fulfilled=_inner_fulfill,
                         on_rejected=_inner_reject,
+                        flatten=True,
                     ))
                 else:
                     try:
@@ -131,7 +132,7 @@ class Future:
         if link.on_rejected is not None:
             try:
                 result = link.on_rejected(reason)
-                if isinstance(result, Future):
+                if link.flatten and isinstance(result, Future):
                     def _inner_fulfill(v: Any) -> None:
                         try:
                             link.future._fulfill(v)
@@ -148,6 +149,7 @@ class Future:
                         future=link.future,
                         on_fulfilled=_inner_fulfill,
                         on_rejected=_inner_reject,
+                        flatten=True,
                     ))
                 else:
                     try:
@@ -178,7 +180,7 @@ class Future:
 
     def then(self, on_fulfilled: _OnFulfilled) -> "Future":
         next_future = Future()
-        link = _ChainLink(future=next_future, on_fulfilled=on_fulfilled, on_rejected=None)
+        link = _ChainLink(future=next_future, on_fulfilled=on_fulfilled, on_rejected=None, flatten=False)
         self._add_chain_link(link)
         return next_future
 
@@ -191,7 +193,7 @@ class Future:
                 raise TypeError(f"compose callback must return a Future, got {type(inner_future)}")
             return inner_future
 
-        link = _ChainLink(future=next_future, on_fulfilled=_handler, on_rejected=None)
+        link = _ChainLink(future=next_future, on_fulfilled=_handler, on_rejected=None, flatten=True)
         self._add_chain_link(link)
         return next_future
 
@@ -204,10 +206,6 @@ class Future:
     def with_timeout(self, timeout: float) -> "Future":
         if timeout <= 0:
             raise ValueError("timeout must be positive")
-
-        with self._lock:
-            if self._state != FutureState.PENDING:
-                return self
 
         result_future = Future()
         settled_lock = threading.Lock()
@@ -245,6 +243,19 @@ class Future:
                 result_future._reject(TimeoutError(timeout))
             except FutureAlreadySettledError:
                 pass
+
+        with self._lock:
+            already_settled = self._state != FutureState.PENDING
+            current_value = self._value
+            current_reason = self._reason
+            current_state = self._state
+
+        if already_settled:
+            if current_state == FutureState.FULFILLED:
+                result_future._fulfill(current_value)
+            else:
+                result_future._reject(current_reason)
+            return result_future
 
         self._add_chain_link(_ChainLink(
             future=Future(),
@@ -413,7 +424,9 @@ class _ChainLink:
         future: Future,
         on_fulfilled: Optional[_OnFulfilled],
         on_rejected: Optional[_OnRejected],
+        flatten: bool = False,
     ) -> None:
         self.future = future
         self.on_fulfilled = on_fulfilled
         self.on_rejected = on_rejected
+        self.flatten = flatten

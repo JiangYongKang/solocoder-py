@@ -1,0 +1,9 @@
+你实现的 Promise/Future 组合子库存在一些缺陷需要修复：
+
+1. _propagate_fulfill 方法在 then 回调返回 Future 值时做了自动展平处理，这让 then 和 compose 在 Future 返回值场景下行为没有区别。then 应做值转换而 compose 做展平，二者职责需要分离，即 then 不应展平回调返回的 Future 值。
+
+2. with_timeout 方法在检测到原 Future 已非 PENDING 状态时直接返回了原对象本身，调用者拿到的返回值与原 Future 是同一个对象。这导致对该返回值做链式调用时会污染原始 Future 的状态。超时包装始终应返回新的 Future 对象而非复用自身。
+
+3. README.md 的 API 参考表将 _fulfill 和 _reject 列为公开方法，但它们是内部方法不应出现在面向用户的文档中。
+
+4. 重新运行 poetry run pytest tests/futures/ -v 验证修复后所有测试仍然通过。

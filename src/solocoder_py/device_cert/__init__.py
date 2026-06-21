@@ -4,6 +4,7 @@ from .exceptions import (
     DuplicateDeviceError,
     DeviceNotFoundError,
     DeviceNotRegisteredError,
+    DeviceRevokedError,
     CertificateNotFoundError,
 )
 from .models import (
@@ -28,6 +29,7 @@ __all__ = [
     "DuplicateDeviceError",
     "DeviceNotFoundError",
     "DeviceNotRegisteredError",
+    "DeviceRevokedError",
     "CertificateNotFoundError",
     "DeviceStatus",
     "CertificateStatus",

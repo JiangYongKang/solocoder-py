@@ -40,7 +40,6 @@ class Scope:
 class Container:
     def __init__(self) -> None:
         self._descriptors: dict[type, ServiceDescriptor] = {}
-        self._singleton_instances: dict[type, Any] = {}
 
     def register(
         self,

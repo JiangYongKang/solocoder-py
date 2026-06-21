@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import copy
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
 from .exceptions import (
     DeviceNotFoundError,
-    DeviceNotRegisteredError,
+    DeviceRevokedError,
     DuplicateDeviceError,
     InvalidPSKError,
     CertificateNotFoundError,
@@ -24,6 +25,24 @@ from .store import InMemoryDeviceCertStore
 
 DEFAULT_CERT_VALIDITY_DAYS = 365
 DEFAULT_CA_ISSUER = "SoloCoder-CA"
+
+
+def _copy_device(device: DeviceRecord) -> DeviceRecord:
+    return copy.copy(device)
+
+
+def _copy_certificate(cert: Certificate) -> Certificate:
+    return copy.copy(cert)
+
+
+def _resolve_effective_status(
+    cert: Certificate, now: Optional[datetime] = None
+) -> CertificateStatus:
+    if cert.status == CertificateStatus.REVOKED:
+        return CertificateStatus.REVOKED
+    if cert.is_expired(now=now):
+        return CertificateStatus.REVOKED
+    return CertificateStatus.VALID
 
 
 class DeviceCertService:
@@ -90,9 +109,9 @@ class DeviceCertService:
         if device is None:
             raise DeviceNotFoundError(f"Device not found: {csr.device_id}")
 
-        if device.status != DeviceStatus.REGISTERED:
-            raise DeviceNotRegisteredError(
-                f"Device {csr.device_id} is not in registered state (current: {device.status.value})"
+        if device.status == DeviceStatus.REVOKED:
+            raise DeviceRevokedError(
+                f"Device {csr.device_id} has been revoked and cannot submit CSR"
             )
 
         current_time = now if now is not None else datetime.now()
@@ -139,20 +158,37 @@ class DeviceCertService:
         for cert in certs:
             cert.status = CertificateStatus.REVOKED
 
-    def query_certificates_by_device(self, device_id: str) -> list[Certificate]:
+    def query_certificates_by_device(
+        self,
+        device_id: str,
+        now: Optional[datetime] = None,
+    ) -> list[Certificate]:
         device = self._store.get_device(device_id)
         if device is None:
             raise DeviceNotFoundError(f"Device not found: {device_id}")
-        return list(self._store.get_certificates_by_device(device_id))
 
-    def query_certificate_by_serial(self, serial_number: str) -> Certificate:
-        cert = self._store.get_certificate(serial_number)
-        if cert is None:
+        raw_certs = self._store.get_certificates_by_device(device_id)
+        result = []
+        for raw in raw_certs:
+            cert = _copy_certificate(raw)
+            cert.status = _resolve_effective_status(raw, now=now)
+            result.append(cert)
+        return result
+
+    def query_certificate_by_serial(
+        self,
+        serial_number: str,
+        now: Optional[datetime] = None,
+    ) -> Certificate:
+        raw = self._store.get_certificate(serial_number)
+        if raw is None:
             raise CertificateNotFoundError(f"Certificate not found: {serial_number}")
+        cert = _copy_certificate(raw)
+        cert.status = _resolve_effective_status(raw, now=now)
         return cert
 
     def get_device(self, device_id: str) -> DeviceRecord:
         device = self._store.get_device(device_id)
         if device is None:
             raise DeviceNotFoundError(f"Device not found: {device_id}")
-        return device
+        return _copy_device(device)

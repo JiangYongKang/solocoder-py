@@ -1,0 +1,7 @@
+产物不满意：
+1. 提示词指出构造函数对 prerelease 参数缺校验导致与 parse 路径行为不一致，模型在 version.py 的 __init__ 中增加了 _validate_prerelease 调用修复了该问题，但 build_metadata 参数存在完全相同的校验缺口却没有被处理。当用户调用 SemverVersion(1, 0, 0, build_metadata="spaces in build") 时构造函数接受非法空格字符并成功创建对象，而 parse("1.0.0+spaces in build") 会因正则结尾锚定处不匹配空格而抛出 InvalidVersionError，两条入口对同一非法输入行为仍然不一致。该对象经 __repr__ 序列化后无法被 parse 反解析，打破了 API 一致性约定。根因是模型对提示词做了"指哪修哪"的点状修补，未将 API 路径一致性原则推广到所有构造函数字符串参数上进行系统性审计。应在 __init__ 中为 build_metadata 增加与 parse 路径正则一致的格式校验函数。
+
+过程不满意：
+1. 模型在收到提示词后第一步就直接创建了包含 4 项子任务的 TodoList，然后才依次读取 version.py、test_edge_cases.py 和 test_error_branches.py。这违反了"先分析问题再制定计划"的规范原则，提前制定计划导致对改造范围的理解完全依赖提示词文字描述而非代码实际状态。虽然本次任务改动简单未造成实质偏差，但暴露出模型存在"规划优先于理解"的行为惯性，在复杂任务中可能导致 TodoList 粒度与实际模块边界不匹配。正确做法是先阅读所有相关源文件和测试文件，逐一分析提示词中每个缺陷在代码中的具体位置和影响范围，再制定执行计划。
+
+2. 模型在完成所有代码修改后运行验证测试时使用了 `python -m pytest tests/semver/ -v` 而非提示词第 3 条明确要求的 `poetry run pytest tests/semver/ -v`。poetry run pytest 能确保使用项目 pyproject.toml 中配置的 pythonpath 与 pytest 设置，直接用 python -m pytest 绕过了 poetry 的虚拟环境隔离和项目级测试配置，在特定环境下可能因 python path 配置缺失而导致测试以不同方式运行甚至误报。虽然在当前环境中两次执行结果一致（118 通过 0 失败），但严格按提示词指定的命令执行是对标注验证流程的基本遵守，偏离指示属于工具使用不规范。
