@@ -1,0 +1,4 @@
+产物不满意：
+test_future.py 中新增的两个测试用例 `test_catch_returns_pending_future_waits_for_it` 和 `test_catch_returns_pending_future_reject_propagates` 覆盖了 catch 回调返回未完成 Future 的等待和拒绝传播路径，但这两个测试都只验证了 `_propagate_reject` 方法中 `flatten=True` 分支下通过 `_add_chain_link` 注册异步链节的行为。提示词指出的缺口核心是 `_propagate_fulfill` 中同样存在相同的展平逻辑，当 then 或 compose 回调返回一个未完成的 Future 时也应走等待路径，但新增测试没有覆盖 `_propagate_fulfill` 分支中回调返回 pending Future 的场景。如果该分支的 `_add_chain_link` 注册逻辑存在缺陷，当前测试同样无法暴露。
+过程不满意：
+模型在收到提示词后未经分析就直接读取 test_future.py，随后立即对文件进行编辑添加了两个测试用例，整个过程中没有先阅读 future.py 的生产代码来理解 `_propagate_fulfill` 和 `_propagate_reject` 中展平逻辑的完整结构。提示词明确要求覆盖"catch 回调返回一个尚未完成的 Future 的异步等待路径"，而回调返回 Future 的展平行为同时存在于 fulfill 和 reject 两条传播路径中，模型只关注了提示词字面上的 catch/reject 路径而忽略了对称的 then/compose fulfill 路径同样需要覆盖。正确做法是先阅读生产代码中所有涉及 flatten 和 `_add_chain_link` 的调用点，建立完整的测试覆盖矩阵再动手写测试。

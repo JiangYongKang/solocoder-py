@@ -1,0 +1,4 @@
+产物不满意：
+bus.py 的 `_Subscription.__init__` 进行了懒加载改造，将 `_once_lock` 从立即创建 `threading.Lock()` 改为初始化为 `None`，然后在 `claim_once` 方法中首次调用时创建。这一改动存在潜在的竞态条件：`claim_once` 方法中 `if self._once_lock is None` 的检查和 `self._once_lock = threading.Lock()` 的赋值不是原子操作。当多个线程同时对一个 once 订阅执行 `publish` 时，两个线程可能同时看到 `_once_lock` 为 `None`，各自创建一个新的 Lock 对象，后执行的赋值会覆盖先执行的赋值，导致一个 Lock 对象被丢弃变成孤儿对象。虽然 `claim_once` 内层有 `with self._once_lock` 保护 `_once_fired` 标志的原子性不会受影响，但这种设计在高度并发场景下会产生微量内存泄漏，且违反了"最多创建一个 Lock"的设计意图。正确的做法是使用双重检查锁定模式或用 `threading.Lock` 本身作为保护创建过程的锁。
+过程不满意：
+模型的修复过程非常简洁：先读取 bus.py，然后直接编辑 `_Subscription` 类的 `__init__` 和 `claim_once` 两个方法，最后运行 pytest 验证通过。整个过程没有对并发安全性做分析，也没有在思考过程中提及懒加载可能引入的竞态条件。虽然提示词未显式要求保持并发安全，但 once 订阅的核心场景就是并发发布时确保回调只触发一次，而对 `_once_lock` 的创建过程不做并发保护是一种对现有并发语义的破坏。正确做法是先分析 `claim_once` 的调用上下文和并发场景，再选择双重检查锁定方案保证锁创建的线程安全。

@@ -1,0 +1,5 @@
+Promise/Future 组合子库中 catch 方法的测试覆盖存在缺口需要修复：
+
+1. test_catch_returns_future_can_continue_chain 测试用例只用已完成的 Future 验证了 catch 回调返回 Future 时的展平行为，没有覆盖回调返回一个尚未完成的 Future 的异步等待路径。如果展平的异步链节注册逻辑有缺陷，当前测试无法暴露。
+
+2. 完成后运行 poetry run pytest tests/futures/ -v 确保所有测试通过。

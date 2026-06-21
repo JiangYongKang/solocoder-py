@@ -14,7 +14,7 @@ _SEMVER_PATTERN = re.compile(
 )
 
 _PRERELEASE_ID_PATTERN = re.compile(r"^(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)$")
-_BUILD_METADATA_PATTERN = re.compile(r"^[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*$")
+_BUILD_ID_PATTERN = re.compile(r"^[0-9a-zA-Z-]+$")
 
 
 def _validate_prerelease(prerelease: str) -> None:
@@ -37,11 +37,16 @@ def _validate_build_metadata(build_metadata: str) -> None:
         raise InvalidVersionError("Build metadata must be a string")
     if not build_metadata:
         raise InvalidVersionError("Build metadata must not be empty")
-    if not _BUILD_METADATA_PATTERN.match(build_metadata):
-        raise InvalidVersionError(
-            f"Invalid build metadata '{build_metadata}' "
-            "(only alphanumeric characters, hyphens and dots are allowed)"
-        )
+    for part in build_metadata.split("."):
+        if not part:
+            raise InvalidVersionError(
+                f"Empty build metadata identifier in '{build_metadata}'"
+            )
+        if not _BUILD_ID_PATTERN.match(part):
+            raise InvalidVersionError(
+                f"Invalid build metadata identifier '{part}' in '{build_metadata}' "
+                "(only alphanumeric characters and hyphens are allowed)"
+            )
 
 
 @total_ordering
@@ -108,7 +113,71 @@ class SemverVersion:
             build_metadata = match.group(5)
             return cls(major, minor, patch, prerelease, build_metadata)
 
-        raise InvalidVersionError(f"Invalid semver string: '{version_str}'")
+        cls._diagnose_invalid_version(stripped, version_str)
+
+    @classmethod
+    def _diagnose_invalid_version(cls, stripped: str, original: str) -> None:
+        build_idx = stripped.rfind("+")
+        build_metadata = None
+        core_part = stripped
+        if build_idx != -1:
+            build_metadata = stripped[build_idx + 1 :]
+            core_part = stripped[:build_idx]
+
+        prerelease = None
+        version_core = core_part
+        prerelease_idx = core_part.find("-")
+        if prerelease_idx != -1:
+            prerelease = core_part[prerelease_idx + 1 :]
+            version_core = core_part[:prerelease_idx]
+
+        core_parts = version_core.split(".")
+        if len(core_parts) != 3:
+            raise InvalidVersionError(
+                f"Invalid semver string: '{original}' "
+                "(version core must have exactly three parts: MAJOR.MINOR.PATCH)"
+            )
+
+        for i, part in enumerate(core_parts):
+            name = ["MAJOR", "MINOR", "PATCH"][i]
+            if not part:
+                raise InvalidVersionError(
+                    f"Invalid semver string: '{original}' "
+                    f"({name} version must not be empty)"
+                )
+            if not part.isdigit():
+                raise InvalidVersionError(
+                    f"Invalid semver string: '{original}' "
+                    f"({name} version must be a non-negative integer)"
+                )
+            if len(part) > 1 and part[0] == "0":
+                raise InvalidVersionError(
+                    f"Invalid semver string: '{original}' "
+                    f"({name} version must not have leading zeros)"
+                )
+            if int(part) < 0:
+                raise InvalidVersionError(
+                    f"Invalid semver string: '{original}' "
+                    f"({name} version must be non-negative)"
+                )
+
+        if prerelease is not None:
+            try:
+                _validate_prerelease(prerelease)
+            except InvalidVersionError as e:
+                raise InvalidVersionError(
+                    f"Invalid semver string: '{original}' ({e})"
+                ) from e
+
+        if build_metadata is not None:
+            try:
+                _validate_build_metadata(build_metadata)
+            except InvalidVersionError as e:
+                raise InvalidVersionError(
+                    f"Invalid semver string: '{original}' ({e})"
+                ) from e
+
+        raise InvalidVersionError(f"Invalid semver string: '{original}'")
 
     def without_build_metadata(self) -> str:
         parts = f"{self.major}.{self.minor}.{self.patch}"

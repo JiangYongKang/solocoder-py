@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from threading import Lock
 from typing import Generic, Optional, TypeVar
 
 T = TypeVar("T")
@@ -21,20 +20,16 @@ class TreiberStack(Generic[T]):
     def __init__(self) -> None:
         self._head: _TaggedReference[T] = _TaggedReference(node=None, version=0)
         self._size: int = 0
-        self._cas_lock: Lock = Lock()
 
     def _compare_and_swap(
         self,
         expected: _TaggedReference[T],
         new_ref: _TaggedReference[T],
-        size_delta: int,
     ) -> bool:
-        with self._cas_lock:
-            if self._head is expected:
-                self._head = new_ref
-                self._size += size_delta
-                return True
-            return False
+        if self._head is expected:
+            self._head = new_ref
+            return True
+        return False
 
     def push(self, value: T) -> None:
         new_node = _Node(value=value)
@@ -44,7 +39,8 @@ class TreiberStack(Generic[T]):
             new_ref = _TaggedReference(
                 node=new_node, version=current_head.version + 1
             )
-            if self._compare_and_swap(current_head, new_ref, 1):
+            if self._compare_and_swap(current_head, new_ref):
+                self._size += 1
                 return
 
     def pop(self) -> Optional[T]:
@@ -57,7 +53,8 @@ class TreiberStack(Generic[T]):
             new_ref = _TaggedReference(
                 node=next_node, version=current_head.version + 1
             )
-            if self._compare_and_swap(current_head, new_ref, -1):
+            if self._compare_and_swap(current_head, new_ref):
+                self._size -= 1
                 return value
 
     def peek(self) -> Optional[T]:

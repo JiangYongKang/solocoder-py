@@ -1,0 +1,5 @@
+事件总线模块的 once 回调实现存在资源浪费问题需要修复：
+
+1. _Subscription 的 __init__ 方法为每个创建的订阅对象都无条件初始化了一个 threading.Lock，包括 never-once 的普通订阅。在一个大规模事件系统中，普通订阅数量可能达到数千乃至数万级别，这些永远不会被使用的锁对象会占用不必要的系统资源。
+
+2. 完成后运行 poetry run pytest tests/eventbus/ -v 确保所有测试通过。

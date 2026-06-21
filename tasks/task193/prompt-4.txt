@@ -1,0 +1,7 @@
+Semver 版本解析比较器模块中 build_metadata 的校验实现存在细节问题需要修复：
+
+1. 构造函数路径和 parse 路径对同一非法 build_metadata 输入（例如含空格）抛出的异常信息不一致。调用方无法用统一的规则跨两条 API 捕获同一类错误。
+
+2. _validate_build_metadata 对空标识符场景（如 "build..1"）给出的错误提示没有指明具体哪一段出了问题，与 _validate_prerelease 能定位到具体非法标识符的行为不一致。
+
+3. 完成后运行 poetry run pytest tests/semver/ -v 确保所有测试通过。

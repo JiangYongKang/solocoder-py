@@ -188,6 +188,32 @@ class TestCatch:
         )
         assert result.value == "recovered!"
 
+    def test_catch_returns_pending_future_waits_for_it(self):
+        outer = Future()
+        inner = Future()
+        result = outer.catch(lambda e: inner).then(lambda x: x + "!")
+
+        assert result.state == FutureState.PENDING
+
+        outer._reject(RuntimeError("fail"))
+        assert result.state == FutureState.PENDING
+
+        inner._fulfill("recovered")
+        assert result.value == "recovered!"
+
+    def test_catch_returns_pending_future_reject_propagates(self):
+        outer = Future()
+        inner = Future()
+        result = outer.catch(lambda e: inner)
+
+        outer._reject(RuntimeError("fail"))
+        assert result.state == FutureState.PENDING
+
+        inner._reject(ValueError("inner fail"))
+        assert result.state == FutureState.REJECTED
+        assert isinstance(result.reason, ValueError)
+        assert str(result.reason) == "inner fail"
+
 
 class TestExceptionPropagation:
     def test_then_callback_raises_propagates(self):
