@@ -1,0 +1,5 @@
+你实现的 EWMA 模块存在一个语义问题需要修复：
+
+在构造 EWMA 时传入了非 None 的 initial_value 且 warmup_period 大于零的场景下，corrected_value 属性直接返回了与 raw_value 完全相同的未校正值，没有执行任何偏差校正计算。这意味着用户在设置了初始值后调用 corrected_value 期望获得偏差校正后的 EWMA 时，实际得到的是未校正的原始值，corrected_value 丧失了独立的语义价值，沦为 raw_value 的别名。
+
+修复后需要运行 `poetry run pytest tests/ewma/` 确保所有测试通过。

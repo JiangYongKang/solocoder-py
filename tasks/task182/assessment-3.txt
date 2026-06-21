@@ -1,0 +1,7 @@
+产物不满意：
+1. corrected_value 的修复方案本身在数学推导上是正确的，_compute_corrected 方法使用 `(S_t - (1-α)^t * initial_value) / (1 - (1-α)^t)` 扣除初始值贡献后重新归一化，initial_value=None 时自动退化为标准偏差校正 `S_t / (1-(1-α)^t)`，initial_value=0 时也等价退化正确，warmup_period=0 时跳过校正直接返回原始值。但 _validate_input 静态方法中新增了对布尔值的拒绝逻辑，将原先 `return "valid"` 改为 `raise EWMAError("Invalid input type: bool is not allowed, use int or float")`，同时 test_ewma.py 中新增了 test_bool_input_true_rejected、test_bool_input_false_rejected、test_bool_input_does_not_pollute_state 三个测试用例。提示词只要求修复 corrected_value 在 initial_value 非 None 且 warmup_period 大于零时不执行偏差校正的语义问题，布尔值输入校验行为的修改与本次修复完全无关。模型在本轮缺陷修复会话中越界修改了与问题无关的代码逻辑，引入了未授权的行为变更。根因是模型在阅读 ewma.py 时顺手修改了不顺眼的代码，缺乏对修复范围边界的意识。正确做法是仅针对提示词描述的 corrected_value 语义缺陷做最小修改。
+
+过程不满意：
+1. 模型在收到提示词后第一步就用 todo_write 创建了三项子任务计划，之后才开始阅读 ewma.py 源码理解当前实现。这与第 2 轮会话中已暴露的问题完全相同——在还未理解现有代码和问题根因的情况下就规划执行步骤。虽然本轮后续通过阅读代码做出了正确的数学推导和修复，但这种"先规划后分析"的模式本质上有风险，容易导致计划粒度与实际修复点不匹配。正确做法是先阅读 ewma.py 定位 corrected_value 属性的当前实现逻辑、分析为什么 initial_value 导致校正失效，再基于理解制定修复计划。
+
+2. 模型在 _validate_input 方法中静默修改了布尔值处理逻辑（从接受改为拒绝），同时在测试文件中新增了三个对应的布尔值拒绝测试用例，但 TodoList 的内容和最终的修复总结段落均未提及这一修改，全程未对该变更做任何说明或论证。这是一种在对目标代码做单向修改时顺便改动不相关部分的"顺手修"行为，在缺陷修复会话中这种无意识的范围扩张可能引入预期外的副作用。正确做法是在修改前确保清楚哪些代码变更属于本次修复范围，对于超出范围的修改应不做，或者至少在 TodoList 中显式记录并说明理由。

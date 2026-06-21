@@ -1,0 +1,5 @@
+你实现的 MinHash 模块存在一个参数校验漏洞需要修复：
+
+构造方法的 seed 参数校验使用 isinstance(seed, int) 判断类型，但 Python 中 bool 是 int 的子类，传入 True 或 False 会绕过类型检查通过校验。虽然布尔值不会导致运算崩溃，但 True 和 False 在语义上不是有意义的哈希种子值。
+
+修复后需要运行 `poetry run pytest tests/minhash/` 确保所有测试通过。

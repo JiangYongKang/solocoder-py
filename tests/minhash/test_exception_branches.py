@@ -49,6 +49,18 @@ class TestInitExceptions:
         ):
             MinHash(num_hash_functions=None)
 
+    def test_h_true_raises_invalid_config(self):
+        with pytest.raises(
+            InvalidConfigError, match="num_hash_functions must be an integer"
+        ):
+            MinHash(num_hash_functions=True)
+
+    def test_h_false_raises_invalid_config(self):
+        with pytest.raises(
+            InvalidConfigError, match="num_hash_functions must be an integer"
+        ):
+            MinHash(num_hash_functions=False)
+
     def test_seed_string_raises_invalid_config(self):
         with pytest.raises(InvalidConfigError, match="seed must be an integer"):
             MinHash(seed="42")
@@ -60,6 +72,14 @@ class TestInitExceptions:
     def test_seed_float_raises_invalid_config(self):
         with pytest.raises(InvalidConfigError, match="seed must be an integer"):
             MinHash(seed=42.5)
+
+    def test_seed_true_raises_invalid_config(self):
+        with pytest.raises(InvalidConfigError, match="seed must be an integer"):
+            MinHash(seed=True)
+
+    def test_seed_false_raises_invalid_config(self):
+        with pytest.raises(InvalidConfigError, match="seed must be an integer"):
+            MinHash(seed=False)
 
     def test_invalid_config_is_minhash_error(self):
         try:

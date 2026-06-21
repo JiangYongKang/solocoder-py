@@ -1,0 +1,5 @@
+你实现的配置解析模块存在一处行为不一致需要修复：
+
+_parse_inline_table 方法在解析行内表遇到重复键时，直接抛出 DuplicateKeyError 异常，没有像 _parse_key_value 方法那样根据 strict 标志区分 TOML 严格模式和 INI 覆盖语义。在 INI 宽松模式下，行内表的重复键应覆盖旧值而非终止解析。
+
+修复后需要运行 `poetry run pytest tests/config_parser/` 确保所有测试通过。

@@ -59,14 +59,15 @@ class UrlComponents:
     def authority(self) -> Optional[str]:
         if not self.has_authority:
             return None
-        result = ""
+        parts: list[str] = []
         if self.userinfo is not None:
-            result += f"{self.userinfo}@"
+            parts.append(f"{self.userinfo}@")
         if self.host is not None:
-            result += self.host
+            parts.append(self.host)
         if self.port is not None:
-            result += f":{self.port}"
-        return result
+            parts.append(f":{self.port}")
+        result = "".join(parts)
+        return result if result else None
 
     def rebuild(self) -> str:
         result = f"{self.scheme}:"

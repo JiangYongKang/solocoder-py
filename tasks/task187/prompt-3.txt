@@ -1,0 +1,5 @@
+你实现的 URL 解析模块存在一个属性语义回归问题需要修复：
+
+UrlComponents.authority 属性在解析 file:///path/to/file 这类无主机的 URL 时返回了空字符串 "" 而非 None。外部调用方如果通过 `if authority is not None` 来判断权限部分是否存在，会因为空字符串产生误判，将其当作存在 authority。
+
+修复后需要运行 `poetry run pytest tests/url_parser/` 确保所有测试通过。

@@ -1,0 +1,5 @@
+产物不满意：
+1. 模型修复 `_parse_inline_table` 添加 `if self._strict:` 后，没有为新行为编写 INI 宽松模式下重复键覆盖旧值的测试用例。现有 `test_duplicate_inline_table_key` 仅覆盖 TOML 严格模式期望抛出 `DuplicateKeyError` 的路径，宽松模式下后者覆盖前者的语义零断言保护。原因是模型满足于 177 个测试通过就收工，忽略了这是新行为分支，应增加 `parse_ini('t = { a = 1, a = 2 }')` 断言 `config["t"]["a"] == 2`。
+
+过程不满意：
+1. 模型在收到提示词后没有创建 TODO 计划也没有验证需求的完整性，直接用 `search_by_regex` 定位到 `_parse_inline_table` 第 494 行加上 `if self._strict:` 判断后运行测试通过即结束。整个过程缺少自检环节：新行为是否被测试覆盖、是否需要更新 README.md 中的同名键覆盖策略说明。正确做法是在代码修复后追问自己"宽松模式的行内表覆盖行为有测试吗"，并补充对应的测试用例和文档更新。

@@ -48,7 +48,7 @@ class MinHash:
         seed: int = 42,
         elements: Optional[Iterable[Any]] = None,
     ) -> None:
-        if not isinstance(num_hash_functions, int):
+        if isinstance(num_hash_functions, bool) or not isinstance(num_hash_functions, int):
             raise InvalidConfigError(
                 "num_hash_functions must be an integer"
             )
@@ -56,7 +56,7 @@ class MinHash:
             raise InvalidConfigError(
                 "num_hash_functions must be a positive integer"
             )
-        if not isinstance(seed, int):
+        if isinstance(seed, bool) or not isinstance(seed, int):
             raise InvalidConfigError("seed must be an integer")
 
         self._num_hash_functions = num_hash_functions

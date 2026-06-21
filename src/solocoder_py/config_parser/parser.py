@@ -492,7 +492,8 @@ class ConfigParser:
             val_text = pair[eq_idx + 1 :].strip()
             key = self._parse_key(key, line_num)
             if key in table:
-                raise DuplicateKeyError(line_num, key)
+                if self._strict:
+                    raise DuplicateKeyError(line_num, key)
             table[key] = self._parse_value(val_text, line_num)
 
         return table

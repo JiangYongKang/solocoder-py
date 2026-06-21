@@ -133,6 +133,15 @@ class EWMA:
             return None
         return self._s
 
+    def _compute_corrected(self) -> float:
+        correction = 1.0 - self._correction_factor_power
+        if correction == 0.0:
+            return self._s
+        if self._initial_value is None:
+            return self._s / correction
+        data_weighted_sum = self._s - self._correction_factor_power * self._initial_value
+        return data_weighted_sum / correction
+
     @property
     def value(self) -> Optional[float]:
         if self._contaminated:
@@ -141,10 +150,7 @@ class EWMA:
             return None
 
         if self._initial_value is None and self.in_warmup:
-            correction = 1.0 - self._correction_factor_power
-            if correction == 0.0:
-                return self._s
-            return self._s / correction
+            return self._compute_corrected()
 
         return self._s
 
@@ -155,11 +161,8 @@ class EWMA:
         if self._count == 0 and self._initial_value is None:
             return None
 
-        if self._initial_value is None and self._warmup_period > 0:
-            correction = 1.0 - self._correction_factor_power
-            if correction == 0.0:
-                return self._s
-            return self._s / correction
+        if self._warmup_period > 0:
+            return self._compute_corrected()
 
         return self._s
 
