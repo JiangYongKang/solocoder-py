@@ -56,7 +56,7 @@ class RingBuffer(Generic[T]):
         *,
         blocking: bool = False,
         timeout: Optional[float] = None,
-        raise_timeout: bool = False,
+        raise_timeout: bool = True,
     ) -> int:
         return self.write_batch(
             [item],
@@ -71,7 +71,7 @@ class RingBuffer(Generic[T]):
         *,
         blocking: bool = False,
         timeout: Optional[float] = None,
-        raise_timeout: bool = False,
+        raise_timeout: bool = True,
     ) -> int:
         if not items:
             return 0
@@ -82,6 +82,10 @@ class RingBuffer(Generic[T]):
                     available = self._capacity - self._count
                     n_write = min(len(items), available)
                     if n_write == 0:
+                        if raise_timeout:
+                            raise TimeoutError(
+                                "Write failed: buffer is full"
+                            )
                         return 0
                     self._write_items(items[:n_write])
                     return n_write
@@ -160,7 +164,7 @@ class RingBuffer(Generic[T]):
         *,
         blocking: bool = False,
         timeout: Optional[float] = None,
-        raise_timeout: bool = False,
+        raise_timeout: bool = True,
     ) -> Optional[T]:
         result = self.read_batch(
             1,
@@ -178,7 +182,7 @@ class RingBuffer(Generic[T]):
         *,
         blocking: bool = False,
         timeout: Optional[float] = None,
-        raise_timeout: bool = False,
+        raise_timeout: bool = True,
     ) -> List[T]:
         if max_count <= 0:
             return []
@@ -188,6 +192,10 @@ class RingBuffer(Generic[T]):
                 available = self._count
                 n_read = min(max_count, available)
                 if n_read == 0:
+                    if raise_timeout:
+                        raise TimeoutError(
+                            "Read failed: buffer is empty"
+                        )
                     return []
                 return self._read_items(n_read)
             else:

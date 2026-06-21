@@ -1,0 +1,5 @@
+在设备证书 domain 中存在一些需要修复的问题：
+
+1. 在提交 CSR 时，对已吊销设备的异常处理做了修正，新增了 DeviceRevokedError 异常。但此前用于标识"设备未注册"的 DeviceNotRegisteredError 异常类现在已经没有任何方法抛出它了，它仍然定义在 exceptions.py 中，并在 __init__.py 中公开导出，测试文件中也有对它的引用。这会让维护者误以为某个业务场景会触发这个异常。
+
+2. 删掉 DeviceNotRegisteredError 的定义、导出、以及测试中对它的所有引用。

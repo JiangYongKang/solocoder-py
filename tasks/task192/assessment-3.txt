@@ -1,0 +1,5 @@
+产物不满意：
+1. 本次修改为纯清理任务，模型正确删除了 DeviceNotRegisteredError 在四个文件中的所有引用：exceptions.py 的类定义、__init__.py 的导入和 __all__ 导出、test_device_cert.py 的 import 和 issubclass 断言、以及 README.md 异常表格行。全量 grep 确认 src/solocoder_py/device_cert/ 和 tests/device_cert/ 目录下无任何残留引用，50 个测试全部通过。产物层面无实质缺陷，代码变更准确且完整。
+
+过程不满意：
+1. 模型在收到提示词后的第一步操作依然是使用 todo_write 创建了 5 项子任务计划，然后才逐一读取 exceptions.py、__init__.py 等源文件。这种"先规划后分析"的顺序颠倒问题在 assessment-1 和 assessment-2 中已被连续两次指出，session-3 中模型仍未纠正这一行为习惯。虽然本轮任务极其简单，但作为第三个迭代回合，模型应当从历史反馈中学习到正确流程而非沿用同一套惯性操作。正确做法是先阅读所有需要修改的文件理解代码现状，确认引用分布后再制定清理计划。

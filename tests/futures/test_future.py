@@ -180,20 +180,13 @@ class TestCatch:
         f._reject(ValueError("oops"))
         assert result.value == "fallback"
 
-    def test_catch_returns_future_as_value(self):
-        f = Future.reject(RuntimeError("first"))
-        inner = Future.resolve("recovered")
-        result = f.catch(lambda e: inner)
-        assert result.value is inner
-        assert isinstance(result.value, Future)
-
-    def test_catch_compose_flattens_returned_future(self):
+    def test_catch_returns_future_can_continue_chain(self):
         f = Future.reject(RuntimeError("first"))
         result = (
             f.catch(lambda e: Future.resolve("recovered"))
-             .compose(lambda x: x)
+             .then(lambda x: x + "!")
         )
-        assert result.value == "recovered"
+        assert result.value == "recovered!"
 
 
 class TestExceptionPropagation:

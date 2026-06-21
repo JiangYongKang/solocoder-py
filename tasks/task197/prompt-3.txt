@@ -1,0 +1,9 @@
+Promise/Future 组合子库存在以下问题需要修复：
+
+1. catch 方法在之前的修改中行为被意外改变了：原本 catch 回调返回 Future 时会自动展平为内部值，现在返回的是 Future 对象本身。提示词原本只要求 then 不展平、compose 展平，catch 的语义不应该被改变。
+
+2. README.md 中 then 方法的行为描述段落仍然写着"回调返回 Future：自动展平嵌套的 Future"，与代码实际行为矛盾。
+
+3. README.md 中 then/compose/catch 三列对比表中，then 的"回调返回"列没有注明 Future 不会被展平，用户无法从表格快速区分 then 和 compose 的核心行为差异。
+
+4. 完成后运行 poetry run pytest tests/futures/ -v 确保所有测试通过。

@@ -136,11 +136,13 @@ capacity = 5, 已写入 [1, 2, 3, 4, 5] (满)
 
 ### 超时异常抛出
 
-通过 `raise_timeout` 参数控制超时时的行为：
-- `raise_timeout=False`（默认）：超时后返回空结果或已完成的部分，不抛出异常
-- `raise_timeout=True`：超时时抛出 `TimeoutError` 异常
-  - **读操作**：空缓冲区超时直接抛出
-  - **写操作**：仅在未写入任何数据时抛出；已写入部分数据时返回已写入数量，不抛出
+通过 `raise_timeout` 参数控制操作无法完成时的行为（适用于阻塞超时和非阻塞满/空场景）：
+- `raise_timeout=True`（默认）：操作无法完成时抛出 `TimeoutError` 异常
+  - **非阻塞读空**：立即抛出
+  - **非阻塞写满（NO_OVERWRITE）**：立即抛出
+  - **阻塞读超时**：等待超时后抛出
+  - **阻塞写超时**：仅在未写入任何数据时抛出；已写入部分数据时返回已写入数量，不抛出
+- `raise_timeout=False`：操作无法完成时返回空结果或已完成的部分，不抛出异常
 
 **示例**：
 ```python
@@ -149,9 +151,19 @@ from solocoder_py.ringbuffer import RingBuffer, TimeoutError
 rb = RingBuffer[int](capacity=5)
 
 try:
-    data = rb.read(blocking=True, timeout=0.1, raise_timeout=True)
+    data = rb.read()  # 非阻塞读空，默认抛出异常
+except TimeoutError as e:
+    print(f"读取失败: {e}")  # 读取失败: Read failed: buffer is empty
+
+try:
+    data = rb.read(blocking=True, timeout=0.1)  # 阻塞超时，默认抛出异常
 except TimeoutError as e:
     print(f"读取超时: {e}")  # 读取超时: Read timed out after 0.1 seconds
+
+# 传入 raise_timeout=False 可以禁用异常，使用返回值判断
+data = rb.read(raise_timeout=False)
+if data is None:
+    print("缓冲区为空")
 ```
 
 ## 批量操作的优势

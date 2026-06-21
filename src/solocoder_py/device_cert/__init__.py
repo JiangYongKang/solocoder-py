@@ -3,7 +3,6 @@ from .exceptions import (
     InvalidPSKError,
     DuplicateDeviceError,
     DeviceNotFoundError,
-    DeviceNotRegisteredError,
     DeviceRevokedError,
     CertificateNotFoundError,
 )
@@ -28,7 +27,6 @@ __all__ = [
     "InvalidPSKError",
     "DuplicateDeviceError",
     "DeviceNotFoundError",
-    "DeviceNotRegisteredError",
     "DeviceRevokedError",
     "CertificateNotFoundError",
     "DeviceStatus",

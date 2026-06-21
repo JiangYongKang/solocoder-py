@@ -18,6 +18,7 @@ class _Subscription:
         self._weak_ref: Optional[weakref.ReferenceType] = None
         self._strong_ref: Optional[EventCallback] = None
         self._once_fired: bool = False
+        self._once_lock = threading.Lock()
 
         if self._is_weak:
             self._weak_ref = weakref.WeakMethod(callback)
@@ -39,10 +40,13 @@ class _Subscription:
         return cb == callback
 
     def claim_once(self) -> bool:
-        if self.once and not self._once_fired:
+        if not self.once:
+            return False
+        with self._once_lock:
+            if self._once_fired:
+                return False
             self._once_fired = True
             return True
-        return False
 
 
 class EventBus:

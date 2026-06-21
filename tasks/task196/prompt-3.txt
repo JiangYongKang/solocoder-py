@@ -1,0 +1,7 @@
+环形缓冲区模块的 TimeoutError 处理仍有问题需要修复：
+
+1. 四个公共方法（write、read、write_batch、read_batch）增加了 raise_timeout 参数，但其默认值为 False。这意味着默认行为下所有超时路径仍然返回 0 或空结果，TimeoutError 依然不被抛出。调用方用默认参数执行阻塞读写遇到超时，仍然只能检查返回值来判定，无法用异常机制统一处理超时。
+
+2. write_batch 和 read_batch 方法在非阻塞路径（blocking=False）完全忽略了 raise_timeout 参数。当调用方传 blocking=False 且 raise_timeout=True 时，预期超时会收到异常，但实际上缓冲区满/空时静默返回 0 或空列表，导致调用方误判操作结果。
+
+3. 完成后运行 poetry run pytest tests/ -k ringbuffer -v 确保所有测试通过。

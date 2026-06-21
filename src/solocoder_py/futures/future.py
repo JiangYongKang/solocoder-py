@@ -199,7 +199,7 @@ class Future:
 
     def catch(self, on_rejected: _OnRejected) -> "Future":
         next_future = Future()
-        link = _ChainLink(future=next_future, on_fulfilled=None, on_rejected=on_rejected)
+        link = _ChainLink(future=next_future, on_fulfilled=None, on_rejected=on_rejected, flatten=True)
         self._add_chain_link(link)
         return next_future
 

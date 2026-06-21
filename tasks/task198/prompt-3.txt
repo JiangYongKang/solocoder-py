@@ -1,0 +1,7 @@
+事件总线模块的 once 回调并发安全存在缺陷需要修复：
+
+1. 为 once 回调新增的 claim_once 方法和 _once_fired 标志本身没有内部线程安全机制，只是一个简单的布尔检查后置位的操作，完全依赖 publish 方法的调用方持有 self._lock 才能保证原子性。如果将来 bus.py 中有其他方法或路径调用 claim_once 而未事先获取该锁，两个线程可能同时读到 _once_fired 为 False 从而让 once 回调被并发触发两次。
+
+2. 目前 tests/eventbus/ 下的全部测试用例都是单线程执行，没有任何测试用例用多线程验证 once 回调在并发场景下确实只触发一次。
+
+3. 完成后运行 poetry run pytest tests/eventbus/ -v 确保所有测试通过。

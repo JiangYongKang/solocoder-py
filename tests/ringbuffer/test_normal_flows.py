@@ -155,7 +155,7 @@ class TestNoOverwriteModeFull:
         rb_no_overwrite.write_batch([1, 2, 3, 4, 5])
         assert rb_no_overwrite.available_to_write() == 0
 
-        result = rb_no_overwrite.write(6)
+        result = rb_no_overwrite.write(6, raise_timeout=False)
         assert result == 0
         assert rb_no_overwrite.available_to_read() == 5
 
@@ -164,12 +164,12 @@ class TestNoOverwriteModeFull:
 
     def test_write_batch_returns_zero_when_full(self, rb_no_overwrite: RingBuffer[int]):
         rb_no_overwrite.write_batch([1, 2, 3, 4, 5])
-        result = rb_no_overwrite.write_batch([6, 7, 8])
+        result = rb_no_overwrite.write_batch([6, 7, 8], raise_timeout=False)
         assert result == 0
 
     def test_write_works_after_read_frees_space(self, rb_no_overwrite: RingBuffer[int]):
         rb_no_overwrite.write_batch([1, 2, 3, 4, 5])
-        assert rb_no_overwrite.write(6) == 0
+        assert rb_no_overwrite.write(6, raise_timeout=False) == 0
 
         assert rb_no_overwrite.read() == 1
         assert rb_no_overwrite.write(6) == 1
@@ -267,7 +267,7 @@ class TestBlockingOperations:
 
         def reader(idx):
             while True:
-                data = rb.read(blocking=True, timeout=0.2)
+                data = rb.read(blocking=True, timeout=0.2, raise_timeout=False)
                 if data is None:
                     break
                 results[idx].append(data)

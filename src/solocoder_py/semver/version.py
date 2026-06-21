@@ -14,6 +14,7 @@ _SEMVER_PATTERN = re.compile(
 )
 
 _PRERELEASE_ID_PATTERN = re.compile(r"^(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)$")
+_BUILD_METADATA_PATTERN = re.compile(r"^[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*$")
 
 
 def _validate_prerelease(prerelease: str) -> None:
@@ -29,6 +30,18 @@ def _validate_prerelease(prerelease: str) -> None:
                 f"Invalid prerelease identifier '{part}' in '{prerelease}' "
                 "(numeric identifiers must not have leading zeros)"
             )
+
+
+def _validate_build_metadata(build_metadata: str) -> None:
+    if not isinstance(build_metadata, str):
+        raise InvalidVersionError("Build metadata must be a string")
+    if not build_metadata:
+        raise InvalidVersionError("Build metadata must not be empty")
+    if not _BUILD_METADATA_PATTERN.match(build_metadata):
+        raise InvalidVersionError(
+            f"Invalid build metadata '{build_metadata}' "
+            "(only alphanumeric characters, hyphens and dots are allowed)"
+        )
 
 
 @total_ordering
@@ -56,6 +69,8 @@ class SemverVersion:
             raise InvalidVersionError("Version numbers must be non-negative")
         if prerelease is not None:
             _validate_prerelease(prerelease)
+        if build_metadata is not None:
+            _validate_build_metadata(build_metadata)
         self.major = major
         self.minor = minor
         self.patch = patch

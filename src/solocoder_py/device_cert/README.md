@@ -31,7 +31,6 @@
 | `InvalidPSKError` | 预共享密钥校验失败 |
 | `DuplicateDeviceError` | 设备标识重复注册 |
 | `DeviceNotFoundError` | 设备 ID 不存在（从未注册过） |
-| `DeviceNotRegisteredError` | 预留异常类，语义同 DeviceNotFoundError |
 | `DeviceRevokedError` | 设备已注册但当前状态为已吊销，拒绝提交 CSR |
 | `CertificateNotFoundError` | 证书序列号不存在 |
 

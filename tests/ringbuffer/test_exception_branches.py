@@ -31,25 +31,25 @@ class TestInvalidCapacity:
 class TestReadEmptyBufferNonBlocking:
     def test_read_empty_returns_none(self, rb_no_overwrite: RingBuffer[int]):
         assert rb_no_overwrite.available_to_read() == 0
-        result = rb_no_overwrite.read()
+        result = rb_no_overwrite.read(raise_timeout=False)
         assert result is None
 
     def test_read_batch_empty_returns_empty_list(self, rb_no_overwrite: RingBuffer[int]):
         assert rb_no_overwrite.available_to_read() == 0
-        result = rb_no_overwrite.read_batch(5)
+        result = rb_no_overwrite.read_batch(5, raise_timeout=False)
         assert result == []
         assert isinstance(result, list)
 
     def test_read_empty_after_consuming_all(self, rb_no_overwrite: RingBuffer[int]):
         rb_no_overwrite.write(1)
         assert rb_no_overwrite.read() == 1
-        assert rb_no_overwrite.read() is None
-        assert rb_no_overwrite.read_batch(1) == []
+        assert rb_no_overwrite.read(raise_timeout=False) is None
+        assert rb_no_overwrite.read_batch(1, raise_timeout=False) == []
 
     def test_multiple_reads_on_empty(self, rb_no_overwrite: RingBuffer[int]):
         for _ in range(10):
-            assert rb_no_overwrite.read() is None
-            assert rb_no_overwrite.read_batch(1) == []
+            assert rb_no_overwrite.read(raise_timeout=False) is None
+            assert rb_no_overwrite.read_batch(1, raise_timeout=False) == []
 
 
 class TestWriteFullBufferNoOverwrite:
@@ -57,13 +57,13 @@ class TestWriteFullBufferNoOverwrite:
         rb_no_overwrite.write_batch([1, 2, 3, 4, 5])
         assert rb_no_overwrite.available_to_write() == 0
 
-        result = rb_no_overwrite.write(6)
+        result = rb_no_overwrite.write(6, raise_timeout=False)
         assert result == 0
         assert rb_no_overwrite.available_to_read() == 5
 
     def test_write_batch_full_returns_zero(self, rb_no_overwrite: RingBuffer[int]):
         rb_no_overwrite.write_batch([1, 2, 3, 4, 5])
-        result = rb_no_overwrite.write_batch([6, 7, 8])
+        result = rb_no_overwrite.write_batch([6, 7, 8], raise_timeout=False)
         assert result == 0
 
         data = rb_no_overwrite.read_batch(5)
@@ -83,7 +83,7 @@ class TestWriteFullBufferNoOverwrite:
     def test_write_zero_items_on_full(self, rb_no_overwrite: RingBuffer[int]):
         rb_no_overwrite.write_batch([1, 2, 3, 4, 5])
         for _ in range(10):
-            assert rb_no_overwrite.write(99) == 0
+            assert rb_no_overwrite.write(99, raise_timeout=False) == 0
 
 
 class TestOverwriteReadPointerAdvance:
@@ -249,7 +249,7 @@ class TestClearWithBlockedOperations:
         write_result = []
 
         def writer():
-            n = rb.write(3, blocking=True, timeout=1.0)
+            n = rb.write(3, blocking=True, timeout=1.0, raise_timeout=False)
             write_result.append(n)
 
         t = threading.Thread(target=writer)
@@ -266,23 +266,23 @@ class TestClearWithBlockedOperations:
 
 
 class TestTimeoutErrorRaise:
-    def test_blocking_read_timeout_raises(self, rb_no_overwrite: RingBuffer[int]):
+    def test_blocking_read_timeout_raises_default(self, rb_no_overwrite: RingBuffer[int]):
         import time
 
         start = time.monotonic()
         with pytest.raises(TimeoutError) as excinfo:
-            rb_no_overwrite.read(blocking=True, timeout=0.1, raise_timeout=True)
+            rb_no_overwrite.read(blocking=True, timeout=0.1)
         elapsed = time.monotonic() - start
 
         assert "timed out" in str(excinfo.value)
         assert 0.08 <= elapsed <= 0.15
 
-    def test_blocking_read_batch_timeout_raises(self, rb_no_overwrite: RingBuffer[int]):
+    def test_blocking_read_batch_timeout_raises_default(self, rb_no_overwrite: RingBuffer[int]):
         import time
 
         start = time.monotonic()
         with pytest.raises(TimeoutError) as excinfo:
-            rb_no_overwrite.read_batch(3, blocking=True, timeout=0.1, raise_timeout=True)
+            rb_no_overwrite.read_batch(3, blocking=True, timeout=0.1)
         elapsed = time.monotonic() - start
 
         assert "timed out" in str(excinfo.value)
@@ -292,7 +292,7 @@ class TestTimeoutErrorRaise:
         result = rb_no_overwrite.read(blocking=True, timeout=0.05, raise_timeout=False)
         assert result is None
 
-    def test_blocking_write_timeout_raises(self):
+    def test_blocking_write_timeout_raises_default(self):
         import time
 
         rb = RingBuffer[int](capacity=2, write_mode=WriteMode.NO_OVERWRITE)
@@ -300,13 +300,13 @@ class TestTimeoutErrorRaise:
 
         start = time.monotonic()
         with pytest.raises(TimeoutError) as excinfo:
-            rb.write(3, blocking=True, timeout=0.1, raise_timeout=True)
+            rb.write(3, blocking=True, timeout=0.1)
         elapsed = time.monotonic() - start
 
         assert "timed out" in str(excinfo.value)
         assert 0.08 <= elapsed <= 0.15
 
-    def test_blocking_write_batch_timeout_raises(self):
+    def test_blocking_write_batch_timeout_raises_default(self):
         import time
 
         rb = RingBuffer[int](capacity=2, write_mode=WriteMode.NO_OVERWRITE)
@@ -314,11 +314,47 @@ class TestTimeoutErrorRaise:
 
         start = time.monotonic()
         with pytest.raises(TimeoutError) as excinfo:
-            rb.write_batch([3, 4], blocking=True, timeout=0.1, raise_timeout=True)
+            rb.write_batch([3, 4], blocking=True, timeout=0.1)
         elapsed = time.monotonic() - start
 
         assert "timed out" in str(excinfo.value)
         assert 0.08 <= elapsed <= 0.15
+
+    def test_nonblocking_read_empty_raises_default(self, rb_no_overwrite: RingBuffer[int]):
+        with pytest.raises(TimeoutError) as excinfo:
+            rb_no_overwrite.read()
+        assert "empty" in str(excinfo.value)
+
+    def test_nonblocking_read_batch_empty_raises_default(self, rb_no_overwrite: RingBuffer[int]):
+        with pytest.raises(TimeoutError) as excinfo:
+            rb_no_overwrite.read_batch(3)
+        assert "empty" in str(excinfo.value)
+
+    def test_nonblocking_write_full_raises_default(self):
+        rb = RingBuffer[int](capacity=2, write_mode=WriteMode.NO_OVERWRITE)
+        rb.write_batch([1, 2])
+
+        with pytest.raises(TimeoutError) as excinfo:
+            rb.write(3)
+        assert "full" in str(excinfo.value)
+
+    def test_nonblocking_write_batch_full_raises_default(self):
+        rb = RingBuffer[int](capacity=2, write_mode=WriteMode.NO_OVERWRITE)
+        rb.write_batch([1, 2])
+
+        with pytest.raises(TimeoutError) as excinfo:
+            rb.write_batch([3, 4])
+        assert "full" in str(excinfo.value)
+
+    def test_nonblocking_read_empty_no_raise(self, rb_no_overwrite: RingBuffer[int]):
+        assert rb_no_overwrite.read(raise_timeout=False) is None
+        assert rb_no_overwrite.read_batch(1, raise_timeout=False) == []
+
+    def test_nonblocking_write_full_no_raise(self):
+        rb = RingBuffer[int](capacity=2, write_mode=WriteMode.NO_OVERWRITE)
+        rb.write_batch([1, 2])
+        assert rb.write(3, raise_timeout=False) == 0
+        assert rb.write_batch([3, 4], raise_timeout=False) == 0
 
     def test_blocking_write_partial_success_no_raise(self):
         import threading
@@ -332,7 +368,7 @@ class TestTimeoutErrorRaise:
 
         def writer():
             try:
-                n = rb.write_batch([4, 5, 6], blocking=True, timeout=0.15, raise_timeout=True)
+                n = rb.write_batch([4, 5, 6], blocking=True, timeout=0.15)
                 result.append(n)
             except TimeoutError as e:
                 exc_raised.append(e)
@@ -353,11 +389,11 @@ class TestTimeoutErrorRaise:
 
     def test_read_timeout_raises_isinstance_check(self, rb_no_overwrite: RingBuffer[int]):
         with pytest.raises(RingBufferError):
-            rb_no_overwrite.read(blocking=True, timeout=0.05, raise_timeout=True)
+            rb_no_overwrite.read(blocking=True, timeout=0.05)
 
     def test_write_timeout_raises_isinstance_check(self):
         rb = RingBuffer[int](capacity=1, write_mode=WriteMode.NO_OVERWRITE)
         rb.write(1)
         with pytest.raises(RingBufferError):
-            rb.write(2, blocking=True, timeout=0.05, raise_timeout=True)
+            rb.write(2, blocking=True, timeout=0.05)
 

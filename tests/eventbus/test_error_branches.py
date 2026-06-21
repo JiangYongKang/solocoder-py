@@ -331,3 +331,136 @@ class TestLambdasAndClosures:
 
         assert "a:x" in results
         assert "b:x" in results
+
+
+class TestOnceConcurrencySafety:
+    def test_concurrent_publish_once_callback_fires_exactly_once(
+        self, bus: EventBus
+    ):
+        import threading
+
+        fire_count = 0
+        lock = threading.Lock()
+
+        def on_once(data):
+            nonlocal fire_count
+            with lock:
+                fire_count += 1
+
+        bus.once("evt", on_once)
+
+        num_threads = 20
+        barrier = threading.Barrier(num_threads)
+
+        def publish_worker():
+            barrier.wait()
+            bus.publish("evt", "data")
+
+        threads = [
+            threading.Thread(target=publish_worker) for _ in range(num_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert fire_count == 1
+
+    def test_concurrent_publish_once_subscription_removed(self, bus: EventBus):
+        import threading
+
+        bus.once("evt", lambda d: None)
+
+        num_threads = 10
+        barrier = threading.Barrier(num_threads)
+
+        def publish_worker():
+            barrier.wait()
+            bus.publish("evt", "data")
+
+        threads = [
+            threading.Thread(target=publish_worker) for _ in range(num_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert bus.subscriber_count("evt") == 0
+
+    def test_concurrent_publish_mixed_once_and_regular(
+        self, bus: EventBus
+    ):
+        import threading
+
+        once_count = 0
+        regular_count = 0
+        lock = threading.Lock()
+
+        def on_once(data):
+            nonlocal once_count
+            with lock:
+                once_count += 1
+
+        def on_regular(data):
+            nonlocal regular_count
+            with lock:
+                regular_count += 1
+
+        bus.once("evt", on_once)
+        bus.subscribe("evt", on_regular)
+
+        num_threads = 20
+        barrier = threading.Barrier(num_threads)
+
+        def publish_worker():
+            barrier.wait()
+            bus.publish("evt", "data")
+
+        threads = [
+            threading.Thread(target=publish_worker) for _ in range(num_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert once_count == 1
+        assert regular_count == num_threads
+
+    def test_concurrent_publish_multiple_once_subscriptions(
+        self, bus: EventBus
+    ):
+        import threading
+
+        counts = {"a": 0, "b": 0, "c": 0}
+        lock = threading.Lock()
+
+        def make_handler(key):
+            def handler(data):
+                with lock:
+                    counts[key] += 1
+            return handler
+
+        bus.once("evt", make_handler("a"))
+        bus.once("evt", make_handler("b"))
+        bus.once("evt", make_handler("c"))
+
+        num_threads = 20
+        barrier = threading.Barrier(num_threads)
+
+        def publish_worker():
+            barrier.wait()
+            bus.publish("evt", "data")
+
+        threads = [
+            threading.Thread(target=publish_worker) for _ in range(num_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        assert counts["a"] == 1
+        assert counts["b"] == 1
+        assert counts["c"] == 1

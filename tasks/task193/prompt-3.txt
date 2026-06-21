@@ -1,0 +1,5 @@
+Semver 版本解析比较器模块存在 API 一致性问题需要修复：
+
+1. 构造函数 __init__ 对 prerelease 参数增加了格式校验，确保与 parse 路径行为一致。但 build_metadata 参数存在同样的校验缺口：用户调用 SemverVersion(1, 0, 0, build_metadata="spaces in build") 时构造函数接受包含空格的非法字符并成功创建对象，而 parse("1.0.0+spaces in build") 会因正则不匹配空格而抛出 InvalidVersionError。两条入口对同一非法输入行为不一致，而且该对象经 __repr__ 序列化后无法被 parse 反解析。
+
+2. 完成后运行 poetry run pytest tests/semver/ -v 确保所有测试通过。

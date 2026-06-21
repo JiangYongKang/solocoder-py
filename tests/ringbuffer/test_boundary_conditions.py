@@ -25,7 +25,7 @@ class TestCapacityOne:
         rb = RingBuffer[int](capacity=1, write_mode=WriteMode.NO_OVERWRITE)
 
         assert rb.write(1) == 1
-        assert rb.write(2) == 0
+        assert rb.write(2, raise_timeout=False) == 0
         assert rb.read() == 1
 
     def test_capacity_one_overwrite(self):
@@ -41,7 +41,7 @@ class TestCapacityOne:
     def test_capacity_one_batch_operations(self):
         rb = RingBuffer[int](capacity=1)
 
-        assert rb.write_batch([1, 2, 3]) == 1
+        assert rb.write_batch([1, 2, 3], raise_timeout=False) == 1
         assert rb.read_batch(5) == [1]
 
         assert rb.write_batch([4]) == 1
@@ -105,7 +105,7 @@ class TestBlockingTimeout:
         rb = RingBuffer[int](capacity=5)
 
         start = time.monotonic()
-        result = rb.read(blocking=True, timeout=0.1)
+        result = rb.read(blocking=True, timeout=0.1, raise_timeout=False)
         elapsed = time.monotonic() - start
 
         assert result is None
@@ -115,7 +115,7 @@ class TestBlockingTimeout:
         rb = RingBuffer[int](capacity=5)
 
         start = time.monotonic()
-        result = rb.read_batch(3, blocking=True, timeout=0.1)
+        result = rb.read_batch(3, blocking=True, timeout=0.1, raise_timeout=False)
         elapsed = time.monotonic() - start
 
         assert result == []
@@ -127,7 +127,7 @@ class TestBlockingTimeout:
         rb.write(2)
 
         start = time.monotonic()
-        result = rb.write(3, blocking=True, timeout=0.1)
+        result = rb.write(3, blocking=True, timeout=0.1, raise_timeout=False)
         elapsed = time.monotonic() - start
 
         assert result == 0
@@ -138,7 +138,7 @@ class TestBlockingTimeout:
         rb.write_batch([1, 2])
 
         start = time.monotonic()
-        result = rb.write_batch([3, 4], blocking=True, timeout=0.1)
+        result = rb.write_batch([3, 4], blocking=True, timeout=0.1, raise_timeout=False)
         elapsed = time.monotonic() - start
 
         assert result == 0
@@ -215,7 +215,7 @@ class TestClearOperation:
 
         assert rb_no_overwrite.available_to_read() == 0
         assert rb_no_overwrite.available_to_write() == 5
-        assert rb_no_overwrite.read() is None
+        assert rb_no_overwrite.read(raise_timeout=False) is None
 
     def test_clear_then_operations(self, rb_no_overwrite: RingBuffer[int]):
         rb_no_overwrite.write_batch([1, 2, 3])

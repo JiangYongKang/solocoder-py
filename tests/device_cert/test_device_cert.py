@@ -10,7 +10,6 @@ from solocoder_py.device_cert import (
     CertificateStatus,
     DeviceCertService,
     DeviceNotFoundError,
-    DeviceNotRegisteredError,
     DeviceRevokedError,
     DeviceRecord,
     DeviceStatus,
@@ -413,7 +412,6 @@ class TestExceptionHierarchy:
         assert issubclass(InvalidPSKError, DeviceCertError)
         assert issubclass(DuplicateDeviceError, DeviceCertError)
         assert issubclass(DeviceNotFoundError, DeviceCertError)
-        assert issubclass(DeviceNotRegisteredError, DeviceCertError)
         assert issubclass(DeviceRevokedError, DeviceCertError)
         assert issubclass(CertificateNotFoundError, DeviceCertError)
 

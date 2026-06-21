@@ -17,10 +17,6 @@ class DeviceNotFoundError(DeviceCertError):
     pass
 
 
-class DeviceNotRegisteredError(DeviceCertError):
-    pass
-
-
 class DeviceRevokedError(DeviceCertError):
     pass
 

@@ -206,3 +206,54 @@ class TestConstructorPrereleaseValidation:
             SemverVersion.parse("1.0.0-01")
         with pytest.raises(InvalidVersionError):
             SemverVersion(1, 0, 0, prerelease="01")
+
+
+class TestConstructorBuildMetadataValidation:
+    def test_spaces_in_build_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, build_metadata="spaces in build")
+
+    def test_empty_build_metadata_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, build_metadata="")
+
+    def test_special_chars_in_build_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, build_metadata="build!123")
+
+    def test_empty_build_identifier_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, build_metadata="build..1")
+
+    def test_valid_build_in_constructor(self):
+        v = SemverVersion(1, 0, 0, build_metadata="build.123")
+        assert v.build_metadata == "build.123"
+
+    def test_valid_build_with_leading_zeros_constructor(self):
+        v = SemverVersion(1, 0, 0, build_metadata="001")
+        assert v.build_metadata == "001"
+
+    def test_valid_build_with_hyphen_constructor(self):
+        v = SemverVersion(1, 0, 0, build_metadata="build-1")
+        assert v.build_metadata == "build-1"
+
+    def test_non_string_build_constructor(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, build_metadata=123)
+
+    def test_constructor_and_parse_build_consistent_valid(self):
+        v_constructor = SemverVersion(1, 0, 0, build_metadata="build.1")
+        v_parse = SemverVersion.parse("1.0.0+build.1")
+        assert v_constructor == v_parse
+
+    def test_constructor_and_parse_build_consistent_invalid(self):
+        with pytest.raises(InvalidVersionError):
+            SemverVersion.parse("1.0.0+spaces in build")
+        with pytest.raises(InvalidVersionError):
+            SemverVersion(1, 0, 0, build_metadata="spaces in build")
+
+    def test_constructor_repr_roundtrip_build_metadata(self):
+        v = SemverVersion(1, 0, 0, prerelease="alpha", build_metadata="build.1")
+        reparsed = eval(repr(v))
+        assert reparsed == v
+
