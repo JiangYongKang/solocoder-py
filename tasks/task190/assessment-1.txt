@@ -1,6 +1,9 @@
 产物不满意：
-1. pipeline.py 的 _process_batch 方法在调用 order_window.process 处理当前批次后立即执行 order_window.flush 清空了窗口内部状态。OrderWindow 维护的 _high_watermark 高水位线在每次 flush 后被重置为 None，导致跨批次的乱序容错判断失效。当第一批数据到达后将高水位线推至 200 秒，若管线不主动清空窗口，后续批次中时间戳为 110 秒的数据因落后 90 秒超出 30 秒容错范围应被标记为迟到；但当前代码 flush 后水位线清零，110 秒数据被当作正常数据接受。根因是模型设计了有状态的 OrderWindow 却在管线层每次清空，跨批次窗口连续性被破坏。应移除 _process_batch 中的 flush 调用，让窗口跨批次持续维护高水位线。
-2. OrderWindow 的 _handle_late 方法实现了双路径回调分发：先检查 self._on_late 再回退到 self._config.on_late_data。TelemetryPipeline 只通过构造函数将 on_late 传给 OrderWindow，从未设置 WindowConfig 中的 on_late_data 字段，回退路径成为永不可达的死代码。同时 Pipeline 构造函数还将 on_late 存储为 self._on_late 实例属性，但整个 Pipeline 类中无任何地方读取该属性，成为僵尸字段。根因是模型在 WindowConfig、OrderWindow、Pipeline 三个层次重复定义回调机制未做统一收敛。应删除 WindowConfig.on_late_data 和 Pipeline 未使用的 self._on_late，将 on_late 仅作为 OrderWindow 构造参数的唯一回调入口。
+1. _process_batch 在每批处理后立即 flush 清空窗口状态，高水位线重置导致跨批次乱序容错失效。第一批后水位推至 200 秒，第二批里 110 秒数据本应因落后 90 秒超容错被标迟到，但 flush 后水位清零被当正常数据接受。根因是设计了有状态窗口却在管线层每次清空破坏了跨批次连续性，应移除 flush 让窗口跨批次维持水位。
+
+2. _handle_late 做了双路径回调：先查 self._on_late 再回退 _config.on_late_data。Pipeline 只传了 on_late 从不设 on_late_data，回退路径永不可达。Pipeline 存的 self._on_late 也从没被读取是僵尸字段。根因是三层重复定义回调没收敛。应删除 on_late_data 和 self._on_late，只用 OrderWindow 构造参数作唯一回调入口。
+
 过程不满意：
 1. 模型在收到提示词后未经需求分析和代码探索，直接用 todo_write 创建了 12 项子任务计划。此后才开始查看 pyproject.toml 和已有的 microbatch、etl 等模块，后续又将计划收缩为 5 项。这是典型的"先计划后分析"反模式，过早制定计划导致最初任务划分粒度与实际模块边界不匹配，造成不必要的反复调整。正确做法是先理解提示词全部要求，阅读项目目录结构和构建配置，理清模块职责边界后再规划实施步骤。
+
 2. 模型在完成全部 7 个源文件和 4 个测试文件共 73 个测试用例的编写后才首次运行 pytest 验证。当 schema 嵌套字段映射测试失败时，模型未先查看具体断言信息与堆栈就直接将 schema.py 整个文件重写为 flatten/unflatten 方案。虽然重写后测试通过，但"遇错即重写"而非"先定位后修正"，如果原方案只有局部缺陷则全量重写可能引入新的隐蔽问题。正确做法是每完成一个模块就立即运行对应测试以失败驱动修复，修复时先读堆栈信息精确锁定出错代码行再最小范围修改。

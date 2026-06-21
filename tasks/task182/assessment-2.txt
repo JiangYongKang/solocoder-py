@@ -1,5 +1,5 @@
 产物不满意：
-1. 在构造 EWMA 时传入了非 None 的 initial_value 且 warmup_period 大于零的场景下，corrected_value 属性直接返回原始值 _s 与 raw_value 完全一致，不执行任何偏差校正计算。这导致当用户调用 corrected_value 期望获取偏差校正后的 EWMA 时实际得到的是未校正的原始值，该属性沦为 raw_value 的别名丧失了独立语义价值。根因是模型在 corrected_value 属性中也抄了 value 的 `if self._initial_value is None and` 条件来跳过校正，但 corrected_value 的 README 文档明确描述为"始终应用偏差校正后的值"，一个初始值的设置不应让校正能力全局失效。正确做法是在 corrected_value 中计算带初始值衰减修正的校正值，即 `(S_t - (1-α)^t * initial_value) / (1 - (1-α)^t)`，而非一刀切返回原始值。
+1. 设置了 initial_value 且 warmup_period>0 时，corrected_value 直接返回原始值 _s 不做任何校正，跟 raw_value 完全一样，这个属性失去了独立意义。根因是 corrected_value 照搬了 value 跳过校正的条件逻辑，但文档说它应该始终输出校正值。一个初始值的设置不该让校正能力全局失效，应该在 corrected_value 里做带初始值衰减修正的校正计算，而不是一刀切返回原始值。
 
 过程不满意：
 1. 模型在 session-cot-2 中接收提示词后第一步直接用 todo_write 创建了 4 项子任务计划，之后才开始阅读 ewma.py 现有代码。正确做法是先通过阅读目标文件理解当前实现与缺陷根因，再基于理解制定修复计划，而非在信息不完整的情况下先规划任务粒度再执行。

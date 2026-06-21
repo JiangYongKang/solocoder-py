@@ -1,9 +1,9 @@
 产物不满意：
-1. 模型将五个布尔值正向接受测试全部放置在 TestEWMAErrorBranches 类中，该类的语义是错误分支和异常场景测试，类名含 ErrorBranches 明确表示异常路径。布尔值 update(True) 和 update(False) 被接受并转为 1.0 和 0.0 参与 EWMA 计算属于类型转换的正向行为而非错误分支，放在错误测试类中造成测试结构语义混乱，后续维护者从类名无法判断布尔值接受是预期正常行为还是错误恢复场景。正确做法是将布尔值接受测试放入 TestEWMANormalFlows 或 TestEWMABoundaryConditions 类中，保持测试类语义与测试内容一致。
+1. 模型把五个布尔值正向接受测试全塞进了 TestEWMAErrorBranches 类，这个类名带 ErrorBranches 一看就是放异常测试的。布尔值被接受转成数字参与计算是正常行为不是错误，放这里会造成测试结构混乱，后续维护者看到类名分不清是正常还是异常路径。应该把这些测试放到 NormalFlows 或 BoundaryConditions 类里。
 
 过程不满意：
-1. 模型在收到 prompt-5 后执行的第一项操作是 todo_write 创建两项子任务计划，之后才通过 search_by_regex 搜索 test_invalid_input_type_raises 定位代码位置和 view_files 阅读 test_ewma.py 源码。这与 assessment-3 和 assessment-4 中已反复指出的先规划后分析模式完全重复——在未查看当前测试文件代码结构和已有布尔值测试状态之前就制定了执行计划，计划缺少对实际代码覆盖缺口的针对性。正确做法是先阅读 test_ewma.py 分析测试缺失的覆盖场景、理解现有测试类的职责划分，再基于实际分析制定子任务。
+1. 模型收到 prompt-5 后第一件事是创建两项计划，然后才搜索和阅读 test_ewma.py。这和前面几轮反复指出的问题一样——还没看测试文件当前结构和覆盖状态就定了计划。应该先读测试文件分析缺失的覆盖场景、理解现有测试类的职责，再基于分析制定子任务。
 
-2. 模型在 edit_file_search_replace 工具调用的思考描述中声称将 test_bool_input_true_rejected 改为 test_bool_true_input_accepted_as_one、将 test_bool_input_false_rejected 改为 test_bool_false_input_accepted_as_zero 等三个重命名修改操作，但 git diff 显示实际变更为纯新增 5 个测试方法，并无对已有测试做任何重命名或删除操作。这种描述与代码实际变更不符的情况表明模型的思考轨迹存在对自身操作的错误记录，标注人员无法从思考过程中准确还原模型的行为因果链，影响对模型真实推理过程的评估。正确做法是如实描述每一步文件操作是新增而非修改。
+2. 模型在思考描述中说把 test_bool_input_true_rejected 改名为 test_bool_true_input_accepted_as_one 等三个重命名操作，但 git diff 显示实际是纯新增 5 个测试方法，没做任何重命名或删除。思考轨迹对自身操作的记录是错的，标注人员无法从思考中准确还原行为因果链。应该如实描述每一步操作是新增还是修改。
 
 3. 模型全程未运行 git diff 验证变更范围，仅以 poetry run pytest tests/ewma/ 的 62 个测试全部通过作为变更正确性的唯一验证手段。测试通过只能证明功能无回归，无法确认变更范围是否仅限 test_ewma.py 且仅包含布尔值正向测试的新增——无法排除是否有其他文件或已有测试方法在编辑过程中被意外修改。正确做法是在测试通过后运行 git diff 逐一核对变更文件列表和具体改动行，确保变更范围与提示词要求的纯测试新增完全一致。
