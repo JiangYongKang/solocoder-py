@@ -1,0 +1,4 @@
+产物不满意：
+无。新增的 `test_compose_with_pending_future_reject_propagates` 和 `test_compose_with_pending_future_chain_continues` 两个测试用例正确覆盖了 `_propagate_fulfill` 方法中 `flatten=True` 分支下内部 Future 拒绝时的异常传播路径和通过 then 继续链式处理的路径。配合已有的 `test_compose_with_pending_future`，`_propagate_fulfill` 展平分支的 fulfill 传播和 reject 传播均已覆盖，展平逻辑覆盖矩阵完整。80 个测试全部通过。
+过程不满意：
+模型在收到提示词后直接打开 test_future.py 进行编辑，没有先读取 future.py 生产代码中已有的 `test_compose_with_pending_future` 测试用例来确认当前覆盖情况和识别真正的覆盖缺口。虽然最终的结果正确，但跳过现有代码阅读的步骤意味着模型是在不了解已有测试矩阵的前提下做增量补充，而非基于差距分析做精准补充，存在重复测试或遗漏边界路径的风险。

@@ -1,0 +1,4 @@
+产物不满意：
+无。`_Subscription.__init__` 改为条件式立即初始化 `self._once_lock = threading.Lock() if once else None`，从 `claim_once` 中移除了懒加载逻辑。由于 `__init__` 在 `subscribe` 或 `once` 方法中被调用，这些方法本身受 EventBus 的 `_lock` (RLock) 保护，锁的创建过程不存在并发竞态。普通订阅的 `_once_lock` 为 `None` 零开销，once 订阅的锁在构造时一次创建、原子初始化。`claim_once` 直接使用 `with self._once_lock` 无需额外判空，消除了上轮懒加载的 check-then-act 竞态窗口。68 个测试全部通过。
+过程不满意：
+无。模型在读取 bus.py 后形成了清晰的修复方案：既然 `__init__` 已经知道 `once` 参数，就不需要懒加载，直接在构造时按条件创建锁。整个过程简洁高效，从阅读到编辑到运行测试验证，没有试错、没有重复修改，一次到位。

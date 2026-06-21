@@ -162,22 +162,10 @@ class SemverVersion:
                 )
 
         if prerelease is not None:
-            try:
-                _validate_prerelease(prerelease)
-            except InvalidVersionError as e:
-                raise InvalidVersionError(
-                    f"Invalid semver string: '{original}' ({e})"
-                ) from e
+            _validate_prerelease(prerelease)
 
         if build_metadata is not None:
-            try:
-                _validate_build_metadata(build_metadata)
-            except InvalidVersionError as e:
-                raise InvalidVersionError(
-                    f"Invalid semver string: '{original}' ({e})"
-                ) from e
-
-        raise InvalidVersionError(f"Invalid semver string: '{original}'")
+            _validate_build_metadata(build_metadata)
 
     def without_build_metadata(self) -> str:
         parts = f"{self.major}.{self.minor}.{self.patch}"

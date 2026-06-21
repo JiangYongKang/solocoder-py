@@ -1,0 +1,5 @@
+事件总线模块的 once 回调资源优化实现存在并发安全问题需要修复：
+
+1. `_Subscription.claim_once` 方法中懒加载 `_once_lock` 的检查和创建不是原子操作。当多个线程同时触发一个 once 订阅时，可能同时看到 `_once_lock` 为 `None`，各自创建一个新的 Lock 对象，后创建的会覆盖先创建的，导致之前的 Lock 对象变成孤儿对象。
+
+2. 完成后运行 poetry run pytest tests/eventbus/ -v 确保所有测试通过。

@@ -1,0 +1,7 @@
+Semver 版本解析比较器模块还有两个遗留问题需要修复：
+
+1. parse 路径中 `_diagnose_invalid_version` 对构造函数的异常做了额外的外层包装（`Invalid semver string: '...' (...) `），导致 parse 路径和构造函数路径对同一非法输入抛出的异常外层格式不一致。调用方仍需适配两套格式才能统一捕获。
+
+2. `_diagnose_invalid_version` 方法末尾有一个在正常流程中永远不会被触发的兜底 raise 语句，属于不可达的冗余代码。
+
+3. 完成后运行 poetry run pytest tests/semver/ -v 确保所有测试通过。

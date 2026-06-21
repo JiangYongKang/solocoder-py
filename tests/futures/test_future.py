@@ -145,6 +145,28 @@ class TestCompose:
         inner._fulfill("end")
         assert result.value == "end"
 
+    def test_compose_with_pending_future_reject_propagates(self):
+        outer = Future()
+        inner = Future()
+
+        result = outer.compose(lambda x: inner)
+        outer._fulfill("start")
+        assert result.state == FutureState.PENDING
+
+        inner._reject(RuntimeError("inner fail"))
+        assert result.state == FutureState.REJECTED
+        assert isinstance(result.reason, RuntimeError)
+        assert str(result.reason) == "inner fail"
+
+    def test_compose_with_pending_future_chain_continues(self):
+        outer = Future()
+        inner = Future()
+
+        result = outer.compose(lambda x: inner).then(lambda v: v.upper())
+        outer._fulfill("start")
+        inner._fulfill("end")
+        assert result.value == "END"
+
     def test_compose_callback_must_return_future(self):
         f = Future.resolve(1)
         result = f.compose(lambda x: "not a future")

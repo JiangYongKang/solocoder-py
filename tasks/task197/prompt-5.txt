@@ -1,0 +1,5 @@
+Promise/Future 组合子库的 catch 测试覆盖仍存在缺口需要修复：
+
+1. 上轮新增的两个测试用例只覆盖了 catch 回调返回 pending Future 时 `_propagate_reject` 方法中 flatten 分支的异步等待和异常传播路径。但 `_propagate_fulfill` 方法中同样存在相同的展平逻辑，当 then 或 compose 回调返回一个未完成的 Future 时也应走等待路径，该路径目前缺少测试覆盖。
+
+2. 完成后运行 poetry run pytest tests/futures/ -v 确保所有测试通过。
