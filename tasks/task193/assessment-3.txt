@@ -1,6 +1,6 @@
 产物不满意：
-1. version.py 的 `_validate_build_metadata` 函数在校验失败时抛出的错误信息格式与 parse 路径不一致。当 build_metadata 含空格时，构造函数抛出 `Invalid build metadata 'spaces in build' (only alphanumeric characters, hyphens and dots are allowed)`，而 parse 路径因 `_SEMVER_PATTERN` 正则不匹配直接走到 `Invalid semver string: '1.0.0+spaces in build'`。两条入口对同一类非法输入返回的错误信息不同，调用方无法用统一的异常信息匹配规则跨 API 捕获同一语义错误。根因是 `_validate_build_metadata` 独立构造了错误信息而非与 parse 路径的错误约定对齐，应在同一种语义错误上输出一致的异常信息。
-2. `_validate_build_metadata` 使用单次正则匹配校验整个 build_metadata 字符串，而 `_validate_prerelease` 按 "." 拆分后逐段校验每个标识符并指明具体哪一段非法。当输入 `build..1` 被拒绝时，错误信息称"(only alphanumeric characters, hyphens and dots are allowed)"，但 "." 本身是合法字符，实际问题是两个点之间的标识符为空。误导性错误信息会让调用方排查时走错方向。根因是模型只移植了正则模式而未复用 prerelease 的逐段迭代校验结构，应按 "." 拆分逐个校验每个标识符并给出能定位具体非法段的错误信息。
+1. version.py 的 `_validate_build_metadata` 校验失败时抛出的错误信息格式与 parse 路径不一致。build_metadata 含空格时，构造函数抛 Invalid build metadata，parse 路径抛 Invalid semver string。两条入口对同一输入返回的错误信息不同，调用方无法用统一规则跨 API 捕获同一语义错误。根因是校验函数独立构造了错误信息而未与 parse 路径约定对齐，应在同种语义错误上输出一致的异常信息。
+2. `_validate_build_metadata` 用单次正则匹配校验整个字符串，而 `_validate_prerelease` 按 "." 拆分逐段校验并指明具体哪段非法。输入 build..1 被拒时错误信息说只允许字母数字等字符，但 "." 本身是合法的，实际是两个点之间标识符为空。误导性信息会让调用方排查走错方向。根因是只移植了正则模式未复用逐段迭代校验结构，应按 "." 拆分逐个校验并给出能定位具体非法段的错误信息。
 过程不满意：
-1. 模型在收到提示词后的第一个工具调用就是 todo_write 创建了 3 项子任务计划，然后才用 view_files 查看 version.py 和 test_error_branches.py。标注规范明确要求不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划。本次虽然最终实现正确，但先规划后分析的做法如果遇到更复杂的代码结构，预定的子任务粒度可能与实际模块边界不匹配，导致后续反复调整计划。正确做法是先阅读涉及的文件理解当前 prerelease 校验的实现方式和 build_metadata 的具体缺口，再据此制定执行计划。
-2. 模型将所有代码修改和测试新增一次性完成后才运行 pytest，缺少增量验证环节。具体表现为：先后在 version.py 添加正则和校验函数、在构造函数中调用校验、在 test_error_branches.py 新增 11 个测试用例，然后一次性运行全部 129 条测试。由于 parse 路径如今也会经由构造函数触发 `_validate_build_metadata`，若校验函数存在副作用可能引入回归。正确做法是先仅添加校验函数并在构造函数中调用，运行已有测试确认无回归，再逐批添加新测试用例验证新功能按预期通过。
+1. 模型收到提示词后第一个工具调用就是 todo_write 创建 3 项计划，然后才查看 version.py 和 test_error_branches.py。标注规范要求不能刚收到任务就创建 TodoList，应先分析再规划。本次虽实现正确，但先规划后分析遇到更复杂结构时粒度可能与实际边界不匹配。正确做法是先阅读涉及的文件理解当前校验方式和具体缺口，再据此制定执行计划。
+2. 模型将所有代码修改和测试新增一次性完成后才运行 pytest，缺少增量验证。具体是先添加正则和校验函数、构造函数调用校验、新增 11 个测试，然后一次性跑 129 条。由于 parse 路径如今也经由构造函数触发校验，若校验函数有副作用可能引入回归。正确做法是先添加校验函数并调用，运行已有测试确认无回归，再逐批添加新测试验证通过。

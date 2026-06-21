@@ -1,5 +1,5 @@
 产物不满意：
-1. 测试文件 test_cmd_queue.py 中存在重复测试用例：TestStatusTransition 类中的 test_mark_delivered_pending_raises 和 test_mark_timeout_pending_raises 在 TestExceptionBranches 类中被改名为 test_mark_delivered_from_pending_directly_raises 和 test_mark_timeout_from_pending_directly_raises 又实现了一遍，两组用例验证逻辑完全相同，均测试对 PENDING 状态命令调用 mark_delivered 或 mark_timeout 抛出 CmdQueueError。原因是模型使用 Write 整体重写测试文件时未检查 TestStatusTransition 已有覆盖，导致重复。应删除 TestExceptionBranches 中冗余的两个测试方法。
+1. test_cmd_queue.py 中存在重复测试：TestStatusTransition 中的两个测试方法在 TestExceptionBranches 中被改名又实现了一遍，两组验证逻辑完全相同，都测试对 PENDING 状态命令调用标记方法抛异常。原因是模型用 Write 重写时没检查已有覆盖就全量覆盖。应删除 TestExceptionBranches 中冗余的两个测试。
 
 过程不满意：
 1. 模型在会话一开始就调用了 todo_write 创建了 4 项子任务计划，此时尚未读取任何现有代码文件，对 models.py、cmd_queue.py 和 test_cmd_queue.py 的阅读发生在 plan 创建之后。这违反了"先分析问题再规划"的基本流程，导致初始计划与实际代码结构脱节，后续又在第 64 行和第 109 行两次更新 todo_write 来修正计划。正确做法是先读取全部关联文件理解现有代码状态，再基于代码实际结构制定执行计划。

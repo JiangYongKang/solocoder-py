@@ -1,6 +1,6 @@
 产物不满意：
-1. version.py 的 SemverVersion.__init__ 构造函数仅校验了 major/minor/patch 的类型和非负性，对 prerelease 参数完全没有格式校验。当用户绕过 parse 方法直接调用 SemverVersion(1, 0, 0, prerelease="01") 时，构造函数会成功创建对象，而 parse("1.0.0-01") 则因正则拒绝前置零而正确抛出 InvalidVersionError。根因是 _parse_prerelease_ids 方法对 "01" 这类含前置零的字符串通过 int("01") 静默转换为整数 1，缺少对预发布标识符格式的正则校验或与 parse 共享校验逻辑。这导致 parse 和构造函数两条 API 路径对同一非法输入产生不一致的行为，破坏了 API 的一致性契约。正确做法是在 __init__ 中也对 prerelease 参数做格式校验，或将校验逻辑抽取为共用函数。
-2. version.py 的 parse 方法通过 _SIMPLIFIED_PATTERN 正则将单数字 "1" 解析为 1.0.0，偏离了 Semver 2.0 规范。规范 §2 明确要求"正常版本号必须采用 X.Y.Z 的形式"，三部分均为必填字段，接受单数字简约形式属于规范偏差而非合法扩展。提示词第 1 条要求"按照 Semver 2.0 规范解析版本字符串"，第 6 条将简约形式列为边界条件应测试而非暗示应接受。根因是模型将 npm 等工具的容错习惯带入了应严格遵循 Semver 2.0 的实现中。正确做法是移除 _SIMPLIFIED_PATTERN 回退分支，让 "1" 这类输入统一走 InvalidVersionError 异常路径。
+1. SemverVersion.__init__ 只校验版本数字段，对 prerelease 完全没有格式校验。构造函数接受 prerelease="01"，parse 路径因正则拒绝前置零正确抛异常。根因是 _parse_prerelease_ids 对含前置零的字符串通过 int 静默转换缺格式校验，导致两条 API 对同一输入行为不一致。应在 __init__ 中也对 prerelease 做格式校验或抽取共用校验函数。
+2. version.py 的 parse 通过 _SIMPLIFIED_PATTERN 将单数字 "1" 解析为 1.0.0，偏离了 Semver 2.0 规范。规范明确要求版本号必须采用 X.Y.Z 三部分，接受简约形式属于规范偏差。提示词要求按 Semver 2.0 规范解析，简约形式是边界测试而非应接受的输入。根因是模型将 npm 等工具的容错习惯带入应严格遵循规范实现中。应移除回退分支，让单数字统一走 InvalidVersionError 路径。
 过程不满意：
-1. 模型在接到提示词后的第一个动作就是调用 todo_write 创建 5 项子任务计划，然后才使用 view_folder 和 file_search 探索项目目录结构，接着查看 pyproject.toml 和 TOTP 模块来了解项目约定。这种"先计划后分析"的顺序颠倒了合理的工作流，在尚未理解项目骨架、构建配置和导入路径规则时就制定了执行计划，存在计划粒度与实际边界不匹配的风险。正确做法是先阅读项目目录、构建配置和现有模块风格，理清模块职责边界后再创建针对性的 TodoList，确保计划的每个子任务与实际代码结构对齐。
-2. 模型在运行 pytest 验证测试时使用了 python -m pytest 命令而非项目 pyproject.toml 中配置的 poetry run pytest。虽然本次因环境路径恰好一致而正常运行，但使用非 poetry 管理的运行方式存在使用错误的 Python 解释器或依赖版本的风险。项目规范说明文档多处写明应使用 poetry run pytest 来运行测试，模型忽略了这一项目基础设施约定，可能在其他依赖版本不一致的环境中产生不可靠的测试结果。正确做法是始终使用 poetry run pytest 确保在项目虚拟环境中运行。
+1. 模型接到提示词后第一个动作就是 todo_write 创建 5 项计划，然后才用 view_folder 探索项目结构、查看 pyproject.toml 了解约定。这种先计划后分析在尚未理解项目骨架和构建配置时就制定计划，存在粒度与实际边界不匹配的风险。正确做法是先阅读项目目录、构建配置和现有模块风格，理清模块边界后再创建 TodoList。
+2. 模型运行 pytest 时用了 python -m pytest 而非 pyproject.toml 中配置的 poetry run pytest。虽然本次环境恰好一致，但非 poetry 的运行方式有使用错误解释器或依赖版本的风险。项目文档多处写明应使用 poetry run pytest，模型忽略了这一约定，可能在依赖不一致环境中产生不可靠的测试结果。正确做法是始终使用 poetry run pytest 确保在虚拟环境中运行。

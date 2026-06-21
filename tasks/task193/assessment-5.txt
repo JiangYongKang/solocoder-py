@@ -1,4 +1,4 @@
 产物不满意：
-1. `_diagnose_invalid_version` 方法移除了 try/except 包装和末尾的兜底 raise 后，当核心版本校验、prerelease 校验和 build_metadata 校验全部通过时，方法会静默返回 `None` 而非抛出异常。随后 `parse` 方法在第 116 行调用完 `_diagnose_invalid_version` 后没有后续的 return 或 raise 语句，导致 `parse` 隐式返回 `None` 而非 `SemverVersion` 对象或抛出异常。虽然当前校验逻辑与 `_SEMVER_PATTERN` 正则的覆盖范围一致，没有可实际触发此路径的输入，但函数的终止契约从"必定以抛出异常结束"退化为了"可能静默返回"，属于结构性回归。正确的做法是在 `_diagnose_invalid_version` 末尾保留一个兜底 raise 或重构 `parse` 方法使其在无异常时不会到达方法末尾。
+1. `_diagnose_invalid_version` 移除 try/except 和兜底 raise 后，当所有校验全部通过时方法会静默返回 None。随后 parse 方法调用完诊断函数后没有后续 return 或 raise，导致隐式返回 None 而非版本对象或异常。虽然当前校验逻辑与正则覆盖一致，没有可实际触发的路径，但函数的终止契约从必定抛异常退化成了可能静默返回，属于结构性回归。正确做法是在诊断方法末尾保留兜底 raise，或者重构 parse 确保无异常时不会到达方法末尾。
 过程不满意：
 模型在收到提示词后只读取了一次 version.py 就立即执行了编辑，将 `_diagnose_invalid_version` 中 prerelease 和 build_metadata 的 try/except 包装全部移除并删去了末尾的兜底 raise 语句，随后直接运行测试通过。整个过程没有分析移除兜底 raise 对 `parse` 方法整体控制流的潜在影响，也没有考虑 `_diagnose_invalid_version` 作为辅助方法的退出契约是否因此发生了改变。正确做法是在做任何删除操作前先梳理 `parse` → `_diagnose_invalid_version` 的调用链路，确认每个分支都有明确的异常退出点后再移除冗余代码。
