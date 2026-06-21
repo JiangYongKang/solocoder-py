@@ -1,0 +1,5 @@
+回退 _validate_input 的布尔值校验变更后，测试套件中布尔值输入路径失去了保护。当前没有任何用例验证 update(True) 和 update(False) 能否被正确接受并参与 EWMA 计算，True 转为 1.0、False 转为 0.0 的接受行为缺少自动化断言。
+
+请补充布尔值输入的正向测试用例。
+
+修改后运行 poetry run pytest tests/ewma/ 确保所有测试通过。

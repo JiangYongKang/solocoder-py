@@ -1,0 +1,9 @@
+当前 authority 回归测试存在以下覆盖问题：
+
+1. 部分新增测试验证了有主机场景下 authority 非 None 的行为，但现有测试套件中已有覆盖相同场景的用例，造成重复。
+2. 两个不同的测试用相同的输入 URL 验证相同的 authority is None 语义，存在冗余。
+3. 缺少只含 :// 前缀但无任何主机信息的 URL 场景（如 http://），该场景下 authority 应返回 None 的代码路径未被覆盖。
+
+请清理重复和冗余的测试，并补充遗漏的无主机 URL 场景的回归测试。
+
+修改后运行 poetry run pytest tests/url_parser/ 确保所有测试通过。

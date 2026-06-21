@@ -173,24 +173,13 @@ class TestErrorBranches:
         assert result.authority is None
         assert result.rebuild() == "mailto:user@example.com"
 
-    def test_authority_not_none_with_host(self):
-        result = parse_url("http://example.com")
+    def test_authority_none_for_http_no_host(self):
+        result = parse_url("http://")
         assert result.has_authority is True
-        assert result.authority is not None
-        assert result.authority == "example.com"
-
-    def test_authority_not_none_with_host_and_port(self):
-        result = parse_url("http://example.com:8080/path")
-        assert result.authority == "example.com:8080"
-
-    def test_authority_not_none_with_userinfo_host_port(self):
-        result = parse_url("http://user:pass@example.com:8080/path")
-        assert result.authority == "user:pass@example.com:8080"
-
-    def test_authority_is_none_check_works_with_is_none(self):
-        result = parse_url("file:///path/to/file")
-        if result.authority is not None:
-            pytest.fail("authority should be None for file:// URLs with no host")
+        assert result.host is None
+        assert result.authority is None
+        assert result.authority is not ""
+        assert result.rebuild() == "http://"
 
     def test_authority_is_none_for_file_root(self):
         result = parse_url("file:///")

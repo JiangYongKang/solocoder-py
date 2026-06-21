@@ -367,6 +367,75 @@ val = { k = "first", k = 42 }
         config = parse_ini(text)
         assert config["val"]["k"] == 42
 
+    def test_parse_ini_inline_table_duplicate_key_bool_value(self):
+        text = '''
+flags = { enabled = true, enabled = false, active = false, active = true }
+'''
+        config = parse_ini(text)
+        assert config["flags"]["enabled"] is False
+        assert config["flags"]["active"] is True
+
+    def test_parse_ini_inline_table_duplicate_key_array_value(self):
+        text = '''
+data = { items = [1, 2], items = [3, 4, 5] }
+'''
+        config = parse_ini(text)
+        assert config["data"]["items"] == [3, 4, 5]
+
+    def test_parse_ini_inline_table_duplicate_key_nested_inner(self):
+        text = '''
+outer = { inner = { a = 1, a = 2 } }
+'''
+        config = parse_ini(text)
+        assert config["outer"]["inner"]["a"] == 2
+
+    def test_parse_ini_inline_table_duplicate_key_nested_multiple_levels(self):
+        text = '''
+root = {
+    x = 0,
+    mid = { y = 1, y = 10, deep = { z = 2, z = 20 } },
+    x = 5
+}
+'''
+        config = parse_ini(text)
+        assert config["root"]["x"] == 5
+        assert config["root"]["mid"]["y"] == 10
+        assert config["root"]["mid"]["deep"]["z"] == 20
+
+    def test_parse_ini_inline_table_duplicate_key_nested_and_flat_mixed(self):
+        text = '''
+cfg = { a = "old", inner = { b = 1, b = 2, c = 0 }, a = "new" }
+'''
+        config = parse_ini(text)
+        assert config["cfg"]["a"] == "new"
+        assert config["cfg"]["inner"]["b"] == 2
+        assert config["cfg"]["inner"]["c"] == 0
+
+    def test_parse_ini_inline_table_duplicate_key_inner_is_replaced(self):
+        text = '''
+cfg = { inner = { b = 1 }, inner = { c = 2 } }
+'''
+        config = parse_ini(text)
+        assert "b" not in config["cfg"]["inner"]
+        assert config["cfg"]["inner"]["c"] == 2
+
+    def test_parse_ini_inline_table_duplicate_key_with_array_of_inline_tables(self):
+        text = '''
+data = { points = [{x = 1, x = 100}, {y = 2, y = 200}] }
+'''
+        config = parse_ini(text)
+        assert config["data"]["points"][0]["x"] == 100
+        assert config["data"]["points"][1]["y"] == 200
+
+    def test_parse_ini_inline_table_duplicate_key_float_and_date_values(self):
+        text = '''
+mixed = { pi = 3.0, pi = 3.14159, start = 2023-01-01, start = 2024-06-20 }
+'''
+        config = parse_ini(text)
+        assert config["mixed"]["pi"] == 3.14159
+        from datetime import date
+        assert config["mixed"]["start"] == date(2024, 6, 20)
+
 
 class TestTypeConversion:
     def test_get_bool_from_bool(self):

@@ -573,6 +573,50 @@ class TestEWMAErrorBranches:
         with pytest.raises(EWMAError):
             ewma.update("not a number")
 
+    def test_bool_true_input_accepted_as_one(self):
+        ewma = EWMA(alpha=0.5)
+        result = ewma.update(True)
+        assert approx_equal(result, 1.0)
+        assert ewma.count == 1
+        assert approx_equal(ewma.last_valid, 1.0)
+
+    def test_bool_false_input_accepted_as_zero(self):
+        ewma = EWMA(alpha=0.5)
+        result = ewma.update(False)
+        assert approx_equal(result, 0.0)
+        assert ewma.count == 1
+        assert approx_equal(ewma.last_valid, 0.0)
+
+    def test_bool_mixed_with_numeric(self):
+        ewma = EWMA(alpha=0.5)
+        ewma.update(10.0)
+        ewma.update(True)
+        expected = 0.5 * 1.0 + 0.5 * 10.0
+        assert approx_equal(ewma.value, expected)
+        assert ewma.count == 2
+
+        ewma.update(False)
+        expected = 0.5 * 0.0 + 0.5 * expected
+        assert approx_equal(ewma.value, expected)
+        assert ewma.count == 3
+
+    def test_bool_input_with_warmup_correction(self):
+        ewma = EWMA(alpha=0.5, warmup_period=5)
+        ewma.update(True)
+        raw = ewma.raw_value
+        corrected = ewma.value
+        assert approx_equal(raw, 1.0)
+        correction = 1.0 - (1.0 - 0.5) ** 1
+        assert approx_equal(corrected, raw / correction)
+        assert ewma.in_warmup is True
+
+    def test_bool_input_does_not_trigger_contamination(self):
+        ewma = EWMA(alpha=0.5)
+        ewma.update(True)
+        ewma.update(False)
+        assert ewma.contaminated is False
+        assert ewma.count == 2
+
     def test_warmup_exceeds_reasonable_range_valid(self):
         ewma = EWMA(alpha=0.5, warmup_period=100000)
         assert ewma.warmup_period == 100000

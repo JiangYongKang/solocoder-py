@@ -31,13 +31,19 @@ class ConfigParser:
         self._pending_comments = []
 
         lines = text.splitlines()
+        total_lines = len(lines)
+        line_idx = 0
         in_multiline_string = False
         multiline_buffer: List[str] = []
         multiline_delimiter = ""
         multiline_is_literal = False
         multiline_start_line = 0
 
-        for line_num, raw_line in enumerate(lines, start=1):
+        while line_idx < total_lines:
+            line_num = line_idx + 1
+            raw_line = lines[line_idx]
+            line_idx += 1
+
             if in_multiline_string:
                 stripped = raw_line
                 if stripped.endswith(multiline_delimiter):
@@ -115,6 +121,29 @@ class ConfigParser:
                         self._pending_key = key_part
                     continue
 
+                brk, brc = self._count_unclosed_brackets(value_part)
+                if brk > 0 or brc > 0:
+                    pending_value_lines = [value_part]
+                    pending_start_line = line_num
+                    pending_key = key_part
+                    while line_idx < total_lines:
+                        next_raw = lines[line_idx]
+                        line_idx += 1
+                        next_stripped = next_raw.strip()
+                        if not next_stripped or next_stripped.startswith(("#", ";")):
+                            pending_value_lines.append(next_stripped if next_stripped else "")
+                            continue
+                        pending_value_lines.append(next_stripped)
+                        combined = " ".join(pending_value_lines)
+                        brk2, brc2 = self._count_unclosed_brackets(combined)
+                        if brk2 == 0 and brc2 == 0:
+                            value_part = combined
+                            break
+                    value = self._parse_value(value_part, pending_start_line)
+                    self._parse_key_value(pending_key, value, pending_start_line)
+                    self._pending_comments = []
+                    continue
+
                 value = self._parse_value(value_part, line_num)
                 self._parse_key_value(key_part, value, line_num)
                 self._pending_comments = []
@@ -159,6 +188,7 @@ class ConfigParser:
         in_single = False
         in_double = False
         in_bracket = 0
+        in_brace = 0
         for i, ch in enumerate(value_part):
             if ch == "'" and not in_double:
                 in_single = not in_single
@@ -168,9 +198,34 @@ class ConfigParser:
                 in_bracket += 1
             elif ch == "]" and not in_single and not in_double:
                 in_bracket -= 1
-            elif ch == "#" and not in_single and not in_double and in_bracket == 0:
+            elif ch == "{" and not in_single and not in_double:
+                in_brace += 1
+            elif ch == "}" and not in_single and not in_double:
+                in_brace -= 1
+            elif ch == "#" and not in_single and not in_double and in_bracket == 0 and in_brace == 0:
                 return value_part[:i].rstrip()
         return value_part
+
+    @staticmethod
+    def _count_unclosed_brackets(text: str) -> Tuple[int, int]:
+        in_single = False
+        in_double = False
+        bracket = 0
+        brace = 0
+        for ch in text:
+            if ch == "'" and not in_double:
+                in_single = not in_single
+            elif ch == '"' and not in_single:
+                in_double = not in_double
+            elif ch == "[" and not in_single and not in_double:
+                bracket += 1
+            elif ch == "]" and not in_single and not in_double:
+                bracket -= 1
+            elif ch == "{" and not in_single and not in_double:
+                brace += 1
+            elif ch == "}" and not in_single and not in_double:
+                brace -= 1
+        return bracket, brace
 
     def _parse_table_header(self, table_name: str, line_num: int) -> None:
         keys = self._parse_table_name(table_name, line_num)
