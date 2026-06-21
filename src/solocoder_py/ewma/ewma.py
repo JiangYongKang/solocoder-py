@@ -54,7 +54,7 @@ class EWMA:
     @staticmethod
     def _validate_input(value: float) -> str:
         if isinstance(value, bool):
-            raise EWMAError(f"Invalid input type: bool is not allowed, use int or float")
+            return "valid"
         if not isinstance(value, (int, float)):
             raise EWMAError(f"Invalid input type: {type(value)}")
         v = float(value)

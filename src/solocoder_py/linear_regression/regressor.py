@@ -10,9 +10,9 @@ from .exceptions import (
 
 
 class SimpleLinearRegression:
-    _BETA1 = 0.9
     _BETA2 = 0.999
     _EPS = 1e-8
+    _CLIP_FACTOR = 10.0
 
     def __init__(
         self,
@@ -29,9 +29,7 @@ class SimpleLinearRegression:
         self._learning_rate = learning_rate
         self._w = 0.0
         self._b = 0.0
-        self._m_w = 0.0
         self._v_w = 0.0
-        self._m_b = 0.0
         self._v_b = 0.0
         self._t = 0
         self._n = 0
@@ -79,21 +77,21 @@ class SimpleLinearRegression:
         db = error
 
         self._t += 1
-        self._m_w = self._BETA1 * self._m_w + (1 - self._BETA1) * dw
         self._v_w = self._BETA2 * self._v_w + (1 - self._BETA2) * dw * dw
-        self._m_b = self._BETA1 * self._m_b + (1 - self._BETA1) * db
         self._v_b = self._BETA2 * self._v_b + (1 - self._BETA2) * db * db
 
-        bias_correction1 = 1 - self._BETA1 ** self._t
         bias_correction2 = 1 - self._BETA2 ** self._t
-
-        m_hat_w = self._m_w / bias_correction1
         v_hat_w = self._v_w / bias_correction2
-        m_hat_b = self._m_b / bias_correction1
         v_hat_b = self._v_b / bias_correction2
 
-        self._w -= self._learning_rate * m_hat_w / (math.sqrt(v_hat_w) + self._EPS)
-        self._b -= self._learning_rate * m_hat_b / (math.sqrt(v_hat_b) + self._EPS)
+        max_grad_w = self._CLIP_FACTOR * math.sqrt(v_hat_w)
+        max_grad_b = self._CLIP_FACTOR * math.sqrt(v_hat_b)
+
+        clipped_dw = max(min(dw, max_grad_w), -max_grad_w)
+        clipped_db = max(min(db, max_grad_b), -max_grad_b)
+
+        self._w -= self._learning_rate * clipped_dw
+        self._b -= self._learning_rate * clipped_db
 
         self._n += 1
         self._sum_x += x

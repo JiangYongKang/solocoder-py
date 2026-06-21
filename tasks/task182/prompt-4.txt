@@ -1,0 +1,5 @@
+在修复 corrected_value 语义问题的过程中，_validate_input 静态方法的布尔值输入校验逻辑被改动了：原先允许 bool 类型输入，现在改为抛出 EWMAError 拒绝。同时 test_ewma.py 中新增了对应的布尔值拒绝测试用例。这些变更与 corrected_value 的偏差校正语义修复无关，超出了本次修复的范围。
+
+请回退 _validate_input 方法和测试文件中与 corrected_value 修复无关的变更，确保只保留对 corrected_value 偏差校正逻辑的修改。
+
+修改后运行 `poetry run pytest tests/ewma/` 确保所有测试通过。

@@ -573,29 +573,6 @@ class TestEWMAErrorBranches:
         with pytest.raises(EWMAError):
             ewma.update("not a number")
 
-    def test_bool_input_true_rejected(self):
-        ewma = EWMA(alpha=0.5)
-        with pytest.raises(EWMAError):
-            ewma.update(True)
-
-    def test_bool_input_false_rejected(self):
-        ewma = EWMA(alpha=0.5)
-        with pytest.raises(EWMAError):
-            ewma.update(False)
-
-    def test_bool_input_does_not_pollute_state(self):
-        ewma = EWMA(alpha=0.5)
-        ewma.update(10.0)
-        count_before = ewma.count
-        value_before = ewma.value
-
-        with pytest.raises(EWMAError):
-            ewma.update(True)
-
-        assert ewma.count == count_before
-        assert approx_equal(ewma.value, value_before)
-        assert ewma.contaminated is False
-
     def test_warmup_exceeds_reasonable_range_valid(self):
         ewma = EWMA(alpha=0.5, warmup_period=100000)
         assert ewma.warmup_period == 100000

@@ -345,6 +345,28 @@ global = b
         config = parse_ini(text)
         assert config["global"] == "b"
 
+    def test_parse_ini_inline_table_duplicate_key_overwrite(self):
+        text = '''
+section_key = { a = 1, a = 2 }
+'''
+        config = parse_ini(text)
+        assert config["section_key"]["a"] == 2
+
+    def test_parse_ini_inline_table_duplicate_key_multiple_overwrite(self):
+        text = '''
+point = { x = 0, y = 0, x = 10, y = 20, x = 5 }
+'''
+        config = parse_ini(text)
+        assert config["point"]["x"] == 5
+        assert config["point"]["y"] == 20
+
+    def test_parse_ini_inline_table_duplicate_key_different_types(self):
+        text = '''
+val = { k = "first", k = 42 }
+'''
+        config = parse_ini(text)
+        assert config["val"]["k"] == 42
+
 
 class TestTypeConversion:
     def test_get_bool_from_bool(self):

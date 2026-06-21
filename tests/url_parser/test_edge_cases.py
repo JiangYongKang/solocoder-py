@@ -152,6 +152,53 @@ class TestErrorBranches:
         result = parse_url("file:///path/to/file")
         assert result.host is None or result.host == ""
 
+    def test_authority_none_for_file_url_with_double_slash(self):
+        result = parse_url("file:///path/to/file")
+        assert result.has_authority is True
+        assert result.host is None
+        assert result.authority is None
+        assert result.authority is not ""
+        assert result.rebuild() == "file:///path/to/file"
+
+    def test_authority_none_for_empty_double_slash(self):
+        result = parse_url("file://")
+        assert result.has_authority is True
+        assert result.host is None
+        assert result.authority is None
+        assert result.rebuild() == "file://"
+
+    def test_authority_none_for_no_double_slash_scheme(self):
+        result = parse_url("mailto:user@example.com")
+        assert result.has_authority is False
+        assert result.authority is None
+        assert result.rebuild() == "mailto:user@example.com"
+
+    def test_authority_not_none_with_host(self):
+        result = parse_url("http://example.com")
+        assert result.has_authority is True
+        assert result.authority is not None
+        assert result.authority == "example.com"
+
+    def test_authority_not_none_with_host_and_port(self):
+        result = parse_url("http://example.com:8080/path")
+        assert result.authority == "example.com:8080"
+
+    def test_authority_not_none_with_userinfo_host_port(self):
+        result = parse_url("http://user:pass@example.com:8080/path")
+        assert result.authority == "user:pass@example.com:8080"
+
+    def test_authority_is_none_check_works_with_is_none(self):
+        result = parse_url("file:///path/to/file")
+        if result.authority is not None:
+            pytest.fail("authority should be None for file:// URLs with no host")
+
+    def test_authority_is_none_for_file_root(self):
+        result = parse_url("file:///")
+        assert result.has_authority is True
+        assert result.authority is None
+        assert result.path == "/"
+        assert result.rebuild() == "file:///"
+
     def test_percent_decode_incomplete(self):
         with pytest.raises(PercentDecodeError):
             percent_decode("hello%", errors="strict")

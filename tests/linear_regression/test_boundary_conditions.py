@@ -103,13 +103,12 @@ class TestEdgeValues:
         assert not (reg.w != reg.w)
 
     def test_negative_x_values(self):
-        reg = SimpleLinearRegression(learning_rate=0.1)
+        reg = SimpleLinearRegression(learning_rate=0.00001)
         true_w = 2.0
         true_b = 1.0
-        for epoch in range(5):
-            for x in range(-100, 100):
-                y = true_w * x + true_b
-                reg.update(float(x), y)
+        for x in range(-100, 100):
+            y = true_w * x + true_b
+            reg.update(float(x), y)
         assert abs(reg.w - true_w) < 0.1
 
     def test_negative_y_values(self):

@@ -1,0 +1,5 @@
+authority 属性修复为在无主机 URL 下返回 None 而非空字符串后，缺少对应的回归测试用例。当前测试套件验证了有 host 场景下 authority 的非 None 返回值，但没有覆盖 file:///path/to/file 这类只有 `//` 前缀但实际无主机的 URL 场景下 authority 应为 None 的语义约定。该约定完全没有自动化测试保护。
+
+请为解析无主机 URL 时 authority 返回 None 的场景补充回归测试，确保该语义有自动化断言保护。
+
+修改后运行 `poetry run pytest tests/url_parser/` 确保所有测试通过。
