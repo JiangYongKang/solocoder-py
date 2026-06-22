@@ -1,6 +1,6 @@
 产物不满意：
-1. hashtable.py 的 _insert_new 方法中线性探测使用了 while self._slots[index] is not None 无限循环，没有迭代次数上限保护。当前所有调用路径都在 rehash 之后保证了有空位，但如果未来重构改变了 _insert_new 的调用场景或 rehash 逻辑出现边界 bug，这个 while 循环会直接死循环导致进程挂起。应在循环外包裹 for _ in range(self._capacity) 的探测次数保护，检查完所有槽位后若仍无空位则明确抛出异常。
-2. hashtable.py 的 insert 方法中，for 循环探测到空槽 break 退出后，位于循环外部的 rehash 触发检查仍然无条件执行，导致明明表内存在可用空槽却仍可能触发不必要的扩容。例如 capacity=8、threshold=0.75、count=5、deleted_count=2 时 for 循环已找到空槽，但后续 count+1>=6 仍触发扩容到 16。根因是使用了 >= 边界且 rehash 检查未区分"表满无空槽"和"表有空槽但负载因子到阈值"两种场景，应将空槽可用性的判断内联到扩容决策中。
+1. hashtable.py 的 _insert_new 方法中线性探测用了 while self._slots[index] is not None 无限循环，没有迭代次数上限保护。当前调用路径都在 rehash 后保证有空位，但如果未来重构改变了调用场景或 rehash 出现边界 bug，这个 while 会直接死循环导致进程挂起。应在循环外加 for _ in range(self._capacity) 的探测次数保护，查完所有槽位后若仍无空位则明确抛异常。
+2. hashtable.py 的 insert 方法中，for 循环探测到空槽 break 后，循环外的 rehash 触发检查仍无条件执行，导致表内明明有空槽却可能触发不必要扩容。例如 capacity=8、threshold=0.75、count=5、deleted=2 时循环已找到空槽，但后续 count+1>=6 仍触发扩容到 16。根因是 rehash 检查未区分表满无空槽和表有空槽但负载因子到阈值两种场景，应将空槽可用性的判断纳入扩容决策。
 3. README.md 中复杂度分析写道"理想情况（低负载因子）：插入、查找、删除均为 O(1)"，这个表述不准确。开放地址法在低负载因子下查找和删除的平均时间复杂度是 O(1/(1-α))，虽然 α 很低时趋近 O(1) 但并不严格等于 O(1)。文档中应使用"期望 O(1)"或"平均 O(1)"来表达基于均匀哈希假设的期望时间复杂度，避免读者产生所有操作都严格常数时间的误解。
 
 过程不满意：

@@ -1,5 +1,5 @@
 产物不满意：
-1. 模型在编写 test_cleanup_triggers_even_within_load_threshold 测试时初始使用了 4 个删除标记，但 insert 中 first_deleted 复用逻辑会将 deleted_count 从 4 减到 3，导致 cleanup_needed 的 count + deleted_count = 5 < 8 条件不满足。调整到 6 个删除标记后测试通过，但初始设计反映出没有先追踪 insert 内状态变化再进行断言设计，凭直觉选数据而非基于执行路径推算。
+1. 模型编写测试时初始用了 4 个删除标记，但 insert 中 first_deleted 复用逻辑会减少 deleted_count，导致清理条件不满足。调整到 6 个后测试通过，但初始设计反映出没先追踪 insert 内状态变化再设计断言，凭直觉选数据而非基于执行路径推算。
 
 过程不满意：
 1. 模型在刚收到提示词后未经文件阅读和分析就直接用 todo_write 创建了 5 项子任务计划，随后才开始读取 hashtable.py 和 README.md 文件。虽然该提示词内容简单，计划粒度也与后续实际操作基本吻合，但"先规划后分析"不符合标注规范中"应先分析问题再规划"的正确流程，属于目标理解阶段的规划过早问题。

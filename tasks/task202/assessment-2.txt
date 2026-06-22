@@ -1,5 +1,5 @@
 产物不满意：
-1. 在修改 exceptions.py 时，模型将 QueueEmptyException 的整个 __init__ 方法删除并替换为 pass，虽然功能上等价因为所有调用方都传入 message 参数且 Exception 基类的默认 __init__ 会将参数存入 args 元组、str() 也能正常返回消息，但这样做丢失了显式的方法签名 `def __init__(self, message: str)`，使得后续维护者无法一眼看出该异常期望接收单个字符串消息类型。提示词要求的是移除冗余的 self.message 属性存储和从未被引用的默认参数值，并非删除整个 __init__ 方法。正确做法是保留显式的 __init__ 仅调用 super().__init__(message)，只移除 self.message = message 赋值行和默认参数值，这样既消除了冗余又保持了代码的显式性和类型信息。
+1. 模型修改 exceptions.py 时把 QueueEmptyException 的 __init__ 整个删除换成了 pass，虽然功能等价，但丢失了显式的方法签名，维护者无法一眼看出该异常接收单个字符串参数。提示词只要求移除冗余的 self.message 赋值和从未用过的默认参数值，不是删掉整个方法。正确做法是保留 __init__ 仅调用 super().__init__(message)，只删 self.message 那行和默认值，这样既消除冗余又保持了类型信息。
 
 过程不满意：
 1. 模型在收到提示词后尚未读取 exceptions.py 和 basic_queue.py 两个源文件的内容，就直接调用了 todo_write 创建包含 4 项子任务的计划。这违反了"应先分析问题再规划"的原则，由于这个任务本身非常简单仅涉及两处代码修改，提前制定计划不仅没有价值反而暴露了模型机械套用流程模板而不根据任务实际复杂度做判断的问题。正确做法是先阅读两个源文件理解当前实现，确认改动范围和影响后再决定是否需要创建计划。

@@ -2,5 +2,5 @@
 1. 本轮提示词仅要求修复_compare方法中异常消息包含底层解释器术语的问题，任务范围极窄。模型将 bst.py 的 _compare 方法中原来通过 `{e}` 拼接原始 Python TypeError 文本的写法改为纯类型名描述，最终异常消息为 `Values of type 'int' and 'str' are not comparable`，同时移除了 `from e` 显式异常链链接。全部 55 个测试用例通过，产物修改与提示词需求对齐，无新增代码缺陷或回归问题。
 
 过程不满意：
-1. 模型在运行测试验证修复时使用了 `python -m pytest tests/binary_search_tree/ -v` 命令，而非项目 pyproject.toml 约定的 `poetry run pytest tests/binary_search_tree/ -v`。这一问题在 assessment-1.txt 中已被明确标注，但模型在第三轮会话中依然沿用非标准命令，说明模型未从历史标注中吸取教训、未能建立项目命令行约定的长期记忆。虽然本轮测试在本地环境可以跑通，但换到未激活虚拟环境的机器上 `python -m pytest` 可能因依赖缺失而失败，正确的做法是严格遵守项目约定使用 `poetry run pytest`。
+1. 模型运行测试时用了 python -m pytest 而非项目约定的 poetry run pytest。这问题在 assessment-1.txt 中已被明确标注，但模型第三轮仍沿用非标准命令，说明没从历史标注中吸取教训、未建立项目命令行约定的长期记忆。虽然本地能跑通，但换到未激活虚拟环境的机器上可能因依赖缺失而失败。正确做法是严格遵守项目约定使用 poetry run pytest。
 2. 模型在 session-cot-3.md 的思考过程日志中声称"全部 55 个测试通过"，但日志中 run_command 工具调用仅显示了 `status: success`，未包含任何实际的 pytest 输出行（如 PASSED/FAILED 列表或测试摘要统计）。标注人员无法仅凭思考过程日志验证模型确实阅读了测试输出并确认了所有用例通过，无法排除模型仅凭工具返回状态码就做出"全部通过"判断的可能性。正确做法是在思考过程中记录关键测试输出摘要，为标注复核提供可追溯的证据链。

@@ -1,8 +1,8 @@
 产物不满意：
-1. 模型在第一轮并行修改时只处理了 models.py、__init__.py、README.md 和 test_singly_linked_list.py 四个文件，漏掉了 singly_linked_list.py 中第 5 行对 NodeNotFoundError 的导入引用。在从 models.py 删除 NodeNotFoundError 类定义后首次运行 pytest，singly_linked_list.py 仍试图导入一个已被删除的类，导致 ImportError 使全部测试无法执行。根因在于删除类定义前没有用 grep 搜索该符号在整个 singly_linked_list 包内的所有引用位置，只靠记忆编写需要修改的文件列表。正确做法是先全局搜索被删除符号的全部引用，确保一次修改覆盖所有关联文件，而非等测试失败后才被动补漏。
-2. 提示词仅要求在 README.md 中说明 find 方法的 `==` 比较语义约定以明确接口契约，但模型在 test_singly_linked_list.py 中额外新增了 TestValueEqualitySemantics 测试类包含三个用例，分别验证自定义 `__eq__` 行为、remove 方法的相等性比较以及未实现 `__eq__` 时的身份比较回退。提示词开头已明确说明模块功能上没有问题，本轮是清理和明确而非功能扩展，模型在无需求的测试上编写代码超出了任务边界，属于不必要的范围蔓延。
+1. 模型第一轮只改了四个文件，漏掉了 singly_linked_list.py 中对 NodeNotFoundError 的导入。从 models.py 删掉类定义后首次运行 pytest，singly_linked_list.py 仍试图导入已删除的类，ImportError 导致全部测试无法执行。根因是删类前没用 grep 搜索该符号在整个包内的所有引用，只靠记忆列文件清单。正确做法是先全局搜索被删符号的全部引用，确保一次覆盖所有关联文件。
+2. 提示词只要求在 README 里说明 find 方法的比较语义约定，但模型在 test_singly_linked_list.py 里额外新增了三个测试用例验证自定义 __eq__ 等场景。提示词开头已说明模块功能没问题，本轮是清理明确而非功能扩展，模型在无需求的测试上编写代码属于不必要的范围蔓延。
 
 过程不满意：
 1. 模型在收到提示词后第一步就调用 todo_write 创建了 5 项子任务计划，然后才开始读取 models.py、__init__.py 等文件分析现有代码结构。这种先规划后分析的行为违反了标注规范要求的"不能在刚收到任务时就直接创建 TodoList，应先分析问题再规划"。合理的流程是先完整读取任务包下的所有代码文件理解当前架构状态，理清需要修改的范围和影响面，再制定执行计划进行修改。
-2. 模型在删除 NodeNotFoundError 类之前仅读取了 models.py、__init__.py、README.md 和 test_singly_linked_list.py 四个文件，没有使用 grep 在 singly_linked_list 包全范围内搜索 NodeNotFoundError 的所有引用点就直接开始修改。这导致 singly_linked_list.py 中的导入引用被遗漏，第一轮测试因 ImportError 失败。模型随后读文件定位问题再修复，虽然只经历了一轮修正，但如果在修改前先全局搜索引用就可以避免这次失败。正确做法是先 grep 找出所有关联文件，列出完整的影响清单后再并行修改。
+2. 模型删 NodeNotFoundError 前只读了四个文件，没用 grep 在包全范围搜索该符号的所有引用就直接动手改。导致 singly_linked_list.py 的导入被遗漏，首轮测试因 ImportError 失败。虽然只经历了一轮修正，但修改前先全局搜索就能避免。正确做法是先 grep 找出所有关联文件，列出完整影响清单再并行修改。
 3. 模型在两次运行测试时使用的命令为 `.uv.exe run pytest tests/singly_linked_list/ -v undefined`，命令末尾多出了 `undefined` 字符串，说明所使用的命令模板中残留了未清理的占位符。虽然测试结果正确，但命令中带无效参数反映了工具使用的不严谨，也说明模型在发出命令前未对命令内容做二次校验就直接执行，属于基本的执行规范问题。
