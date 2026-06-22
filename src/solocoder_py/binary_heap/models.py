@@ -20,10 +20,10 @@ class HeapEntry:
         return self.priority < other.priority
 
     def __le__(self, other: HeapEntry) -> bool:
-        return self.priority < other.priority or self.priority == other.priority
+        return not (other.priority < self.priority)
 
     def __gt__(self, other: HeapEntry) -> bool:
-        return not self.__le__(other)
+        return other.priority < self.priority
 
     def __ge__(self, other: HeapEntry) -> bool:
-        return not self.__lt__(other)
+        return not (self.priority < other.priority)

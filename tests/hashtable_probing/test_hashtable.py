@@ -269,6 +269,24 @@ class TestRehash:
         assert ht.find(2) == 20
         assert ht.find(100) == 1000
 
+    def test_cleanup_triggers_even_within_load_threshold(self):
+        ht = ProbingHashTable(initial_capacity=16, load_factor_threshold=0.75)
+        for i in range(8):
+            ht.insert(i, i * 10)
+        for i in range(6):
+            ht.delete(i)
+        assert ht.size() == 2
+        assert ht.deleted_count() == 6
+        assert ht.capacity() == 16
+        assert ht.load_factor() == pytest.approx(2 / 16)
+        ht.insert(100, 1000)
+        assert ht.deleted_count() == 0
+        assert ht.size() == 3
+        assert ht.capacity() == 16
+        assert ht.find(6) == 60
+        assert ht.find(7) == 70
+        assert ht.find(100) == 1000
+
 
 class TestConsecutiveDeletion:
     def test_many_deletions_then_operations(self, ht: ProbingHashTable):

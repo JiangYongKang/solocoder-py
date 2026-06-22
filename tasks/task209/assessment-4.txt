@@ -1,0 +1,5 @@
+产物不满意：
+1. 提示词要求修复 __le__ 和 __gt__ 对 priority 做 == 比较的问题，模型的排序比较修复方案本身正确，__le__ 改为 not other<self、__gt__ 改为 other<self 均不依赖相等比较。但模型在思考总结中声明相等比较 ==,!= 由 dataclass 自动生成即可覆盖所有优先级类型，而新增的 test_comparison_no_equality_fallback 测试中 PriorityNoEq 类的 __eq__ 会抛 NotImplementedError，该测试只验证了排序比较路径正常，故意避开了 entry1==entry2 的相等比较路径。对于仅实现 __lt__ 的优先级类型，在两个 HeapEntry 之间执行 == 时底层会调用 priority.__eq__ 导致崩溃。模型测试中故意不测 == 说明发现了缺陷却回避。根因是没有把对 __eq__ 依赖的分析从排序比较扩展到相等比较本身，正确做法是若 HeapEntry 声称支持对自定义优先级的 ==，应提供不依赖 priority.__eq__ 的相等实现或在文档中说明限制。
+
+过程不满意：
+1. 模型在修改 models.py 时使用了 Write 工具直接重写整个文件，而非用 edit_file_search_replace 做针对性的方法级修改。Write 完成后没有再次调用 view_files 回读文件内容来验证写入结果是否与思考中描述的修复方案一致。虽然本次修改结果正确且测试全部通过，但这种写后不验证的流程留下了风险敞口：如果 Write 过程中模型生成的内容与规划有偏差，比如遗漏了某个方法的修复或产生了缩进错误，模型在运行 pytest 之前无法提前发现。正确做法是每次对关键文件使用全量 Write 后，立即用 view_files 确认修改后的实际内容，确保无意外偏差。

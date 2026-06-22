@@ -51,12 +51,11 @@ class HashTable(Generic[K, V]):
         return self._size / self._capacity
 
     def put(self, key: K, value: V) -> None:
-        node = self._find_node(key)
+        node, index = self._find_node(key)
         if node is not None:
             node.value = value
             return
 
-        index = self._hash(key)
         new_node = _Node(key, value, self._buckets[index])
         self._buckets[index] = new_node
         self._size += 1
@@ -65,17 +64,16 @@ class HashTable(Generic[K, V]):
             self._resize()
 
     def get(self, key: K) -> V:
-        node = self._find_node(key)
+        node, _ = self._find_node(key)
         if node is None:
             raise KeyError(key)
         return node.value
 
     def remove(self, key: K) -> V:
-        node, prev = self._find_node_with_prev(key)
+        node, prev, index = self._find_node_with_prev(key)
         if node is None:
             raise KeyError(key)
 
-        index = self._hash(key)
         if prev is None:
             self._buckets[index] = node.next
         else:
@@ -84,7 +82,8 @@ class HashTable(Generic[K, V]):
         return node.value
 
     def contains(self, key: K) -> bool:
-        return self._find_node(key) is not None
+        node, _ = self._find_node(key)
+        return node is not None
 
     def __contains__(self, key: K) -> bool:
         return self.contains(key)
@@ -101,27 +100,27 @@ class HashTable(Generic[K, V]):
     def _hash(self, key: K) -> int:
         return hash(key) % self._capacity
 
-    def _find_node(self, key: K) -> Optional[_Node[K, V]]:
+    def _find_node(self, key: K) -> tuple[Optional[_Node[K, V]], int]:
         index = self._hash(key)
         node = self._buckets[index]
         while node is not None:
             if node.key == key:
-                return node
+                return node, index
             node = node.next
-        return None
+        return None, index
 
     def _find_node_with_prev(
         self, key: K
-    ) -> tuple[Optional[_Node[K, V]], Optional[_Node[K, V]]]:
+    ) -> tuple[Optional[_Node[K, V]], Optional[_Node[K, V]], int]:
         index = self._hash(key)
         prev = None
         node = self._buckets[index]
         while node is not None:
             if node.key == key:
-                return node, prev
+                return node, prev, index
             prev = node
             node = node.next
-        return None, None
+        return None, None, index
 
     def _resize(self) -> None:
         new_capacity = self._capacity * 2

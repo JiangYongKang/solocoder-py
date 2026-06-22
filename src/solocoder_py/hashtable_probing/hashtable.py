@@ -50,9 +50,13 @@ class ProbingHashTable:
         self._maintain()
 
     def _maintain(self) -> None:
+        if self._count >= self._capacity:
+            self._rehash(self._capacity * 2)
+            return
+
         threshold = int(self._capacity * self._load_factor_threshold)
 
-        if self._count >= self._capacity:
+        if self._count > threshold:
             self._rehash(self._capacity * 2)
             return
 
@@ -60,17 +64,6 @@ class ProbingHashTable:
             self._deleted_count >= self._count
             and self._count + self._deleted_count >= int(self._capacity * 0.5)
         )
-
-        if self._count > threshold:
-            if cleanup_needed:
-                self._rehash(self._capacity)
-                new_threshold = int(self._capacity * self._load_factor_threshold)
-                if self._count > new_threshold:
-                    self._rehash(self._capacity * 2)
-            else:
-                self._rehash(self._capacity * 2)
-            return
-
         if cleanup_needed:
             self._rehash(self._capacity)
 

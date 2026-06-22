@@ -364,6 +364,91 @@ class TestHeapEntry:
             hash(entry)
 
 
+class TestCustomPriorityType:
+    def test_custom_priority_only_lt_implemented(self, empty_heap: BinaryHeap):
+        class PriorityOnlyLT:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __lt__(self, other: "PriorityOnlyLT") -> bool:
+                return self.value < other.value
+
+        p1 = PriorityOnlyLT(3)
+        p2 = PriorityOnlyLT(1)
+        p3 = PriorityOnlyLT(2)
+
+        entry1 = HeapEntry(priority=p1, element="a")
+        entry2 = HeapEntry(priority=p2, element="b")
+        entry3 = HeapEntry(priority=p3, element="c")
+
+        assert entry2 < entry3
+        assert entry3 < entry1
+        assert entry2 < entry1
+
+        assert entry2 <= entry3
+        assert entry3 <= entry1
+        assert entry2 <= entry1
+
+        assert entry1 > entry3
+        assert entry3 > entry2
+        assert entry1 > entry2
+
+        assert entry1 >= entry3
+        assert entry3 >= entry2
+        assert entry1 >= entry2
+
+    def test_heap_with_custom_priority_only_lt(self, empty_heap: BinaryHeap):
+        class PriorityOnlyLT:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __lt__(self, other: "PriorityOnlyLT") -> bool:
+                return self.value < other.value
+
+        empty_heap.insert("c", PriorityOnlyLT(3))
+        empty_heap.insert("a", PriorityOnlyLT(1))
+        empty_heap.insert("b", PriorityOnlyLT(2))
+
+        assert empty_heap.extract_min() == "a"
+        assert empty_heap.extract_min() == "b"
+        assert empty_heap.extract_min() == "c"
+
+    def test_comparison_no_equality_fallback(self):
+        class PriorityNoEq:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __lt__(self, other: "PriorityNoEq") -> bool:
+                return self.value < other.value
+
+            def __eq__(self, other: object) -> bool:
+                raise NotImplementedError("Equality not implemented")
+
+        p1 = PriorityNoEq(5)
+        p2 = PriorityNoEq(5)
+        p3 = PriorityNoEq(3)
+
+        entry1 = HeapEntry(priority=p1, element="a")
+        entry2 = HeapEntry(priority=p2, element="b")
+        entry3 = HeapEntry(priority=p3, element="c")
+
+        assert entry3 < entry1
+        assert entry3 < entry2
+
+        assert entry3 <= entry1
+        assert entry3 <= entry2
+        assert entry1 <= entry2
+        assert entry2 <= entry1
+
+        assert entry1 > entry3
+        assert entry2 > entry3
+
+        assert entry1 >= entry3
+        assert entry2 >= entry3
+        assert entry1 >= entry2
+        assert entry2 >= entry1
+
+
 class TestMixedOperations:
     def test_heapify_replace_existing_data(self, empty_heap: BinaryHeap):
         empty_heap.insert("old1", priority=10)
