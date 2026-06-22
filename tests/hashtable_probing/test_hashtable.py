@@ -220,6 +220,9 @@ class TestRehash:
         ht.insert("a", 1)
         ht.insert("b", 2)
         ht.insert("c", 3)
+        assert ht.capacity() == 4
+        assert ht.size() == 3
+        ht.insert("d", 4)
         assert ht.capacity() == 8
 
     def test_rehash_triggers_on_full_table(self):
@@ -305,8 +308,9 @@ class TestExpansion:
         assert ht.capacity() == 4
         ht.insert("a", 1)
         ht.insert("b", 2)
-        assert ht.capacity() == 4
         ht.insert("c", 3)
+        assert ht.capacity() == 4
+        ht.insert("d", 4)
         assert ht.capacity() == 8
 
     def test_all_data_preserved_after_expand(self):

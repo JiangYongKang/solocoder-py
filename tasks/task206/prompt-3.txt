@@ -1,0 +1,1 @@
+当前二叉搜索树模块的 `_compare` 方法在捕获 TypeError 后抛出了 InvalidComparisonError 异常，但异常消息中拼接了原始 Python 错误文本，用户看到的异常信息仍然包含 `'<' not supported between instances` 这类底层解释器术语，对模块使用者不够友好。

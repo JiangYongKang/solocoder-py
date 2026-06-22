@@ -51,15 +51,12 @@ class HashTable(Generic[K, V]):
         return self._size / self._capacity
 
     def put(self, key: K, value: V) -> None:
+        node = self._find_node(key)
+        if node is not None:
+            node.value = value
+            return
+
         index = self._hash(key)
-
-        node = self._buckets[index]
-        while node is not None:
-            if node.key == key:
-                node.value = value
-                return
-            node = node.next
-
         new_node = _Node(key, value, self._buckets[index])
         self._buckets[index] = new_node
         self._size += 1
@@ -68,42 +65,26 @@ class HashTable(Generic[K, V]):
             self._resize()
 
     def get(self, key: K) -> V:
-        index = self._hash(key)
-
-        node = self._buckets[index]
-        while node is not None:
-            if node.key == key:
-                return node.value
-            node = node.next
-
-        raise KeyError(key)
+        node = self._find_node(key)
+        if node is None:
+            raise KeyError(key)
+        return node.value
 
     def remove(self, key: K) -> V:
+        node, prev = self._find_node_with_prev(key)
+        if node is None:
+            raise KeyError(key)
+
         index = self._hash(key)
-
-        prev = None
-        node = self._buckets[index]
-        while node is not None:
-            if node.key == key:
-                if prev is None:
-                    self._buckets[index] = node.next
-                else:
-                    prev.next = node.next
-                self._size -= 1
-                return node.value
-            prev = node
-            node = node.next
-
-        raise KeyError(key)
+        if prev is None:
+            self._buckets[index] = node.next
+        else:
+            prev.next = node.next
+        self._size -= 1
+        return node.value
 
     def contains(self, key: K) -> bool:
-        index = self._hash(key)
-        node = self._buckets[index]
-        while node is not None:
-            if node.key == key:
-                return True
-            node = node.next
-        return False
+        return self._find_node(key) is not None
 
     def __contains__(self, key: K) -> bool:
         return self.contains(key)
@@ -119,6 +100,28 @@ class HashTable(Generic[K, V]):
 
     def _hash(self, key: K) -> int:
         return hash(key) % self._capacity
+
+    def _find_node(self, key: K) -> Optional[_Node[K, V]]:
+        index = self._hash(key)
+        node = self._buckets[index]
+        while node is not None:
+            if node.key == key:
+                return node
+            node = node.next
+        return None
+
+    def _find_node_with_prev(
+        self, key: K
+    ) -> tuple[Optional[_Node[K, V]], Optional[_Node[K, V]]]:
+        index = self._hash(key)
+        prev = None
+        node = self._buckets[index]
+        while node is not None:
+            if node.key == key:
+                return node, prev
+            prev = node
+            node = node.next
+        return None, None
 
     def _resize(self) -> None:
         new_capacity = self._capacity * 2

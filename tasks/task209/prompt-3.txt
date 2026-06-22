@@ -1,0 +1,1 @@
+当前二叉堆模块中 HeapEntry 的 element 字段设置了 field(compare=False)，导致两个具有相同 priority 但不同 element 的条目在相等比较时返回 True。例如 HeapEntry(priority=5, element="task_a") == HeapEntry(priority=5, element="task_b") 会返回 True，两个存储完全不同元素的条目被判定为相等对象。

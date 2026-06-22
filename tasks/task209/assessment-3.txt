@@ -1,0 +1,7 @@
+产物不满意：
+1. models.py 的 `__le__` 使用 `self.priority == other.priority`，但 `SupportsLessThan` 协议只要求 `__lt__` 而不保证 `__eq__`。对仅实现 `__lt__` 的自定义类型，`==` 回退为身份比较，值相等的不同实例被误判为不满足 `<=`。`__gt__` 通过 `not self.__le__(other)` 间接继承此缺陷。测试全用 int 和 float 未覆盖该场景。正确做法是 `__le__` 写为 `not (other < self)`，`__gt__` 写为 `other < self`，全程仅依赖 `__lt__`。
+
+过程不满意：
+1. 模型在第 2 步未经代码分析就创建了 4 项待办任务，第 3 步才开始读 models.py。这种"先计划后分析"的模式在前两轮 assessment 中已被指出，本轮仍未改正。正确做法是先读代码理解 `field(compare=False)` 对排序和相等两种语义的不同影响，再制定修复步骤。
+
+2. 模型第 4 步用 `@total_ordering` 写了第一版代码，写完立刻意识到 `total_ordering` 依赖的 `__eq__` 包含 element 会导致排序错误，随即重写整个文件。从写入到推翻在同一轮思考中完成，属于试错式编码。正确做法是编码前推演：`total_ordering` 从 `__lt__` 和含 element 的 `__eq__` 推导出的 `__le__` 会出错，确认不可行后直接手动实现。

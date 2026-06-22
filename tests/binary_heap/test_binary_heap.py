@@ -296,7 +296,7 @@ class TestHeapPropertyVerification:
 
 
 class TestHeapEntry:
-    def test_heap_entry_ordering_only_by_priority(self):
+    def test_ordering_only_by_priority(self):
         entry1 = HeapEntry(priority=1, element="a")
         entry2 = HeapEntry(priority=2, element="b")
         entry3 = HeapEntry(priority=1, element="c")
@@ -306,26 +306,42 @@ class TestHeapEntry:
         assert entry1 <= entry2
         assert entry2 >= entry1
 
-    def test_heap_entry_equality_only_by_priority(self):
+        assert entry1 <= entry3
+        assert entry1 >= entry3
+        assert not entry1 < entry3
+        assert not entry1 > entry3
+
+    def test_equality_by_priority_and_element(self):
         entry1 = HeapEntry(priority=5, element="test")
         entry2 = HeapEntry(priority=5, element="test")
         entry3 = HeapEntry(priority=5, element="other")
         entry4 = HeapEntry(priority=6, element="test")
 
         assert entry1 == entry2
-        assert entry1 == entry3
+        assert entry1 != entry3
         assert entry1 != entry4
+        assert entry3 != entry4
 
-    def test_same_priority_entries_are_equal_in_comparison(self):
-        entry1 = HeapEntry(priority=3, element="x")
-        entry2 = HeapEntry(priority=3, element="y")
+    def test_ordering_ignores_element(self):
+        entry1 = HeapEntry(priority=2, element="z")
+        entry2 = HeapEntry(priority=3, element="a")
 
+        assert entry1 < entry2
+        assert entry2 > entry1
+        assert entry1 <= entry2
+        assert entry2 >= entry1
+
+    def test_same_priority_different_element_not_equal(self):
+        entry1 = HeapEntry(priority=5, element="task_a")
+        entry2 = HeapEntry(priority=5, element="task_b")
+
+        assert entry1 != entry2
         assert entry1 <= entry2
         assert entry1 >= entry2
         assert not entry1 < entry2
         assert not entry1 > entry2
 
-    def test_comparison_consistent_with_heap_internal(self, empty_heap: BinaryHeap):
+    def test_ordering_consistent_with_heap_internal(self, empty_heap: BinaryHeap):
         entry1 = HeapEntry(priority=2, element="b")
         entry2 = HeapEntry(priority=1, element="a")
 
@@ -334,6 +350,18 @@ class TestHeapEntry:
 
         assert heap_internal_less == entry_direct_less
         assert heap_internal_less is True
+
+    def test_equality_distinguishes_different_elements(self):
+        entry1 = HeapEntry(priority=1, element="x")
+        entry2 = HeapEntry(priority=1, element="y")
+
+        assert entry1 != entry2
+        assert entry1 is not entry2
+
+    def test_entry_is_unhashable(self):
+        entry = HeapEntry(priority=5, element="test")
+        with pytest.raises(TypeError):
+            hash(entry)
 
 
 class TestMixedOperations:

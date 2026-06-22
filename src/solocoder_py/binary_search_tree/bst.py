@@ -29,10 +29,10 @@ class BinarySearchTree:
                 return 1
             else:
                 return 0
-        except TypeError as e:
+        except TypeError:
             raise InvalidComparisonError(
-                f"Cannot compare values of types {type(a).__name__} and {type(b).__name__}: {e}"
-            ) from e
+                f"Values of type '{type(a).__name__}' and '{type(b).__name__}' are not comparable"
+            )
 
     def insert(self, value: Any) -> None:
         if self._root is None:

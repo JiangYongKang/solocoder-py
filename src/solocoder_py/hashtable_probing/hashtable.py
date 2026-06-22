@@ -41,37 +41,38 @@ class ProbingHashTable:
                 break
             index = (index + 1) % self._capacity
 
+        target = first_deleted if first_deleted != -1 else index
+        self._slots[target] = Entry(key=key, value=value)
+        self._count += 1
+        if first_deleted != -1:
+            self._deleted_count -= 1
+
+        self._maintain()
+
+    def _maintain(self) -> None:
+        threshold = int(self._capacity * self._load_factor_threshold)
+
         if self._count >= self._capacity:
             self._rehash(self._capacity * 2)
-            self._insert_new(key, value)
-        elif self._count + 1 >= int(self._capacity * self._load_factor_threshold):
-            self._rehash(self._capacity * 2)
-            self._insert_new(key, value)
-        elif (
+            return
+
+        cleanup_needed = (
             self._deleted_count >= self._count
             and self._count + self._deleted_count >= int(self._capacity * 0.5)
-        ):
-            self._rehash(self._capacity)
-            self._insert_new(key, value)
-        else:
-            target = first_deleted if first_deleted != -1 else index
-            self._slots[target] = Entry(key=key, value=value)
-            self._count += 1
-            if first_deleted != -1:
-                self._deleted_count -= 1
-
-    def _insert_new(self, key: Any, value: Any) -> None:
-        index = self._hash(key)
-        for _ in range(self._capacity):
-            if self._slots[index] is None:
-                self._slots[index] = Entry(key=key, value=value)
-                self._count += 1
-                return
-            index = (index + 1) % self._capacity
-        raise RuntimeError(
-            f"_insert_new: no empty slot after {self._capacity} probes "
-            f"(capacity={self._capacity}, count={self._count})"
         )
+
+        if self._count > threshold:
+            if cleanup_needed:
+                self._rehash(self._capacity)
+                new_threshold = int(self._capacity * self._load_factor_threshold)
+                if self._count > new_threshold:
+                    self._rehash(self._capacity * 2)
+            else:
+                self._rehash(self._capacity * 2)
+            return
+
+        if cleanup_needed:
+            self._rehash(self._capacity)
 
     def find(self, key: Any) -> Any:
         index = self._hash(key)
