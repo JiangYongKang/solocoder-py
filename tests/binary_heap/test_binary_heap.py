@@ -413,6 +413,73 @@ class TestCustomPriorityType:
         assert empty_heap.extract_min() == "b"
         assert empty_heap.extract_min() == "c"
 
+    def test_equality_with_custom_priority_only_lt(self):
+        class PriorityOnlyLT:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __lt__(self, other: "PriorityOnlyLT") -> bool:
+                return self.value < other.value
+
+        p1 = PriorityOnlyLT(5)
+        p2 = PriorityOnlyLT(5)
+        p3 = PriorityOnlyLT(6)
+
+        entry1 = HeapEntry(priority=p1, element="task_a")
+        entry2 = HeapEntry(priority=p2, element="task_a")
+        entry3 = HeapEntry(priority=p3, element="task_a")
+        entry4 = HeapEntry(priority=p1, element="task_b")
+
+        assert entry1 == entry2
+        assert entry1 != entry3
+        assert entry1 != entry4
+
+    def test_equality_same_priority_different_element_with_lt_only(self):
+        class PriorityOnlyLT:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __lt__(self, other: "PriorityOnlyLT") -> bool:
+                return self.value < other.value
+
+        entry1 = HeapEntry(priority=PriorityOnlyLT(5), element="task_a")
+        entry2 = HeapEntry(priority=PriorityOnlyLT(5), element="task_b")
+
+        assert entry1 != entry2
+        assert entry1 <= entry2
+        assert entry1 >= entry2
+
+    def test_ordering_and_equality_consistency(self):
+        class PriorityOnlyLT:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __lt__(self, other: "PriorityOnlyLT") -> bool:
+                return self.value < other.value
+
+        for a, b in [(1, 2), (2, 1), (3, 3)]:
+            entry_a = HeapEntry(priority=PriorityOnlyLT(a), element="x")
+            entry_b = HeapEntry(priority=PriorityOnlyLT(b), element="x")
+
+            if a < b:
+                assert entry_a < entry_b
+                assert entry_a <= entry_b
+                assert entry_b > entry_a
+                assert entry_b >= entry_a
+                assert entry_a != entry_b
+            elif a > b:
+                assert entry_a > entry_b
+                assert entry_a >= entry_b
+                assert entry_b < entry_a
+                assert entry_b <= entry_a
+                assert entry_a != entry_b
+            else:
+                assert not entry_a < entry_b
+                assert not entry_a > entry_b
+                assert entry_a <= entry_b
+                assert entry_a >= entry_b
+                assert entry_a == entry_b
+
     def test_comparison_no_equality_fallback(self):
         class PriorityNoEq:
             def __init__(self, value: int):
@@ -447,6 +514,50 @@ class TestCustomPriorityType:
         assert entry2 >= entry3
         assert entry1 >= entry2
         assert entry2 >= entry1
+
+    def test_equality_does_not_call_priority_eq(self):
+        class PriorityNoEq:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __lt__(self, other: "PriorityNoEq") -> bool:
+                return self.value < other.value
+
+            def __eq__(self, other: object) -> bool:
+                raise NotImplementedError("Equality not implemented")
+
+        p1 = PriorityNoEq(5)
+        p2 = PriorityNoEq(5)
+        p3 = PriorityNoEq(6)
+
+        entry1 = HeapEntry(priority=p1, element="task_a")
+        entry2 = HeapEntry(priority=p2, element="task_a")
+        entry3 = HeapEntry(priority=p3, element="task_a")
+        entry4 = HeapEntry(priority=p1, element="task_b")
+
+        assert entry1 == entry2
+        assert entry1 != entry3
+        assert entry1 != entry4
+
+    def test_heapify_with_custom_priority_lt_only(self, empty_heap: BinaryHeap):
+        class PriorityOnlyLT:
+            def __init__(self, value: int):
+                self.value = value
+
+            def __lt__(self, other: "PriorityOnlyLT") -> bool:
+                return self.value < other.value
+
+        items = [
+            (PriorityOnlyLT(5), "e"),
+            (PriorityOnlyLT(3), "c"),
+            (PriorityOnlyLT(1), "a"),
+            (PriorityOnlyLT(4), "d"),
+            (PriorityOnlyLT(2), "b"),
+        ]
+        empty_heap.heapify(items)
+
+        result = [empty_heap.extract_min() for _ in range(5)]
+        assert result == ["a", "b", "c", "d", "e"]
 
 
 class TestMixedOperations:

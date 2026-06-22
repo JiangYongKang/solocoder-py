@@ -1,0 +1,1 @@
+当前二叉堆模块的 HeapEntry 使用 @dataclass 装饰器，相等比较由 dataclass 自动生成，按 priority 和 element 字段逐一比较。其中 priority 字段的相等比较依赖 priority.__eq__，但 priority 的类型协议只约定了 __lt__ 方法的存在，不保证 __eq__ 可用。对于仅实现了 __lt__ 而未实现 __eq__ 的自定义优先级类型，两个 HeapEntry 之间执行 == 比较时会产生错误。
