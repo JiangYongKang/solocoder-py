@@ -41,27 +41,24 @@ class Deque:
     def size(self) -> int:
         return len(self._items)
 
-    def __getitem__(self, index: int) -> Any:
+    def _normalize_index(self, index: int) -> int:
         if not isinstance(index, int):
             raise TypeError("Index must be an integer")
         if self.is_empty():
             raise DequeIndexError("Cannot access index on an empty deque")
+        if index < 0:
+            index += len(self._items)
         if index < 0 or index >= len(self._items):
             raise DequeIndexError(
-                f"Index {index} out of range for deque of size {len(self._items)}"
+                f"Index out of range for deque of size {len(self._items)}"
             )
-        return self._items[index]
+        return index
+
+    def __getitem__(self, index: int) -> Any:
+        return self._items[self._normalize_index(index)]
 
     def __setitem__(self, index: int, value: Any) -> None:
-        if not isinstance(index, int):
-            raise TypeError("Index must be an integer")
-        if self.is_empty():
-            raise DequeIndexError("Cannot set index on an empty deque")
-        if index < 0 or index >= len(self._items):
-            raise DequeIndexError(
-                f"Index {index} out of range for deque of size {len(self._items)}"
-            )
-        self._items[index] = value
+        self._items[self._normalize_index(index)] = value
 
     def __len__(self) -> int:
         return len(self._items)

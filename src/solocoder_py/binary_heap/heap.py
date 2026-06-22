@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional, SupportsFloat, Tuple
+from typing import Any, List, Optional, Tuple
 
 from .exceptions import HeapEmptyError
-from .models import HeapEntry
+from .models import SupportsLessThan, HeapEntry
 
 
 class BinaryHeap:
-    def __init__(self, items: Optional[List[Tuple[SupportsFloat, Any]]] = None) -> None:
+    def __init__(self, items: Optional[List[Tuple[SupportsLessThan, Any]]] = None) -> None:
         self._heap: List[HeapEntry] = []
         if items is not None:
             self.heapify(items)
 
-    def insert(self, element: Any, priority: SupportsFloat) -> None:
+    def insert(self, element: Any, priority: SupportsLessThan) -> None:
         entry = HeapEntry(priority=priority, element=element)
         self._heap.append(entry)
         self._bubble_up(len(self._heap) - 1)
@@ -35,7 +35,7 @@ class BinaryHeap:
             raise HeapEmptyError("Cannot peek from an empty heap")
         return self._heap[0].element
 
-    def heapify(self, items: List[Tuple[SupportsFloat, Any]]) -> None:
+    def heapify(self, items: List[Tuple[SupportsLessThan, Any]]) -> None:
         self._heap = [HeapEntry(priority=p, element=e) for p, e in items]
         n = len(self._heap)
         for i in range(n // 2 - 1, -1, -1):

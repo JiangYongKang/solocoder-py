@@ -16,7 +16,3 @@ def small_ht():
     ht.put("cherry", 3)
     return ht
 
-
-@pytest.fixture
-def ht_with_custom_capacity():
-    return HashTable[str, int](initial_capacity=4, load_factor_threshold=0.5)

@@ -40,6 +40,7 @@
 - `BSTError`：BST 异常基类
 - `ValueNotFoundError`：值不存在异常
 - `DuplicateValueError`：重复值异常
+- `InvalidComparisonError`：类型不可比较异常（当尝试插入或查找与树中现有值类型不兼容的值时抛出）
 
 ## BST 性质约束
 
@@ -92,6 +93,7 @@
 from solocoder_py.binary_search_tree import (
     BinarySearchTree,
     DuplicateValueError,
+    InvalidComparisonError,
     ValueNotFoundError,
 )
 
@@ -142,4 +144,17 @@ print(bst.size())      # 4
 bst.clear()
 print(bst.is_empty())  # True
 print(bst.size())      # 0
+
+# 10. 类型比较异常处理
+bst2 = BinarySearchTree()
+bst2.insert(42)
+try:
+    bst2.insert("string")  # 字符串与整数无法比较
+except InvalidComparisonError as e:
+    print(f"Comparison error: {e}")
+
+try:
+    bst2.search(None)  # None 与整数无法比较
+except InvalidComparisonError as e:
+    print(f"Comparison error: {e}")
 ```

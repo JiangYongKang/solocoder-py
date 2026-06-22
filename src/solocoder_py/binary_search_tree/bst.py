@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from .exceptions import DuplicateValueError, ValueNotFoundError
+from .exceptions import DuplicateValueError, InvalidComparisonError, ValueNotFoundError
 from .node import TreeNode
 
 
@@ -21,6 +21,19 @@ class BinarySearchTree:
     def size(self) -> int:
         return self._size
 
+    def _compare(self, a: Any, b: Any) -> int:
+        try:
+            if a < b:
+                return -1
+            elif a > b:
+                return 1
+            else:
+                return 0
+        except TypeError as e:
+            raise InvalidComparisonError(
+                f"Cannot compare values of types {type(a).__name__} and {type(b).__name__}: {e}"
+            ) from e
+
     def insert(self, value: Any) -> None:
         if self._root is None:
             self._root = TreeNode(value=value)
@@ -30,9 +43,10 @@ class BinarySearchTree:
         self._insert_recursive(self._root, value)
 
     def _insert_recursive(self, node: TreeNode, value: Any) -> None:
-        if value == node.value:
+        cmp_result = self._compare(value, node.value)
+        if cmp_result == 0:
             raise DuplicateValueError(f"Value {value} already exists in the tree")
-        elif value < node.value:
+        elif cmp_result < 0:
             if node.left is None:
                 node.left = TreeNode(value=value)
                 self._size += 1
@@ -51,31 +65,36 @@ class BinarySearchTree:
     def _search_recursive(self, node: Optional[TreeNode], value: Any) -> bool:
         if node is None:
             return False
-        if value == node.value:
+        cmp_result = self._compare(value, node.value)
+        if cmp_result == 0:
             return True
-        elif value < node.value:
+        elif cmp_result < 0:
             return self._search_recursive(node.left, value)
         else:
             return self._search_recursive(node.right, value)
 
     def delete(self, value: Any) -> None:
-        if not self.search(value):
+        deleted: List[bool] = [False]
+        self._root = self._delete_recursive(self._root, value, deleted)
+        if not deleted[0]:
             raise ValueNotFoundError(f"Value {value} not found in the tree")
-
-        self._root = self._delete_recursive(self._root, value)
         self._size -= 1
 
-    def _delete_recursive(self, node: Optional[TreeNode], value: Any) -> Optional[TreeNode]:
+    def _delete_recursive(
+        self, node: Optional[TreeNode], value: Any, deleted: List[bool]
+    ) -> Optional[TreeNode]:
         if node is None:
             return None
 
-        if value < node.value:
-            node.left = self._delete_recursive(node.left, value)
+        cmp_result = self._compare(value, node.value)
+        if cmp_result < 0:
+            node.left = self._delete_recursive(node.left, value, deleted)
             return node
-        elif value > node.value:
-            node.right = self._delete_recursive(node.right, value)
+        elif cmp_result > 0:
+            node.right = self._delete_recursive(node.right, value, deleted)
             return node
         else:
+            deleted[0] = True
             if node.left is None and node.right is None:
                 return None
             elif node.left is None:
@@ -85,7 +104,7 @@ class BinarySearchTree:
             else:
                 successor = self._find_min(node.right)
                 node.value = successor.value
-                node.right = self._delete_recursive(node.right, successor.value)
+                node.right = self._delete_recursive(node.right, successor.value, deleted)
                 return node
 
     def _find_min(self, node: TreeNode) -> TreeNode:

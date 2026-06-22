@@ -29,7 +29,9 @@
 
 ### HeapEntry
 
-堆中存储的条目数据类，包含 `priority`（优先级）和 `element`（元素）两个字段。使用 `@dataclass(order=True)` 装饰器自动生成比较方法，确保按优先级排序。
+堆中存储的条目数据类，包含 `priority`（优先级）和 `element`（元素）两个字段。使用 `@dataclass(order=True)` 装饰器自动生成比较方法，**仅基于 `priority` 字段进行比较**，`element` 字段不参与比较（使用 `field(compare=False)`），确保堆内外比较规则一致。
+
+优先级类型为 `SupportsLessThan`，即任何实现了 `__lt__` 方法、支持 `<` 比较运算符的类型都可以作为优先级。
 
 ### 异常类
 

@@ -1,0 +1,3 @@
+当前二叉堆优先级队列模块的实现存在以下问题需要修复：
+1. HeapEntry 数据类启用了 order=True，当两个条目优先级相同时，Python 自动生成的比较方法会继续比较 element 字段的值。但堆内部的 _bubble_up 和 _bubble_down 只比较 priority，导致堆内外对 HeapEntry 的排序规则不一致。
+2. priority 参数的类型标注使用了 SupportsFloat，但内部比较操作使用的是 < 运算符。SupportsFloat 只保证对象可转换为 float，不保证支持大小比较，类型标注与代码实际约束不匹配。

@@ -2,7 +2,6 @@ import pytest
 
 from solocoder_py.singly_linked_list import (
     Node,
-    NodeNotFoundError,
     SinglyLinkedList,
     SinglyLinkedListError,
 )
@@ -417,11 +416,43 @@ class TestNodeClass:
 
 
 class TestExceptionHierarchy:
-    def test_node_not_found_is_linked_list_error(self):
-        assert issubclass(NodeNotFoundError, SinglyLinkedListError)
-
     def test_singly_linked_list_error_is_exception(self):
         assert issubclass(SinglyLinkedListError, Exception)
+
+
+class TestValueEqualitySemantics:
+    def test_find_uses_double_equals(self, linked_list: SinglyLinkedList):
+        class EqualToEverything:
+            def __eq__(self, other):
+                return True
+
+        linked_list.append(42)
+        node = linked_list.find(EqualToEverything())
+        assert node is not None
+        assert node.value == 42
+
+    def test_remove_uses_double_equals(self, linked_list: SinglyLinkedList):
+        class MatchesEven:
+            def __eq__(self, other):
+                return isinstance(other, int) and other % 2 == 0
+
+        linked_list.append(1)
+        linked_list.append(2)
+        linked_list.append(3)
+
+        assert linked_list.remove(MatchesEven()) is True
+        assert linked_list.traverse() == [1, 3]
+
+    def test_custom_equality_not_implemented_uses_identity(self, linked_list: SinglyLinkedList):
+        class NoEq:
+            def __init__(self, val):
+                self.val = val
+
+        obj = NoEq(1)
+        linked_list.append(obj)
+
+        assert linked_list.find(NoEq(1)) is None
+        assert linked_list.find(obj) is not None
 
 
 class TestRepr:

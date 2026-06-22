@@ -296,27 +296,44 @@ class TestHeapPropertyVerification:
 
 
 class TestHeapEntry:
-    def test_heap_entry_ordering(self):
+    def test_heap_entry_ordering_only_by_priority(self):
         entry1 = HeapEntry(priority=1, element="a")
         entry2 = HeapEntry(priority=2, element="b")
-        entry3 = HeapEntry(priority=1, element="a")
-        entry4 = HeapEntry(priority=1, element="c")
+        entry3 = HeapEntry(priority=1, element="c")
 
         assert entry1 < entry2
         assert entry2 > entry1
-        assert entry1 <= entry3
-        assert entry1 >= entry3
-        assert entry1 == entry3
-        assert entry1 != entry2
-        assert entry1 < entry4
+        assert entry1 <= entry2
+        assert entry2 >= entry1
 
-    def test_heap_entry_equality(self):
+    def test_heap_entry_equality_only_by_priority(self):
         entry1 = HeapEntry(priority=5, element="test")
         entry2 = HeapEntry(priority=5, element="test")
         entry3 = HeapEntry(priority=5, element="other")
+        entry4 = HeapEntry(priority=6, element="test")
 
         assert entry1 == entry2
-        assert entry1 != entry3
+        assert entry1 == entry3
+        assert entry1 != entry4
+
+    def test_same_priority_entries_are_equal_in_comparison(self):
+        entry1 = HeapEntry(priority=3, element="x")
+        entry2 = HeapEntry(priority=3, element="y")
+
+        assert entry1 <= entry2
+        assert entry1 >= entry2
+        assert not entry1 < entry2
+        assert not entry1 > entry2
+
+    def test_comparison_consistent_with_heap_internal(self, empty_heap: BinaryHeap):
+        entry1 = HeapEntry(priority=2, element="b")
+        entry2 = HeapEntry(priority=1, element="a")
+
+        heap_internal_less = entry2.priority < entry1.priority
+        entry_direct_less = entry2 < entry1
+
+        assert heap_internal_less == entry_direct_less
+        assert heap_internal_less is True
 
 
 class TestMixedOperations:

@@ -8,3 +8,7 @@ class ValueNotFoundError(BSTError):
 
 class DuplicateValueError(BSTError):
     pass
+
+
+class InvalidComparisonError(BSTError):
+    pass

@@ -92,15 +92,18 @@ class TestEmptyTableOperations:
 
 class TestLazyDeletion:
     def test_delete_then_insert_reuses_slot(self, ht: ProbingHashTable):
-        ht.insert("a", 1)
-        ht.insert("b", 2)
-        ht.delete("a")
+        k_a = _FixedHashKey("a", 0)
+        k_b = _FixedHashKey("b", 1)
+        k_c = _FixedHashKey("c", 0)
+        ht.insert(k_a, 1)
+        ht.insert(k_b, 2)
+        ht.delete(k_a)
         assert ht.deleted_count() == 1
-        ht.insert("c", 3)
+        ht.insert(k_c, 3)
         assert ht.deleted_count() == 0
         assert ht.size() == 2
-        assert ht.find("b") == 2
-        assert ht.find("c") == 3
+        assert ht.find(k_b) == 2
+        assert ht.find(k_c) == 3
 
     def test_find_skips_deleted_markers(self, ht: ProbingHashTable):
         k1 = _FixedHashKey("first", 0)
@@ -197,12 +200,16 @@ class TestRehash:
         for i in range(20):
             assert ht.find(i) == i * 100
 
-    def test_rehash_clears_deleted_markers(self, ht: ProbingHashTable):
+    def test_rehash_clears_deleted_markers(self):
+        ht = ProbingHashTable(initial_capacity=8, load_factor_threshold=1.0)
         for i in range(6):
             ht.insert(i, i * 10)
+        assert ht.capacity() == 8
         for i in range(5):
             ht.delete(i)
         assert ht.deleted_count() == 5
+        assert ht.size() == 1
+        assert ht.capacity() == 8
         ht.insert("trigger", "rehash")
         assert ht.deleted_count() == 0
         assert ht.find(5) == 50
@@ -228,17 +235,36 @@ class TestRehash:
         for k, v in [("a", 1), ("b", 2), ("c", 3), ("d", 4), ("e", 5)]:
             assert ht.find(k) == v
 
-    def test_rehash_from_deleted_marker_pressure(self, ht: ProbingHashTable):
+    def test_rehash_from_deleted_marker_pressure(self):
+        ht = ProbingHashTable(initial_capacity=8, load_factor_threshold=1.0)
         for i in range(6):
             ht.insert(i, i)
+        assert ht.capacity() == 8
         for i in range(4):
             ht.delete(i)
         assert ht.deleted_count() >= 4
+        assert ht.deleted_count() >= ht.size()
         ht.insert(100, 100)
         assert ht.deleted_count() == 0
         assert ht.find(4) == 4
         assert ht.find(5) == 5
         assert ht.find(100) == 100
+
+    def test_no_unnecessary_rehash_when_empty_slots_plentiful(self):
+        ht = ProbingHashTable(initial_capacity=16, load_factor_threshold=0.75)
+        for i in range(3):
+            ht.insert(i, i * 10)
+        for i in range(2):
+            ht.delete(i)
+        assert ht.deleted_count() == 2
+        assert ht.size() == 1
+        cap_before = ht.capacity()
+        deleted_before = ht.deleted_count()
+        ht.insert(100, 1000)
+        assert ht.capacity() == cap_before
+        assert ht.deleted_count() <= deleted_before
+        assert ht.find(2) == 20
+        assert ht.find(100) == 1000
 
 
 class TestConsecutiveDeletion:

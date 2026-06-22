@@ -97,11 +97,13 @@ class HashTable(Generic[K, V]):
         raise KeyError(key)
 
     def contains(self, key: K) -> bool:
-        try:
-            self.get(key)
-            return True
-        except KeyError:
-            return False
+        index = self._hash(key)
+        node = self._buckets[index]
+        while node is not None:
+            if node.key == key:
+                return True
+            node = node.next
+        return False
 
     def __contains__(self, key: K) -> bool:
         return self.contains(key)

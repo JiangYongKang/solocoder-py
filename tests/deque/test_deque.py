@@ -131,10 +131,32 @@ class TestIndexAccess:
         assert deque[0] == 10
         assert deque[2] == 30
 
-    def test_getitem_negative_index_raises(self, deque: Deque):
+    def test_getitem_negative_index_access(self, deque: Deque):
+        deque.add_rear(10)
+        deque.add_rear(20)
+        deque.add_rear(30)
+        assert deque[-1] == 30
+        assert deque[-2] == 20
+        assert deque[-3] == 10
+
+    def test_setitem_negative_index_access(self, deque: Deque):
+        deque.add_rear(10)
+        deque.add_rear(20)
+        deque.add_rear(30)
+        deque[-1] = 300
+        deque[-3] = 100
+        assert deque[2] == 300
+        assert deque[0] == 100
+
+    def test_getitem_negative_index_out_of_range_raises(self, deque: Deque):
         deque.add_rear(10)
         with pytest.raises(DequeIndexError):
-            deque[-1]
+            deque[-2]
+
+    def test_setitem_negative_index_out_of_range_raises(self, deque: Deque):
+        deque.add_rear(10)
+        with pytest.raises(DequeIndexError):
+            deque[-2] = 100
 
     def test_getitem_index_equal_to_size_raises(self, deque: Deque):
         deque.add_rear(10)
@@ -146,11 +168,6 @@ class TestIndexAccess:
         deque.add_rear(10)
         with pytest.raises(DequeIndexError):
             deque[5]
-
-    def test_setitem_negative_index_raises(self, deque: Deque):
-        deque.add_rear(10)
-        with pytest.raises(DequeIndexError):
-            deque[-1] = 100
 
     def test_setitem_index_equal_to_size_raises(self, deque: Deque):
         deque.add_rear(10)

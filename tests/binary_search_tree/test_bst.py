@@ -3,6 +3,7 @@ import pytest
 from solocoder_py.binary_search_tree import (
     BinarySearchTree,
     DuplicateValueError,
+    InvalidComparisonError,
     ValueNotFoundError,
 )
 
@@ -317,3 +318,83 @@ class TestEdgeCases:
         assert bst.search(3) is False
         assert bst.size() == 4
         assert bst.inorder_traversal() == [1, 2, 4, 5]
+
+
+class TestInvalidComparisonError:
+    def test_insert_incomparable_type_raises(self, bst: BinarySearchTree):
+        bst.insert(5)
+        with pytest.raises(InvalidComparisonError):
+            bst.insert("string")
+
+    def test_search_incomparable_type_raises(self, bst: BinarySearchTree):
+        bst.insert(5)
+        with pytest.raises(InvalidComparisonError):
+            bst.search("string")
+
+    def test_delete_incomparable_type_raises(self, bst: BinarySearchTree):
+        bst.insert(5)
+        with pytest.raises(InvalidComparisonError):
+            bst.delete("string")
+
+    def test_insert_mixed_types_int_str_raises(self, bst: BinarySearchTree):
+        bst.insert(10)
+        with pytest.raises(InvalidComparisonError) as exc_info:
+            bst.insert("abc")
+        assert "int" in str(exc_info.value)
+        assert "str" in str(exc_info.value)
+
+    def test_search_mixed_types_raises(self, bst: BinarySearchTree):
+        bst.insert(3.14)
+        with pytest.raises(InvalidComparisonError):
+            bst.search("pi")
+
+    def test_invalid_comparison_is_bst_error(self, bst: BinarySearchTree):
+        bst.insert(1)
+        with pytest.raises(InvalidComparisonError) as exc_info:
+            bst.insert([1, 2, 3])
+        assert issubclass(type(exc_info.value), Exception)
+
+    def test_insert_none_with_int_raises(self, bst: BinarySearchTree):
+        bst.insert(42)
+        with pytest.raises(InvalidComparisonError):
+            bst.insert(None)
+
+
+class TestDeleteSingleTraversal:
+    def test_delete_uses_single_traversal(self, bst: BinarySearchTree, monkeypatch):
+        values = [8, 3, 10, 1, 6, 14, 4, 7, 13]
+        for v in values:
+            bst.insert(v)
+
+        compare_count = 0
+        original_compare = bst._compare
+
+        def counted_compare(a, b):
+            nonlocal compare_count
+            compare_count += 1
+            return original_compare(a, b)
+
+        monkeypatch.setattr(bst, "_compare", counted_compare)
+
+        bst.delete(6)
+        assert compare_count <= len(values) + 2
+
+    def test_delete_nonexistent_single_traversal(self, bst: BinarySearchTree, monkeypatch):
+        values = [8, 3, 10, 1, 6, 14]
+        for v in values:
+            bst.insert(v)
+
+        compare_count = 0
+        original_compare = bst._compare
+
+        def counted_compare(a, b):
+            nonlocal compare_count
+            compare_count += 1
+            return original_compare(a, b)
+
+        monkeypatch.setattr(bst, "_compare", counted_compare)
+
+        with pytest.raises(ValueNotFoundError):
+            bst.delete(99)
+
+        assert compare_count <= len(values) + 1

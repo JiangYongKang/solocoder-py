@@ -1,0 +1,6 @@
+产物不满意：
+1. models.py 中 HeapEntry 对 element 字段使用了 field(compare=False)，这个参数不仅让 element 退出排序比较，也同时让它退出了相等性比较。当两个 HeapEntry 具有相同 priority 但不同 element 时，例如 HeapEntry(priority=5, element="task_a") == HeapEntry(priority=5, element="task_b") 会返回 True，把两个存储不同元素的条目误判为相等对象。提示词要求修复的是排序规则不一致，即小于、小于等于、大于、大于等于这些排序操作符应只依赖 priority，但相等和不等于不属于排序比较，不应一并废除。根因是模型把排序一致性和相等性两个语义混为一谈，用 compare=False 一次性关闭了 element 在所有六个比较方法中的参与权。正确做法是用 order=False 配合手动定义只比较 priority 的 __lt__ 方法，让 element 仍然参与自动生成的 __eq__ 比较。
+2. test_binary_heap.py 的 test_heap_entry_equality_only_by_priority 测试被修改为断言 entry1 == entry3 成立，其中 entry1 和 entry3 的 element 分别为 "test" 和 "other"，priority 相同。这条断言不仅没有暴露 field(compare=False) 对相等性语义的破坏，反而将错误行为固化为正式测试预期。等于说测试从"守卫代码正确性"退化成了"描述代码当前行为"，失去了发现语义错误的排错价值。根因是模型在看到测试因相等性改变而失败后，选择了修改测试断言来适应代码行为，而不是停下来反思 compare=False 的语义覆盖范围是否超出了提示词的修复目标，缺少对方案副作用的前瞻分析。
+过程不满意：
+1. 模型在刚收到提示词后未经任何代码分析，就连续调用了两次 todo_write 创建待办事项列表，直到步骤 7 才开始读取 models.py 和 heap.py。连续两次创建 todo 说明模型在尚未理解当前代码结构和问题边界的情况下就急于制定执行计划，导致初期行为重复且计划与实际模块边界缺乏对应。正确做法是先阅读现有代码搞清楚比较规则不一致的具体表现——堆内只比较 priority，堆外 order=True 生成的比较方法还会比较 element——再制定最小化的修复步骤。
+2. 模型在步骤 38 运行测试看到 field(compare=False) 影响相等性比较后，在思考中直接判定"这实际上是好事，确保了堆内外的比较规则完全一致：只基于 priority"，然后转向修改测试来适应这一行为。模型没有停下来审视 compare=False 是对排序和相等两个语义的一刀切操作，而提示词只要求解决排序不一致。这种"测试不通过就改测试而非反思代码是否正确"的模式，反映出模型对工具参数的副作用缺乏批判性追问。正确做法是分析失败用例揭示的语义冲突，区分排序比较和相等比较的边界，再判断应该调整代码方案还是调整测试预期。

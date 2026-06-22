@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from .models import Node, NodeNotFoundError
+from .models import Node
 
 
 class SinglyLinkedList:

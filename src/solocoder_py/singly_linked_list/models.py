@@ -8,10 +8,6 @@ class SinglyLinkedListError(Exception):
     pass
 
 
-class NodeNotFoundError(SinglyLinkedListError):
-    pass
-
-
 @dataclass
 class Node:
     value: Any

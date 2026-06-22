@@ -47,7 +47,10 @@ class ProbingHashTable:
         elif self._count + 1 >= int(self._capacity * self._load_factor_threshold):
             self._rehash(self._capacity * 2)
             self._insert_new(key, value)
-        elif self._deleted_count >= self._count and self._deleted_count > 0:
+        elif (
+            self._deleted_count >= self._count
+            and self._count + self._deleted_count >= int(self._capacity * 0.5)
+        ):
             self._rehash(self._capacity)
             self._insert_new(key, value)
         else:
@@ -59,10 +62,16 @@ class ProbingHashTable:
 
     def _insert_new(self, key: Any, value: Any) -> None:
         index = self._hash(key)
-        while self._slots[index] is not None:
+        for _ in range(self._capacity):
+            if self._slots[index] is None:
+                self._slots[index] = Entry(key=key, value=value)
+                self._count += 1
+                return
             index = (index + 1) % self._capacity
-        self._slots[index] = Entry(key=key, value=value)
-        self._count += 1
+        raise RuntimeError(
+            f"_insert_new: no empty slot after {self._capacity} probes "
+            f"(capacity={self._capacity}, count={self._count})"
+        )
 
     def find(self, key: Any) -> Any:
         index = self._hash(key)
@@ -124,10 +133,19 @@ class ProbingHashTable:
         for slot in old_slots:
             if slot is not None and slot is not _DELETED:
                 index = self._hash(slot.key)
-                while self._slots[index] is not None:
+                found = False
+                for _ in range(self._capacity):
+                    if self._slots[index] is None:
+                        self._slots[index] = slot
+                        self._count += 1
+                        found = True
+                        break
                     index = (index + 1) % self._capacity
-                self._slots[index] = slot
-                self._count += 1
+                if not found:
+                    raise RuntimeError(
+                        f"_rehash: no empty slot after {self._capacity} probes "
+                        f"(capacity={self._capacity}, count={self._count})"
+                    )
 
     def __len__(self) -> int:
         return self._count

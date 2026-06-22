@@ -24,7 +24,7 @@ class BasicQueue(Generic[T]):
         return self._items[0]
 
     def is_empty(self) -> bool:
-        return len(self._items) == 0
+        return not self._items
 
     def size(self) -> int:
         return len(self._items)

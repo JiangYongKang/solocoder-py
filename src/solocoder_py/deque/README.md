@@ -30,7 +30,7 @@
 | `is_empty()` | 判断队列是否为空 | O(1) |
 | `size()` | 返回队列中元素数量 | O(1) |
 | `clear()` | 清空队列中所有元素 | O(1) |
-| `deque[index]` | 通过索引访问元素（支持读写） | O(1) |
+| `deque[index]` | 通过索引访问元素（支持读写，支持负索引） | O(1) |
 | `len(deque)` | 获取队列长度 | O(1) |
 | `for item in deque` | 迭代器遍历 | O(1) 每次 |
 | `item in deque` | 判断元素是否存在 | O(n) |
@@ -124,15 +124,24 @@ deque.add_rear(10)
 deque.add_rear(20)
 deque.add_rear(30)
 
-# 通过索引读取
+# 通过正索引读取
 print(deque[0])  # 10
 print(deque[1])  # 20
 print(deque[2])  # 30
+
+# 通过负索引读取（与 Python 内置容器行为一致）
+print(deque[-1])  # 30（队尾元素）
+print(deque[-2])  # 20
+print(deque[-3])  # 10（队首元素）
 
 # 通过索引修改
 deque[1] = 200
 print(deque[1])  # 200
 print(deque)     # [10, 200, 30]
+
+# 通过负索引修改
+deque[-1] = 300
+print(deque)  # [10, 200, 300]
 ```
 
 ### 迭代器遍历
@@ -175,13 +184,13 @@ deque.add_rear(1)
 try:
     deque[5]
 except DequeIndexError as e:
-    print(f"错误: {e}")  # 错误: Index 5 out of range for deque of size 1
+    print(f"错误: {e}")  # 错误: Index out of range for deque of size 1
 
-# 负索引抛出异常
+# 负索引越界抛出异常
 try:
-    deque[-1]
+    deque[-2]
 except DequeIndexError as e:
-    print(f"错误: {e}")  # 错误: Index -1 out of range for deque of size 1
+    print(f"错误: {e}")  # 错误: Index out of range for deque of size 1
 ```
 
 ### 应用场景：回文检查
